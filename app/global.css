@@ -1,0 +1,560 @@
+/** @import must precede all other statements */
+@import url("https://fonts.googleapis.com/css2?family=Epilogue:wght@400;500;600;700;800;900&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:FILL@0..1");
+@import "./FoodCarousel.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+
+  /**
+   * Tailwind CSS theme
+   * tailwind.config.ts expects the following color variables to be expressed as HSL values.
+   * A different format will require also updating the theme in tailwind.config.ts.
+  */
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 0 0% 98%;
+
+    --sidebar-foreground: 240 5.3% 26.1%;
+
+    --sidebar-primary: 240 5.9% 10%;
+
+    --sidebar-primary-foreground: 0 0% 98%;
+
+    --sidebar-accent: 240 4.8% 95.9%;
+
+    --sidebar-accent-foreground: 240 5.9% 10%;
+
+    --sidebar-border: 220 13% 91%;
+
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 212.7 26.8% 83.9%;
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: "Epilogue", "Inter", sans-serif;
+    /* Match the theme start color to prevent white gaps */
+    background-color: #D9F7C4;
+    min-height: 100vh;
+    margin: 0;
+    overflow-x: hidden;
+  }
+
+  :where(p, span, li, h1, h2, h3, h4, h5, h6, a, button, label, td, th) {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  pre,
+  code {
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  .material-symbols-outlined {
+    font-variation-settings:
+      "FILL" 0,
+      "wght" 400,
+      "GRAD" 0,
+      "opsz" 24;
+    font-size: 24px;
+  }
+
+  .icon-filled {
+    font-variation-settings:
+      "FILL" 1,
+      "wght" 400,
+      "GRAD" 0,
+      "opsz" 24;
+  }
+}
+
+/* Hero gradient background */
+.welcome-gradient {
+  background: linear-gradient(to bottom,
+      #e8d6c3 0%,
+      #e8d6c3 35%,
+      #f7f7f7 65%,
+      #f0f0f0 100%);
+}
+
+/* Form glassmorphic styles */
+.form-card {
+  backdrop-filter: blur(6px);
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.shadow-inner-soft {
+  box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05);
+}
+
+.shadow-soft {
+  box-shadow: 0px 10px 30px rgba(0, 0, 0, 0.1);
+}
+
+/* Image fade overlays */
+.image-fade-overlay {
+  background: linear-gradient(to bottom,
+      rgba(217, 247, 196, 0.1),
+      rgba(217, 247, 196, 0.3));
+}
+
+.image-fade-overlay-strong {
+  background: linear-gradient(to bottom,
+      rgba(217, 247, 196, 0),
+      rgba(217, 247, 196, 0.5),
+      rgba(217, 247, 196, 0.9));
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  :where(p, span, li, h1, h2, h3, h4, h5, h6, a, button, label, td, th) {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  pre,
+  code {
+    overflow-x: auto;
+    white-space: pre;
+  }
+}
+
+/* ===== NEW DASHBOARD STYLES ===== */
+
+/* Modal Styles */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(8px);
+  z-index: 100;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.modal-overlay.active {
+  display: flex;
+  opacity: 1;
+}
+
+.modal-content {
+  width: 90%;
+  max-width: 400px;
+  border-radius: 1rem;
+  overflow: hidden;
+  transform: scale(0.9);
+  transition: transform 0.3s ease;
+}
+
+.modal-overlay.active .modal-content {
+  transform: scale(1);
+}
+
+/* Semi-Circle Carousel Styles */
+.meal-carousel-wrapper {
+  position: relative;
+  height: 0;
+  overflow: visible;
+  transition: height 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.meal-section {
+  position: absolute;
+  width: 100%;
+  transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+  transform-origin: center 400px;
+  will-change: transform, opacity;
+}
+
+.meal-breakfast {
+  transform: translateY(0) scale(1);
+  opacity: 1;
+  z-index: 30;
+}
+
+.meal-lunch {
+  transform: translateX(280px) translateY(-80px) scale(0.85);
+  opacity: 0.4;
+  z-index: 20;
+}
+
+.meal-dinner {
+  transform: translateX(-280px) translateY(-80px) scale(0.85);
+  opacity: 0.4;
+  z-index: 20;
+}
+
+/* Progress Badge */
+.progress-badge {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: #13ec37;
+  color: #111812;
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  z-index: 10;
+}
+
+.progress-badge:hover {
+  transform: scale(1.15);
+}
+
+/* Navigation Active State */
+.nav-active {
+  background: rgba(11, 60, 124, 0.1);
+  color: #0B3C7C;
+}
+
+.dark .nav-active {
+  background: rgba(19, 236, 55, 0.15);
+  color: #13ec37;
+}
+
+/* View Management */
+.view {
+  display: none;
+}
+
+.view.active {
+  display: block;
+}
+
+/* Progress Calendar Grid */
+.progress-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.5rem;
+}
+
+.progress-calendar-day {
+  aspect-ratio: 1/1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.875rem;
+  font-weight: 600;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.progress-calendar-day:hover {
+  transform: scale(1.05);
+}
+
+/* Calendar Font */
+.calendar-font {
+  font-family: 'Inter', sans-serif;
+}
+
+/* Scrollbar Hide */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* ===== 3D CARD DECK CAROUSEL STYLES ===== */
+
+/* Meal Carousel Container */
+.meal-carousel-container {
+  position: relative;
+  padding: 1rem 0;
+  margin: 0 auto;
+  max-width: 100%;
+}
+
+.meal-deck-wrapper {
+  position: relative;
+  display: grid;
+  place-items: center;
+  perspective: 1400px;
+  padding: 1.5rem 3.5rem;
+  background: transparent;
+  min-height: 420px;
+}
+
+.meal-deck {
+  position: relative;
+  width: 100%;
+  max-width: 360px;
+  height: 420px;
+  transform-style: preserve-3d;
+}
+
+.meal-deck .meal-card {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  transform-origin: 50% 60%;
+  will-change: transform, opacity, filter, box-shadow;
+  transition: transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    opacity 300ms ease,
+    filter 300ms ease,
+    box-shadow 200ms ease;
+  border-radius: 18px;
+  padding: 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(12px) saturate(1.05);
+}
+
+.dark .meal-deck .meal-card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.03));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Card Positions in 3D Space */
+.meal-deck .card-pos-0 {
+  transform: translate3d(0, 0, 0) rotateZ(0deg) scale(1);
+  z-index: 6;
+  opacity: 1;
+  filter: none;
+}
+
+.meal-deck .card-pos-1 {
+  transform: translate3d(-110px, 10px, -160px) rotateZ(-4deg) scale(0.96);
+  z-index: 5;
+  opacity: 0.98;
+}
+
+.meal-deck .card-pos-2 {
+  transform: translate3d(110px, 12px, -160px) rotateZ(4deg) scale(0.96);
+  z-index: 5;
+  opacity: 0.98;
+}
+
+.meal-deck .card-pos-3 {
+  transform: translate3d(-160px, 28px, -320px) rotateZ(-6deg) scale(0.92);
+  z-index: 4;
+  opacity: 0.94;
+}
+
+.meal-deck .card-pos-4 {
+  transform: translate3d(160px, 30px, -320px) rotateZ(6deg) scale(0.92);
+  z-index: 4;
+  opacity: 0.94;
+}
+
+.meal-deck .card-pos-5 {
+  transform: translate3d(0, 46px, -460px) rotateZ(0deg) scale(0.88);
+  z-index: 3;
+  opacity: 0.88;
+}
+
+/* Navigation Buttons */
+.carousel-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.04));
+  color: #e6eef8;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  font-size: 20px;
+  display: grid;
+  place-items: center;
+  z-index: 10;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.dark .carousel-nav {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.05));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.carousel-nav:hover {
+  transform: translateY(-50%) scale(1.08);
+  background: linear-gradient(180deg, rgba(19, 236, 55, 0.2), rgba(19, 236, 55, 0.1));
+  border-color: rgba(19, 236, 55, 0.3);
+}
+
+.carousel-nav:active {
+  transform: translateY(-50%) scale(0.95);
+}
+
+.carousel-nav.prev {
+  left: 8px;
+}
+
+.carousel-nav.next {
+  right: 8px;
+}
+
+/* Meal Card Content */
+.meal-card-media {
+  position: relative;
+  display: grid;
+  place-items: center;
+  padding: 14px 0 8px;
+}
+
+.meal-card-media img {
+  width: 100%;
+  max-width: 260px;
+  height: 200px;
+  object-fit: cover;
+  display: block;
+  border-radius: 12px;
+  filter: drop-shadow(0 12px 20px rgba(0, 0, 0, 0.35));
+  transform: translateZ(0);
+  transition: transform 0.25s ease, filter 0.25s ease;
+}
+
+.meal-card-header {
+  padding: 12px 0 0;
+  text-align: center;
+}
+
+.meal-card-name {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #e6eef8;
+  margin: 0 0 4px;
+  letter-spacing: 0.01em;
+}
+
+.dark .meal-card-name {
+  color: #ffffff;
+}
+
+.meal-card-sub {
+  font-size: 0.9rem;
+  color: #94a3b8;
+  margin: 0;
+}
+
+.dark .meal-card-sub {
+  color: #cbd5e1;
+}
+
+/* Responsive Adjustments */
+@media (max-width: 768px) {
+  .meal-deck-wrapper {
+    padding: 1rem 2.5rem;
+    min-height: 380px;
+  }
+
+  .meal-deck {
+    height: 380px;
+    max-width: 320px;
+  }
+
+  .meal-card-media img {
+    max-width: 220px;
+    height: 180px;
+  }
+
+  .carousel-nav {
+    width: 36px;
+    height: 36px;
+    font-size: 18px;
+  }
+}

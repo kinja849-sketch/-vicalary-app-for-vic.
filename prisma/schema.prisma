@@ -1,0 +1,665 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model budget_transactions {
+  id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  budget_id        String?       @db.Uuid
+  food_analysis_id String?       @db.Uuid
+  amount           Decimal       @db.Decimal
+  description      String?
+  transaction_date DateTime?     @default(now()) @db.Timestamptz(6)
+  user_budgets     user_budgets? @relation(fields: [budget_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([budget_id, transaction_date(sort: Desc)], map: "idx_budget_transactions_budget")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model calls {
+  id                                             String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversation_id                                String?        @db.Uuid
+  caller_id                                      String?        @db.Uuid
+  receiver_id                                    String?        @db.Uuid
+  room_url                                       String
+  type                                           String
+  status                                         String
+  created_at                                     DateTime?      @default(now()) @db.Timestamptz(6)
+  ended_at                                       DateTime?      @db.Timestamptz(6)
+  user_profiles_calls_caller_idTouser_profiles   user_profiles? @relation("calls_caller_idTouser_profiles", fields: [caller_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  conversations                                  conversations? @relation(fields: [conversation_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user_profiles_calls_receiver_idTouser_profiles user_profiles? @relation("calls_receiver_idTouser_profiles", fields: [receiver_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model chat_users {
+  id                      String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id                 String?        @unique @db.Uuid
+  phone_number            String         @unique
+  country_code            String
+  is_verified             Boolean?       @default(false)
+  verification_code       String?
+  verification_expires_at DateTime?      @db.Timestamptz(6)
+  created_at              DateTime?      @default(now()) @db.Timestamptz(6)
+  user_profiles           user_profiles? @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model companies {
+  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name              String        @unique
+  subsidiaries      String[]      @default([])
+  invest_israel     Boolean?      @default(false)
+  invest_uae        Boolean?      @default(false)
+  notes             String?
+  created_at        DateTime?     @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime?     @default(now()) @db.Timestamptz(6)
+  parent_company_id String?       @db.Uuid
+  country_of_origin String?
+  us_affiliated     Boolean?      @default(false)
+  israel_affiliated Boolean?      @default(false)
+  uae_affiliated    Boolean?      @default(false)
+  ownership_pct     Decimal?      @db.Decimal
+  affiliation_type  String?
+  justification     String?
+  data_sources      String[]
+  enrichment_status String?       @default("pending")
+  aliases           String[]
+  companies         companies?    @relation("companiesTocompanies", fields: [parent_company_id], references: [id], onUpdate: NoAction)
+  other_companies   companies[]   @relation("companiesTocompanies")
+  medications       medications[]
+  products          products[]
+
+  @@index([aliases], map: "idx_companies_aliases_gin", type: Gin)
+  @@index([name(ops: raw("gin_trgm_ops"))], map: "idx_companies_name_gin_trgm", type: Gin)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model contact_requests {
+  id                                                         String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  from_user_id                                               String?        @db.Uuid
+  to_user_id                                                 String?        @db.Uuid
+  status                                                     String?        @default("pending")
+  created_at                                                 DateTime?      @default(now()) @db.Timestamptz(6)
+  user_profiles_contact_requests_from_user_idTouser_profiles user_profiles? @relation("contact_requests_from_user_idTouser_profiles", fields: [from_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user_profiles_contact_requests_to_user_idTouser_profiles   user_profiles? @relation("contact_requests_to_user_idTouser_profiles", fields: [to_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([from_user_id, to_user_id])
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model contacts {
+  id                                                    String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id                                               String         @db.Uuid
+  contact_user_id                                       String         @db.Uuid
+  status                                                String?       @default("active")
+  created_at                                            DateTime?     @default(now()) @db.Timestamptz(6)
+  user_profiles_contacts_contact_user_idTouser_profiles user_profiles @relation("contacts_contact_user_idTouser_profiles", fields: [contact_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user_profiles_contacts_user_idTouser_profiles         user_profiles @relation("contacts_user_idTouser_profiles", fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, contact_user_id])
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model conversation_participants {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversation_id String?        @db.Uuid
+  user_id         String?        @db.Uuid
+  joined_at       DateTime?      @default(now()) @db.Timestamptz(6)
+  last_read_at    DateTime?      @db.Timestamptz(6)
+  deleted_at      DateTime?      @db.Timestamptz(6)
+  conversations   conversations? @relation(fields: [conversation_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user_profiles   user_profiles? @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([conversation_id, user_id])
+  @@index([user_id], map: "idx_conv_participants_user")
+  @@index([user_id, last_read_at], map: "idx_participants_read_v2")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model conversations {
+  id                        String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversation_type         String                      @default("private")
+  name                      String?
+  avatar_url                String?
+  is_group                  Boolean?                    @default(false)
+  created_by                String?                     @db.Uuid
+  created_at                DateTime?                   @default(now()) @db.Timestamptz(6)
+  last_message_at           DateTime?                   @default(now()) @db.Timestamptz(6)
+  metadata                  Json?                       @default("{}")
+  last_message_content      String?
+  last_message_type         String?                     @default("text")
+  last_message_sender_id    String?
+  calls                     calls[]
+  conversation_participants conversation_participants[]
+  user_profiles             user_profiles?              @relation(fields: [created_by], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  messages                  messages[]
+
+  @@index([last_message_at(sort: Desc)], map: "idx_conv_last_msg")
+  @@index([last_message_at(sort: Desc)], map: "idx_conv_updated_at")
+  @@index([last_message_at(sort: Desc)], map: "idx_conversations_last_message_at")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model country_currency_map {
+  country_code              String   @id
+  country_name              String
+  currency_code             String
+  currency_symbol           String
+  cost_of_living_tier       Int      @default(1)
+  budget_range_low_monthly  Int
+  budget_range_high_monthly Int
+  created_at                DateTime @default(dbgenerated("timezone('utc'::text, now())")) @db.Timestamptz(6)
+  updated_at                DateTime @default(dbgenerated("timezone('utc'::text, now())")) @db.Timestamptz(6)
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model currency_lookup {
+  country_code    String @id @db.VarChar(10)
+  country_name    String
+  currency_code   String @db.VarChar(10)
+  currency_symbol String @db.VarChar(10)
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model daily_progress {
+  id                String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id           String?        @db.Uuid
+  progress_date     DateTime       @db.Date
+  progress_data     Json?          @default("{}")
+  calories_goal     Int?
+  updated_at        DateTime?      @default(now()) @db.Timestamptz(6)
+  created_at        DateTime?      @default(now()) @db.Timestamptz(6)
+  protein_consumed  Decimal?       @default(0) @db.Decimal
+  protein_goal      Decimal?       @default(50) @db.Decimal
+  carbs_consumed    Decimal?       @default(0) @db.Decimal
+  carbs_goal        Decimal?       @default(250) @db.Decimal
+  fat_consumed      Decimal?       @default(0) @db.Decimal
+  fat_goal          Decimal?       @default(70) @db.Decimal
+  calories_consumed Decimal?       @default(0) @db.Decimal
+  meals_logged      Int?           @default(0)
+  fiber_consumed    Decimal?       @default(0) @db.Decimal
+  sugar_consumed    Decimal?       @default(0) @db.Decimal
+  user_profiles     user_profiles? @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, progress_date])
+  @@index([user_id, progress_date], map: "idx_daily_progress_lookup_v1")
+  @@index([user_id, progress_date(sort: Desc)], map: "idx_daily_progress_user_date")
+}
+
+model email_verification_codes {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id      String?
+  email        String    @unique
+  code         String
+  attempts     Int?      @default(0)
+  max_attempts Int?      @default(3)
+  expires_at   DateTime? @default(dbgenerated("(now() + '00:15:00'::interval)")) @db.Timestamptz(6)
+  created_at   DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model food_analysis_history {
+  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id           String         @db.Uuid
+  food_item_id      String?       @db.Uuid
+  food_name         String?
+  image_url         String?
+  calories          Int?
+  protein           Decimal?      @db.Decimal(10, 2)
+  carbs             Decimal?      @db.Decimal(10, 2)
+  fat               Decimal?      @db.Decimal(10, 2)
+  analysis_data     Json?
+  notes             String?
+  meal_type         String?
+  analysis_type     String?
+  calories_consumed Int?
+  price_paid        Decimal?      @db.Decimal(10, 2)
+  analyzed_at       DateTime?     @default(now()) @db.Timestamptz(6)
+  created_at        DateTime?     @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime?     @default(now()) @db.Timestamptz(6)
+  medication_id     String?       @db.Uuid
+  product_id        String?       @db.Uuid
+  is_logged         Boolean?      @default(false)
+  local_date        DateTime?     @db.Date
+  food_items        food_items?   @relation(fields: [food_item_id], references: [id], onUpdate: NoAction)
+  medications       medications?  @relation(fields: [medication_id], references: [id], onUpdate: NoAction)
+  products          products?     @relation(fields: [product_id], references: [id], onUpdate: NoAction)
+  user_profiles     user_profiles @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  messages          messages[]
+
+  @@index([user_id, analyzed_at(sort: Desc)], map: "idx_food_analysis_history_user_date")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model food_items {
+  id                      String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                    String
+  description             String?
+  image_url               String?
+  calories                Int?
+  protein                 Decimal?                @db.Decimal
+  carbs                   Decimal?                @db.Decimal
+  fat                     Decimal?                @db.Decimal
+  fiber                   Decimal?                @db.Decimal
+  sugar                   Decimal?                @db.Decimal
+  category                String?
+  health_rating           Int?
+  barcode                 String?
+  price                   Decimal?                @db.Decimal
+  currency                String?                 @default("USD")
+  serving_size            String?
+  created_at              DateTime?               @default(now()) @db.Timestamptz(6)
+  vitamins                Json?                   @default("{}")
+  minerals                Json?                   @default("{}")
+  serving_size_unit       String?                 @default("serving")
+  health_status           String?
+  clinical_evaluation     String?
+  metabolic_impact        String?
+  clinical_synopsis       String?
+  health_impact_score     Int?
+  confidence_level        Decimal?                @db.Decimal(3, 2)
+  micronutrients          Json?                   @default("[]")
+  origin_context          String?
+  glycemic_impact         Json?                   @default("{}")
+  preparation_science     String?
+  sustainability_audit    String?
+  goal_alignment_analysis String?
+  alternatives            Json?                   @default("[]")
+  vitamins_and_nutrition  String?
+  recommendation          String?
+  user_id                 String?                 @db.Uuid
+  food_analysis_history   food_analysis_history[]
+  user_profiles           user_profiles?          @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model ip_location_cache {
+  ip_address      String    @id
+  country_code    String
+  country_name    String?
+  city            String?
+  currency_code   String?
+  currency_symbol String?   @default("$")
+  cached_at       DateTime? @default(now()) @db.Timestamptz(6)
+  expires_at      DateTime? @default(dbgenerated("(now() + '24:00:00'::interval)")) @db.Timestamptz(6)
+}
+
+model meals {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name               String
+  subtitle           String?
+  calories           Int?
+  image              String?
+  meal_type          String?
+  ingredients        Json?     @default("[]")
+  instructions       Json?     @default("[]")
+  prep_time_minutes  Int?
+  cook_time_minutes  Int?
+  total_time_minutes Int?
+  created_at         DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model medications {
+  id                    String                  @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  ndc_code              String?                 @unique
+  proprietary_name      String?
+  generic_name          String?
+  active_ingredients    Json?
+  dosage_form           String?
+  strength              String?
+  manufacturer          String?
+  indications           String?
+  warnings              String?
+  contraindications     String?
+  adverse_reactions     String?
+  dosage_guidelines     String?
+  safety_assessment     Json?
+  is_verified           Boolean?                @default(false)
+  created_at            DateTime?               @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime?               @default(now()) @db.Timestamptz(6)
+  manufacturer_id       String?                 @db.Uuid
+  food_analysis_history food_analysis_history[]
+  companies             companies?              @relation(fields: [manufacturer_id], references: [id], onUpdate: NoAction)
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model messages {
+  id                    String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversation_id       String?                @db.Uuid
+  sender_id             String?                @db.Uuid
+  content               String?
+  metadata              Json?
+  is_read               Boolean?               @default(false)
+  created_at            DateTime?              @default(now()) @db.Timestamptz(6)
+  message_type          String?                @default("text")
+  read_at               DateTime?              @db.Timestamptz(6)
+  delivered_at          DateTime?              @db.Timestamptz(6)
+  is_delivered          Boolean?               @default(false)
+  pending_analysis_id   String?                @db.Uuid
+  conversations         conversations?         @relation(fields: [conversation_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  food_analysis_history food_analysis_history? @relation(fields: [pending_analysis_id], references: [id], onUpdate: NoAction)
+  user_profiles         user_profiles?         @relation(fields: [sender_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([conversation_id, created_at(sort: Desc)], map: "idx_messages_conv_created")
+  @@index([conversation_id, created_at(sort: Desc)], map: "idx_messages_conversation")
+  @@index([conversation_id, created_at(sort: Desc)], map: "idx_messages_conversation_id_created_at")
+  @@index([conversation_id, created_at(sort: Desc)], map: "idx_messages_conversation_v12")
+  @@index([conversation_id, sender_id, created_at], map: "idx_messages_unread_v2")
+}
+
+model monthly_reports {
+  id                   String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id              String?        @db.Uuid
+  report_year          Int
+  report_month         Int
+  summary              String?
+  insights             Json?
+  adherence_percentage Decimal?       @db.Decimal
+  spending_efficiency  String?
+  tips                 Json?
+  trend                String?
+  created_at           DateTime?      @default(now()) @db.Timestamptz(6)
+  user_profiles        user_profiles? @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, report_year, report_month])
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model notifications {
+  id                String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id           String?        @db.Uuid
+  notification_type String
+  title             String?
+  content           String
+  is_read           Boolean?       @default(false)
+  action_url        String?
+  created_at        DateTime?      @default(now()) @db.Timestamptz(6)
+  user_profiles     user_profiles? @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id, created_at(sort: Desc)], map: "idx_notifications_user")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model onboarding_responses {
+  id                   String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id              String?        @unique
+  full_name            String?
+  age                  Int?
+  gender               String?
+  height_cm            Decimal?       @db.Decimal
+  weight_kg            Decimal?       @db.Decimal
+  goal                 String?
+  budget               Decimal?       @db.Decimal
+  preferences          Json?          @default("[]")
+  daily_meal_frequency String?
+  liked_foods          Json?          @default("[]")
+  restrictions         Json?          @default("[]")
+  cooking_skill        String?
+  meal_prep_time       String?
+  target               Decimal?       @db.Decimal
+  dietary_lifestyle    Json?          @default("[]")
+  calorie_flexibility  String?
+  daily_calorie_goal   Int?
+  onboarding_completed Boolean?       @default(false)
+  activity_level       String?
+  preferred_cuisines   Json?
+  created_at           DateTime?      @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime?      @default(now()) @db.Timestamptz(6)
+  medical_conditions   String?
+  health_conditions    String?
+  protein_goal         Decimal?       @default(0) @db.Decimal
+  carbs_goal           Decimal?       @default(0) @db.Decimal
+  fat_goal             Decimal?       @default(0) @db.Decimal
+  fiber_goal           Decimal?       @default(0) @db.Decimal
+  sugar_goal           Decimal?       @default(0) @db.Decimal
+  user_profiles        user_profiles? @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model products {
+  id                    String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  barcode               String?                 @unique
+  name                  String
+  brand_id              String?                 @db.Uuid
+  manufacturer          String?
+  nutritional_data      Json?
+  country_of_origin     String?
+  category_tags         String[]
+  created_at            DateTime?               @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime?               @default(now()) @db.Timestamptz(6)
+  brand                 String?
+  enrichment_queued_at  DateTime?               @db.Timestamptz(6)
+  affiliation_cache     Json?
+  food_analysis_history food_analysis_history[]
+  companies             companies?              @relation(fields: [brand_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  regional_pricing      regional_pricing[]
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model progress_measurements {
+  id               String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id          String?        @db.Uuid
+  weight           Decimal        @db.Decimal
+  height           Decimal?       @db.Decimal
+  measurement_date DateTime       @db.Date
+  notes            String?
+  created_at       DateTime?      @default(now()) @db.Timestamptz(6)
+  user_profiles    user_profiles? @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, measurement_date])
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model recipes {
+  id                       String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title                    String
+  description              String?
+  image_url                String?
+  total_calories           Int?
+  protein_g                Decimal?                   @db.Decimal
+  carbs_g                  Decimal?                   @db.Decimal
+  fat_g                    Decimal?                   @db.Decimal
+  prep_time_minutes        Int?
+  cook_time_minutes        Int?
+  cuisine_type             String?
+  difficulty               String?
+  dietary_tags             Json?
+  step_images              Json?
+  ingredients              Json?                      @default("[]")
+  instructions             Json?                      @default("[]")
+  spoonacular_id           String?
+  created_at               DateTime?                  @default(now()) @db.Timestamptz(6)
+  user_recipe_interactions user_recipe_interactions[]
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model regional_configuration {
+  country_code         String    @id @db.VarChar(10)
+  country_name         String
+  currency_code        String    @db.VarChar(10)
+  currency_symbol      String    @db.VarChar(10)
+  decimal_separator    String?   @default(".") @db.Char(1)
+  thousands_separator  String?   @default(",") @db.Char(1)
+  cost_of_living_index Decimal?  @db.Decimal(5, 2)
+  budget_tiers         Json?
+  last_updated         DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model regional_pricing {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  product_id      String?   @db.Uuid
+  barcode         String?
+  country_code    String
+  price           Decimal   @db.Decimal(10, 2)
+  currency_code   String    @default("USD")
+  currency_symbol String?   @default("$")
+  created_at      DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime? @default(now()) @db.Timestamptz(6)
+  products        products? @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([barcode, country_code])
+}
+
+model spiritual_content {
+  id                     String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type                   String?
+  category               String
+  content                String
+  reference              String?
+  created_at             DateTime?                @default(now()) @db.Timestamptz(6)
+  user_spiritual_history user_spiritual_history[]
+}
+
+model system_logs {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  message    String
+  status     String?
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model user_budgets {
+  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id             String?               @db.Uuid
+  total_budget        Decimal               @db.Decimal
+  current_balance     Decimal               @db.Decimal
+  remaining_budget    Decimal?              @db.Decimal
+  currency            String?               @default("USD")
+  period_start        DateTime              @db.Date
+  period_end          DateTime              @db.Date
+  is_active           Boolean?              @default(true)
+  created_at          DateTime?             @default(now()) @db.Timestamptz(6)
+  currency_symbol     String?               @default("$")
+  budget_transactions budget_transactions[]
+  user_profiles       user_profiles?        @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, period_start, is_active])
+  @@index([user_id], map: "idx_user_budgets_user_id")
+}
+
+model user_milestones {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id         String?
+  milestone_date  DateTime       @db.Date
+  plan_suggestion String?
+  objective       String?
+  problems_faced  String?
+  ai_analysis     String?
+  created_at      DateTime?      @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime?      @default(now()) @db.Timestamptz(6)
+  user_profiles   user_profiles? @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, milestone_date])
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model user_profiles {
+  id                                                            String                      @id @db.Uuid
+  first_name                                                    String?
+  last_name                                                     String?
+  full_name                                                     String?
+  email                                                         String?
+  avatar_url                                                    String?
+  date_of_birth                                                 DateTime?                   @db.Date
+  gender                                                        String?
+  height_cm                                                     Decimal?                    @db.Decimal
+  weight_kg                                                     Decimal?                    @db.Decimal
+  activity_level                                                String?
+  goal_calories                                                 Int?
+  dietary_preferences                                           Json?                       @default("[]")
+  health_conditions                                             Json?                       @default("[]")
+  onboarding_complete                                           Boolean?                    @default(false)
+  onboarding_completed                                          Boolean?                    @default(false)
+  email_verified                                                Boolean?                    @default(false)
+  daily_protein_goal_g                                          Decimal?                    @db.Decimal
+  daily_carbs_goal_g                                            Decimal?                    @db.Decimal
+  daily_fat_goal_g                                              Decimal?                    @db.Decimal
+  created_at                                                    DateTime?                   @default(now()) @db.Timestamptz(6)
+  updated_at                                                    DateTime?                   @default(now()) @db.Timestamptz(6)
+  search_vector                                                 Unsupported("tsvector")?
+  username                                                      String?                     @unique
+  location_metadata                                             Json?
+  calls_calls_caller_idTouser_profiles                          calls[]                     @relation("calls_caller_idTouser_profiles")
+  calls_calls_receiver_idTouser_profiles                        calls[]                     @relation("calls_receiver_idTouser_profiles")
+  chat_users                                                    chat_users?
+  contact_requests_contact_requests_from_user_idTouser_profiles contact_requests[]          @relation("contact_requests_from_user_idTouser_profiles")
+  contact_requests_contact_requests_to_user_idTouser_profiles   contact_requests[]          @relation("contact_requests_to_user_idTouser_profiles")
+  contacts_contacts_contact_user_idTouser_profiles              contacts[]                  @relation("contacts_contact_user_idTouser_profiles")
+  contacts_contacts_user_idTouser_profiles                      contacts[]                  @relation("contacts_user_idTouser_profiles")
+  conversation_participants                                     conversation_participants[]
+  conversations                                                 conversations[]
+  daily_progress                                                daily_progress[]
+  food_analysis_history                                         food_analysis_history[]
+  food_items                                                    food_items[]
+  messages                                                      messages[]
+  monthly_reports                                               monthly_reports[]
+  notifications                                                 notifications[]
+  onboarding_responses                                          onboarding_responses?
+  progress_measurements                                         progress_measurements[]
+  user_budgets                                                  user_budgets[]
+  user_milestones                                               user_milestones[]
+  user_recipe_interactions                                      user_recipe_interactions[]
+  user_spiritual_history                                        user_spiritual_history[]
+  user_settings                                                 user_settings?
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model user_recipe_interactions {
+  id               String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id          String?        @db.Uuid
+  recipe_id        String?        @db.Uuid
+  interaction_type String
+  rating           Int?
+  notes            String?
+  interacted_at    DateTime?      @default(now()) @db.Timestamptz(6)
+  recipes          recipes?       @relation(fields: [recipe_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user_profiles    user_profiles? @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, recipe_id, interaction_type])
+  @@index([user_id, interacted_at(sort: Desc)], map: "idx_recipe_interactions_user")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model user_settings {
+  id                         String         @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  user_id                    String         @unique @db.Uuid
+  theme                      String?        @default("light")
+  push_notifications_enabled Boolean?       @default(true)
+  language                   String?        @default("en")
+  currency                   String?        @default("USD")
+  timezone                   String?
+  subscription_status        String?        @default("free")
+  subscription_expires_at    DateTime?      @db.Timestamptz(6)
+  created_at                 DateTime?      @default(now()) @db.Timestamptz(6)
+  updated_at                 DateTime?      @default(now()) @db.Timestamptz(6)
+  country_code               String?
+  is_language_auto           Boolean?       @default(true)
+  last_quran_index           Int?           @default(1)
+  last_hadith_index          Int?           @default(1)
+  user_profiles              user_profiles? @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model user_spiritual_history {
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id           String?            @db.Uuid
+  content_id        String?            @db.Uuid
+  viewed_at         DateTime?          @default(now()) @db.Timestamptz(6)
+  spiritual_content spiritual_content? @relation(fields: [content_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user_profiles     user_profiles?     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}

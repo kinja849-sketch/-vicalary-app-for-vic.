@@ -1,0 +1,147 @@
+/* Auth Form Animations */
+.bg-container {
+  position: absolute;
+  inset: 0;
+  transition:
+    opacity 0.8s ease-in-out,
+    transform 0.8s ease-in-out;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.bg-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: brightness(0.4) contrast(1) saturate(1.1) blur(0.5px);
+  transform: scale(1.15);
+  transition: transform 0.8s ease-in-out;
+}
+
+.bg-overlay {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 50%,
+    rgba(0, 0, 0, 0.15) 80%,
+    rgba(0, 0, 0, 0.25) 100%
+  );
+}
+
+.container:not(.active) .sign-up-bg {
+  opacity: 0;
+  transform: scale(1.05);
+}
+
+.container.active .sign-in-bg {
+  opacity: 0;
+  transform: scale(1.05);
+}
+
+.form-container {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  width: 50%;
+  transition: all 0.6s ease-in-out;
+  z-index: 2;
+}
+
+.sign-in-container {
+  left: 0;
+}
+
+.container.active .sign-in-container {
+  transform: translateX(100%);
+  opacity: 0;
+}
+
+.sign-up-container {
+  left: 0;
+  opacity: 0;
+  z-index: 1;
+}
+
+.container.active .sign-up-container {
+  transform: translateX(100%);
+  opacity: 1;
+  z-index: 5;
+  animation: move 0.6s;
+}
+
+@keyframes move {
+  0%,
+  49.99% {
+    opacity: 0;
+    z-index: 1;
+  }
+  50%,
+  100% {
+    opacity: 1;
+    z-index: 5;
+  }
+}
+
+.main-container {
+  position: relative;
+  width: 100%;
+  max-width: 900px;
+  min-height: 520px;
+  border-radius: 30px;
+  overflow: hidden;
+  box-shadow: 0 15px 35px rgba(0, 0, 0, 0.4);
+}
+
+@media (min-width: 1200px) {
+  .main-container {
+    max-width: 1050px;
+    min-height: 600px;
+  }
+}
+
+.form-card {
+  backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+@media (max-width: 768px) {
+  .main-container {
+    height: 100dvh;
+    min-height: -webkit-fill-available;
+    border-radius: 0;
+    max-width: 100%;
+    box-shadow: none;
+  }
+
+  .form-container {
+    width: 100%;
+    position: absolute;
+    left: 0;
+    top: 0;
+  }
+
+  .sign-in-container {
+    transform: translateX(0);
+  }
+
+  .sign-up-container {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+
+  .container.active .sign-in-container {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+
+  .container.active .sign-up-container {
+    transform: translateX(0);
+    opacity: 1;
+  }
+
+  .bg-image {
+    transform: scale(1.1);
+  }
+}
