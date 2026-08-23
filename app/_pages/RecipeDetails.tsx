@@ -58,6 +58,7 @@ export default function RecipeDetails() {
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
     const analyserRef = useRef<AnalyserNode | null>(null);
+    const dataArrayRef = useRef<Uint8Array | null>(null);
     const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
     const audioStreamRef = useRef<MediaStream | null>(null);
     const vadFrameRef = useRef<number>(0);
@@ -127,6 +128,7 @@ export default function RecipeDetails() {
             const analyser = audioCtx.createAnalyser();
             analyser.fftSize = 256;
             analyserRef.current = analyser;
+            dataArrayRef.current = new Uint8Array(analyser.frequencyBinCount);
 
             const source = audioCtx.createMediaStreamSource(stream);
             source.connect(analyser);
