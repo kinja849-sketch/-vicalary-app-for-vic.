@@ -58,7 +58,7 @@ export default function RecipeDetails() {
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
     const analyserRef = useRef<AnalyserNode | null>(null);
-    const dataArrayRef = useRef<Uint8Array | null>(null);
+    const dataArrayRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
     const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
     const audioStreamRef = useRef<MediaStream | null>(null);
     const vadFrameRef = useRef<number>(0);
@@ -171,7 +171,7 @@ export default function RecipeDetails() {
                 return;
             }
 
-            analyserRef.current.getByteFrequencyData(dataArrayRef.current);
+            analyserRef.current.getByteFrequencyData(dataArrayRef.current as Uint8Array<ArrayBuffer>);
             let sum = 0;
             for (let i = 0; i < dataArrayRef.current.length; i++) {
                 sum += dataArrayRef.current[i];
