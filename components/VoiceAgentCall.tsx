@@ -11,6 +11,7 @@ import {
 } from '@stream-io/video-react-sdk';
 import { Mic, MicOff, PhoneOff, ChefHat, HeartPulse, Loader2 } from 'lucide-react';
 import '@stream-io/video-react-sdk/dist/css/styles.css';
+import HealthCoachSphere from '@/components/avatar/HealthCoachSphere';
 
 interface VoiceAgentCallProps {
   mode: 'cooking_guide' | 'health_coach';
@@ -55,14 +56,17 @@ function InnerAgentCallUI({
         </p>
       </div>
 
-      {/* Avatar Display */}
+      {/* 3D Sphere Avatar Display */}
       <div className="relative my-8 flex items-center justify-center">
-        <div className="size-44 rounded-full overflow-hidden border-4 border-emerald-500/40 shadow-2xl shadow-emerald-950/50">
-          <img src={avatarUrl} alt={title} className="w-full h-full object-cover" />
-        </div>
+        <HealthCoachSphere
+          state={callingState === 'joined' ? 'listening' : 'thinking'}
+          intent={isChef ? 'meal_planning' : 'factual_research'}
+          size={220}
+          className="shadow-2xl shadow-emerald-950/80"
+        />
         {callingState !== 'joined' && (
-          <div className="absolute inset-0 bg-black/50 rounded-full flex items-center justify-center">
-            <Loader2 className="animate-spin text-emerald-400" size={40} />
+          <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center z-20">
+            <Loader2 className="animate-spin text-emerald-400" size={44} />
           </div>
         )}
       </div>

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
+import { WebResearchService } from '@/lib/services/WebResearchService'
 
 const COACH_ID = '00000000-0000-0000-0000-000000000001'
 
@@ -190,7 +191,7 @@ export async function POST(req: NextRequest) {
     const userLanguage = userSettings.language || (geoInfo.country_code ? countryToLangMap[geoInfo.country_code]?.[0] : null) || 'en'
     const userCurrency = userSettings.currency || geoInfo.currency_code || 'USD'
 
-    const userName = profile?.full_name || 'there'
+    const userName = payload.user_name || payload.userName || profile?.full_name || profile?.username || 'there'
     const rawTime = system_context?.current_time || new Date().toISOString()
     const currentTime = new Date(rawTime).toLocaleString(system_context?.language || 'en-US', {
       timeZone: system_context?.time_zone || geoInfo.timezone || 'UTC',
@@ -204,38 +205,44 @@ export async function POST(req: NextRequest) {
     const calorieGoal = (onboarding as any).daily_calorie_goal || 2000
     const caloriesRemaining = calorieGoal - totalCaloriesToday
 
-    const systemPrompt = `You are Vicalary Health Intelligence, a sophisticated and empathetic conversational health coach for ${userName}. You are not a chatbot; you are a deeply intelligent advisor capable of complex reasoning, visual analysis, and long-term memory.
+    const voiceMode = payload.voice_mode || payload.is_voice_mode || false;
+    const userPromptText = record.content || '';
 
-CONVERSATIONAL PHILOSOPHY:
-1. Speak naturally and intelligently. Avoid robotic patterns, repetitive structures, or generic health advice.
-2. Maintain perfect continuity. If the user mentions something earlier in the session, you remember it and factor it into your current reasoning.
-3. Be supportive but professional. Your tone should feel like a human expert who truly understands ${userName}'s health journey.
+    const userContentLower = userPromptText.toLowerCase();
+    const isResearchQuery = /research|study|science|scientific|evidence|proven|why|how does|benefit|side effect|ingredients|calorie|protein|macro|micro|vitamin|longevity|intermittent fasting|supplement|ketogenic|keto|creatine|recommend|best|what is/i.test(userContentLower);
+    
+    let detectedIntent = 'casual_chat';
+    if (isResearchQuery) detectedIntent = 'factual_research';
+    else if (/eat|recipe|cook|food|meal|snack|dinner|lunch|breakfast/i.test(userContentLower)) detectedIntent = 'meal_planning';
+    else if (/weight|track|progress|lose|gain|muscle|macro|calorie/i.test(userContentLower)) detectedIntent = 'nutrition_analysis';
+    else if (/feel|tired|exhausted|sad|happy|stuck|hard|struggles|motivation/i.test(userContentLower)) detectedIntent = 'motivation';
 
-CRITICAL FORMATTING RULES:
-1. You MUST write strictly in natural paragraphs. 
-2. ABSOLUTELY NO SYMBOLS ALLOWED. Do NOT use asterisks (*), dashes (-), hashtags (#), or bullet points.
-3. If you want to list items, write them out in a flowing sentence separated by commas.
-4. Your response must look like a text message from a human, not a formatted document.
+    // Execute Deep Web Research in parallel
+    let liveResearchData = '';
+    if (userPromptText.trim().length > 2) {
+      console.log(`[Coach-Reply] Executing WebResearchService for voice/chat query: "${userPromptText}"`);
+      liveResearchData = await WebResearchService.searchDeepWeb(userPromptText);
+    }
 
-MULTIMODAL & CONTEXTUAL REASONING:
-- If an image is shared, analyze it with clinical precision. Identify the food, estimate portion sizes, and calculate calories relative to the user's daily progress.
-- FACTOR IN THE FOLLOWING METRICS:
-  - Current Time/Date: ${currentTime}
-  - User Location: ${geoInfo.city}, ${geoInfo.country_name}
-  - Regional Standards: Use ${['US', 'UK', 'CA', 'AU'].includes(geoInfo.country_name) ? 'Imperial (kcal/oz/lbs)' : 'Metric (kcal/kJ/g/kg)'} units. Factor in local health regulations of ${geoInfo.country_name}.
-  - Today's Consumption: ${totalCaloriesToday} kcal
-  - Remaining Calories: ${caloriesRemaining} kcal (Goal: ${calorieGoal} kcal)
-  - Primary Health Goal: ${(onboarding as any).goal || 'General Wellness'}
-  - Restrictions/Conditions: ${((onboarding as any).dietary_lifestyle || []).join(', ') || 'None'} | ${(onboarding as any).medical_conditions || 'None reported'}
-- LATEST DEPTH ANALYSIS CONTEXT: ${system_context?.latest_analysis ? JSON.stringify(system_context.latest_analysis) : 'None'}
+    const systemPrompt = `You are Vicalary Health Intelligence, a deeply articulate, highly intelligent, and warm AI Health Coach for ${userName}. You sound like a world-class human nutritionist, medical researcher, and empathetic coach.
 
-INTELLIGENCE DIRECTIVES:
-- MAPS AND LOCATIONS: If suggesting a physical location, clinic, or restaurant, you MUST emit a special tag in your response formatted exactly like this: [LOCATION: lat,lng,Place Name]. Do not write out coordinates or links, just emit the tag. The system will convert it into an interactive map.
-- LANGUAGE: The user's preferred language code is '${userLanguage}' and currency is '${userCurrency}'. You MUST write your entire response fluently in this language ('${userLanguage}') and format prices/monetary units in their currency. Do NOT reply in English unless their language code is 'en'.
-- REASONING: Before you reply, internally evaluate the user's intent. Are they asking for motivation, data analysis, or a recommendation? Tailor your depth to their specific need.
-- CONSISTENCY: If they ask about a previous meal or scan mentioned in the history, you know exactly what they are referring to.
+CRITICAL DIRECT-ANSWER COMPREHENSION DIRECTIVE:
+1. YOUR VERY FIRST SENTENCE MUST DIRECTLY AND ACCURATELY ANSWER THE USER'S EXACT QUESTION.
+2. ABSOLUTELY NO GENERIC INTROS OR BOILERPLATE GREETINGS (Do NOT say "Hello", "I am Vicalary", "I hear you asking about", or "That is a great question"). Jump directly into the exact answer!
+3. INTEGRATE DEEP WEB RESEARCH: Synthesize scientific facts, nutritional values, or web evidence directly into your explanation.
+4. NATURAL SPOKEN CADENCE: Speak in 2 to 3 fluid, warm, articulate sentences max so the conversation feels snappy, intelligent, and interactive.
+5. NO MARKDOWN SYMBOLS OR BULLET POINTS (*, #, -, _). Write strictly in natural, flowing human sentences.
 
-Respond directly with your conversational reply. Avoid all robotic formatting.`
+LIVE REAL-TIME INTERNET RESEARCH FINDINGS:
+${liveResearchData ? liveResearchData : 'No external web search data needed for this casual prompt.'}
+
+CONTEXTUAL PROFILE & PROGRESS:
+- Current Time/Date: ${currentTime}
+- User Location: ${geoInfo.city}, ${geoInfo.country_name}
+- Today's Consumption: ${totalCaloriesToday} kcal | Remaining: ${caloriesRemaining} kcal (Goal: ${calorieGoal} kcal)
+- Health Goal: ${(onboarding as any).goal || 'General Wellness'}
+
+Directly state your articulate, research-backed human answer now.`
 
     const msgType = record.message_type
     // Support image URL from metadata even for text messages (common for context handoff)
@@ -333,18 +340,20 @@ Respond directly with your conversational reply. Avoid all robotic formatting.`
     )
     chatWithCurrent.push(currentUserMsg)
 
-    // Idempotency check
-    const { data: existingReply } = await supabase
-      .from('messages')
-      .select('id')
-      .eq('conversation_id', conversationId)
-      .eq('sender_id', COACH_ID)
-      .gt('created_at', record.created_at)
-      .limit(1)
-      .maybeSingle()
+    // Idempotency check (bypassed for voice mode to ensure direct dynamic response for every question)
+    if (!voiceMode) {
+      const { data: existingReply } = await supabase
+        .from('messages')
+        .select('id')
+        .eq('conversation_id', conversationId)
+        .eq('sender_id', COACH_ID)
+        .gt('created_at', record.created_at)
+        .limit(1)
+        .maybeSingle()
 
-    if (existingReply) {
-      return NextResponse.json({ message: 'Already replied', id: existingReply.id })
+      if (existingReply) {
+        return NextResponse.json({ message: 'Already replied', id: existingReply.id })
+      }
     }
 
     // Create placeholder message
@@ -422,7 +431,12 @@ Respond directly with your conversational reply. Avoid all robotic formatting.`
       last_message_sender_id: COACH_ID,
     } as any).eq('id', conversationId)
 
-    return NextResponse.json({ success: true, message_id: newMsg.id })
+    return NextResponse.json({
+      success: true,
+      message_id: newMsg.id,
+      replyText: fullReply,
+      intent: detectedIntent,
+    })
   } catch (err: any) {
     console.error('Coach Reply Error:', err.message)
     return NextResponse.json({

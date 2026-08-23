@@ -4,13 +4,20 @@ export type PermissionStatus = 'granted' | 'denied' | 'prompt';
 
 export const checkPermission = async (name: PermissionName): Promise<PermissionStatus> => {
     try {
-        if (!navigator.permissions || !navigator.permissions.query) {
+        if (typeof window === 'undefined' || !navigator.permissions || !navigator.permissions.query) {
+            const cached = localStorage.getItem(`permission_${name}`);
+            if (cached === 'granted' || cached === 'denied') return cached as PermissionStatus;
             return 'prompt';
         }
-        const result = await navigator.permissions.query({ name });
-        return result.state as PermissionStatus;
+        const result = await navigator.permissions.query({ name } as any);
+        if (result.state) {
+            localStorage.setItem(`permission_${name}`, result.state);
+            return result.state as PermissionStatus;
+        }
+        return 'prompt';
     } catch (e) {
-        console.warn(`Permission query for ${name} not supported:`, e);
+        const cached = localStorage.getItem(`permission_${name}`);
+        if (cached === 'granted' || cached === 'denied') return cached as PermissionStatus;
         return 'prompt';
     }
 };
@@ -18,7 +25,6 @@ export const checkPermission = async (name: PermissionName): Promise<PermissionS
 export const requestCameraAccess = async (options: MediaStreamConstraints = { video: { facingMode: 'environment' } }) => {
     const status = await checkPermission('camera' as any);
 
-    // If we know it's denied, don't even try to request it again in this session to avoid browser "Blocked" alerts
     if (status === 'denied') {
         const lastAlert = sessionStorage.getItem('camera_denied_alert');
         if (!lastAlert) {
@@ -33,10 +39,13 @@ export const requestCameraAccess = async (options: MediaStreamConstraints = { vi
     try {
         const stream = await navigator.mediaDevices.getUserMedia(options);
         localStorage.setItem('has_granted_camera', 'true');
+        localStorage.setItem('permission_camera', 'granted');
+        sessionStorage.removeItem('camera_denied_alert');
         return stream;
     } catch (err: any) {
         if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
             localStorage.setItem('has_granted_camera', 'false');
+            localStorage.setItem('permission_camera', 'denied');
         }
         throw err;
     }
@@ -57,10 +66,13 @@ export const requestMicrophoneAccess = async (options: MediaStreamConstraints = 
     try {
         const stream = await navigator.mediaDevices.getUserMedia(options);
         localStorage.setItem('has_granted_mic', 'true');
+        localStorage.setItem('permission_microphone', 'granted');
+        sessionStorage.removeItem('mic_denied_alert');
         return stream;
     } catch (err: any) {
         if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
             localStorage.setItem('has_granted_mic', 'false');
+            localStorage.setItem('permission_microphone', 'denied');
         }
         throw err;
     }

@@ -18,6 +18,8 @@ import { useAnalysisStore } from '@/store/analysisStore';
 import { useCoachInjectionStore } from '@/store/coachInjectionStore';
 import StreamCallOverlay from '@/components/calls/StreamCallOverlay';
 import IncomingCallModal from '@/components/calls/IncomingCallModal';
+import AICoachVoiceModal from '@/components/AICoachVoiceModal';
+import { Sparkles } from 'lucide-react';
 
 // --- Constants ---
 const COACH_ID = '00000000-0000-0000-0000-000000000001';
@@ -299,6 +301,7 @@ export default function ChatConversation() {
 
     // Stream Audio & Video Call State
     const [streamCall, setStreamCall] = useState<{ active: boolean; type: 'audio' | 'video' } | null>(null);
+    const [showAiVoiceModal, setShowAiVoiceModal] = useState(false);
 
     const [showLastSeen, setShowLastSeen] = useState(true);
 
@@ -2153,6 +2156,18 @@ export default function ChatConversation() {
                                     <Mic size={26} />
                                 </button>
 
+                                {/* Live AI Voice Conversation Mode (ChatGPT / Gemini style) */}
+                                {isAI && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowAiVoiceModal(true)}
+                                        className="p-2 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-md shadow-emerald-500/30 hover:scale-110 active:scale-95 transition-all flex items-center justify-center shrink-0 border border-emerald-400/40 animate-pulse"
+                                        title="Start ChatGPT/Gemini Live Voice Conversation"
+                                    >
+                                        <Sparkles size={20} />
+                                    </button>
+                                )}
+
                                 {/* Text Input */}
                                 <textarea
                                     ref={inputRef}
@@ -2528,6 +2543,16 @@ export default function ChatConversation() {
                         partnerAvatar={displayAvatar}
                         callType={streamCall.type}
                         onClose={() => setStreamCall(null)}
+                    />
+                )}
+                {/* AI Health Coach Live Voice Conversation Modal (ChatGPT / Gemini style) */}
+                {showAiVoiceModal && user && (
+                    <AICoachVoiceModal
+                        userId={user.id}
+                        userName={profile?.full_name || 'User'}
+                        userAvatar={profile?.avatar_url}
+                        conversationId={localActiveId}
+                        onClose={() => setShowAiVoiceModal(false)}
                     />
                 )}
             </div>

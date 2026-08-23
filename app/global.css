@@ -558,3 +558,17 @@
     font-size: 18px;
   }
 }
+
+/* Hide Powered by Netlify Badge Completely */
+[data-netlify-badge],
+.netlify-badge,
+iframe[src*="netlify"],
+div[class*="netlify-badge"],
+div[class*="netlify"],
+#netlify-badge,
+a[href*="netlify.com"] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}

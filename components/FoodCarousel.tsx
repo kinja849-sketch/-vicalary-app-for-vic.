@@ -72,11 +72,31 @@ export default function FoodCarousel({
         setLocalIdx(0);
     }, [initialMealType]);
 
+    const DEFAULT_MEALS = {
+        breakfast: [
+            { id: 'fb1', name: 'Avocado Toast with Poached Eggs', calories: 420, image: 'https://images.unsplash.com/photo-1525351484163-7529414344d8?q=80&w=800&auto=format&fit=crop', subtitle: '420 kcal' },
+            { id: 'fb2', name: 'Greek Yogurt Berry Parfait', calories: 310, image: 'https://images.unsplash.com/photo-1488477181946-6428a0291777?q=80&w=800&auto=format&fit=crop', subtitle: '310 kcal' },
+            { id: 'fb3', name: 'Oatmeal with Honey & Almonds', calories: 350, image: 'https://images.unsplash.com/photo-1517673400267-0251440c45dc?q=80&w=800&auto=format&fit=crop', subtitle: '350 kcal' }
+        ],
+        lunch: [
+            { id: 'fl1', name: 'Grilled Chicken Caesar Salad', calories: 520, image: 'https://images.unsplash.com/photo-1540420773420-3366772f4999?q=80&w=800&auto=format&fit=crop', subtitle: '520 kcal' },
+            { id: 'fl2', name: 'Quinoa Power Bowl with Tofu', calories: 460, image: 'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?q=80&w=800&auto=format&fit=crop', subtitle: '460 kcal' },
+            { id: 'fl3', name: 'Mediterranean Salmon & Veggies', calories: 580, image: 'https://images.unsplash.com/photo-1467003909585-2f8a72700288?q=80&w=800&auto=format&fit=crop', subtitle: '580 kcal' }
+        ],
+        dinner: [
+            { id: 'fd1', name: 'Herb-Roasted Salmon with Asparagus', calories: 540, image: 'https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?q=80&w=800&auto=format&fit=crop', subtitle: '540 kcal' },
+            { id: 'fd2', name: 'Lean Beef & Broccoli Stir-Fry', calories: 590, image: 'https://images.unsplash.com/photo-1543339308-43e59d6b73a6?q=80&w=800&auto=format&fit=crop', subtitle: '590 kcal' },
+            { id: 'fd3', name: 'Baked Chicken Breast & Sweet Potato', calories: 510, image: 'https://images.unsplash.com/photo-1532550907401-a500c9a57435?q=80&w=800&auto=format&fit=crop', subtitle: '510 kcal' }
+        ]
+    };
+
+    const rawActiveMeals = isSingleMode ? singleCategoryMeals! :
+        (selectedTab === 'breakfast' ? breakfastMeals :
+            selectedTab === 'lunch' ? lunchMeals :
+                dinnerMeals);
+
     const activeMeals = processMeals(
-        isSingleMode ? singleCategoryMeals! :
-            (selectedTab === 'breakfast' ? breakfastMeals :
-                selectedTab === 'lunch' ? lunchMeals :
-                    dinnerMeals)
+        rawActiveMeals && rawActiveMeals.length > 0 ? rawActiveMeals : DEFAULT_MEALS[selectedTab]
     );
 
     const { t } = useTranslation();

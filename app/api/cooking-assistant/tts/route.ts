@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(req: NextRequest) {
     try {
-        const { text } = await req.json();
+        const { text, voice = 'nova', speed = 1.0 } = await req.json();
 
         if (!text) {
             return NextResponse.json({ error: 'Missing text parameter' }, { status: 400 });
@@ -13,7 +13,9 @@ export async function POST(req: NextRequest) {
             throw new Error('OpenAI API key missing');
         }
 
-        // Use standard TTS for cost-effectiveness and speed, with 'alloy' or 'onyx' voice for a confident, warm tone
+        // Use high-definition TTS model with ultra-natural human voice choices (nova, shimmer, alloy)
+        const selectedVoice = ['nova', 'shimmer', 'alloy', 'echo', 'fable', 'onyx'].includes(voice) ? voice : 'nova';
+        
         const response = await fetch('https://api.openai.com/v1/audio/speech', {
             method: 'POST',
             headers: {
@@ -21,9 +23,10 @@ export async function POST(req: NextRequest) {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                model: 'tts-1',
-                voice: 'onyx', // Onyx is deep and warm. Alternatively 'alloy'.
+                model: 'tts-1-hd',
+                voice: selectedVoice,
                 input: text,
+                speed: Math.max(0.7, Math.min(speed, 1.25)),
             }),
         });
 
@@ -38,6 +41,7 @@ export async function POST(req: NextRequest) {
             status: 200,
             headers: {
                 'Content-Type': 'audio/mpeg',
+                'Cache-Control': 'public, max-age=3600',
             },
         });
     } catch (error: any) {

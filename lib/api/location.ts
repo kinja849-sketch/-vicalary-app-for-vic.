@@ -106,7 +106,10 @@ export const detectLocation = async (forceRefresh = false): Promise<LocationData
     try {
       // Primary: geojs.io (unlimited, fast)
       try {
-        const res = await fetch('https://get.geojs.io/v1/ip/geo.json');
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 1500);
+        const res = await fetch('https://get.geojs.io/v1/ip/geo.json', { signal: controller.signal });
+        clearTimeout(timeoutId);
         if (res.ok) {
           const data = await res.json();
           if (data.country_code) {

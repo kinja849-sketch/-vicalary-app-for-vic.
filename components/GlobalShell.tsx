@@ -81,19 +81,22 @@ export function GlobalShell({ children }: { children: React.ReactNode }) {
         {
           event: 'UPDATE',
           schema: 'public',
-          table: 'calls',
-          filter: `receiver_id=eq.${user.id}`,
+          table: 'calls'
         },
         (payload) => {
-          const status = payload.new?.status;
-          if (status === 'ended' || status === 'declined' || status === 'cancelled') {
-            setIncomingStreamCall(null);
-            setActiveStreamCall(null);
+          const newCall = payload.new;
+          if (!newCall) return;
+          if (newCall.receiver_id === user.id || newCall.caller_id === user.id) {
+            const status = newCall.status;
+            if (status === 'ended' || status === 'declined' || status === 'missed' || status === 'cancelled') {
+              setIncomingStreamCall(null);
+              setActiveStreamCall(null);
+            }
           }
         }
       )
       .on('broadcast', { event: 'incoming_call' }, (payload) => {
-        if (payload.payload) {
+        if (payload.payload && payload.payload.callerId !== user.id) {
           console.log('[GlobalShell] Incoming call broadcast:', payload.payload);
           setIncomingStreamCall({
             callId: payload.payload.callId,
@@ -104,6 +107,11 @@ export function GlobalShell({ children }: { children: React.ReactNode }) {
             callType: payload.payload.callType || 'voice'
           });
         }
+      })
+      .on('broadcast', { event: 'call_ended' }, (payload) => {
+        console.log('[GlobalShell] Call ended broadcast received:', payload);
+        setIncomingStreamCall(null);
+        setActiveStreamCall(null);
       })
       .subscribe();
 

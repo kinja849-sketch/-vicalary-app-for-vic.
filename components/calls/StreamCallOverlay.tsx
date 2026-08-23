@@ -659,6 +659,34 @@ export default function StreamCallOverlay({
             })
         }).catch(err => console.warn('[Call status notify warn]', err));
 
+        // Broadcast call_ended event to receiver & caller user channels for instant termination
+        try {
+            if (receiverId) {
+                const receiverChannel = supabase.channel(`user_calls_${receiverId}`);
+                await receiverChannel.subscribe((status) => {
+                    if (status === 'SUBSCRIBED') {
+                        receiverChannel.send({
+                            type: 'broadcast',
+                            event: 'call_ended',
+                            payload: { conversationId, callerId: userId }
+                        });
+                    }
+                });
+            }
+            const myChannel = supabase.channel(`user_calls_${userId}`);
+            await myChannel.subscribe((status) => {
+                if (status === 'SUBSCRIBED') {
+                    myChannel.send({
+                        type: 'broadcast',
+                        event: 'call_ended',
+                        payload: { conversationId, callerId: userId }
+                    });
+                }
+            });
+        } catch (e) {
+            console.warn('[handleEndCall] Error sending end broadcast:', e);
+        }
+
         if (call) {
             await call.leave().catch(console.error);
         }
