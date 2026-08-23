@@ -291,7 +291,7 @@ RULES:
       is_from_cache: isFromCache,
       image_url: productData?.image_url,
       country_of_origin: productData?.country_of_origin,
-      needs_crowdsourcing: political.needs_crowdsourcing,
+      needs_crowdsourcing: result.needs_crowdsourcing ?? false,
       ...result,
     })
   } catch (error: any) {

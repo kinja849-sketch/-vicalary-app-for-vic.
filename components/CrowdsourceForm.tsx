@@ -28,7 +28,7 @@ export function CrowdsourceForm({ barcode, productName, brandName, onClose }: Cr
                 verification_status: 'pending'
             };
             
-            const { error } = await supabase.from('user_submissions').insert(data);
+            const { error } = await (supabase as any).from('user_submissions').insert(data);
             if (error) throw error;
             
             toast.success("Thank you! Your submission is in the moderation queue.");

@@ -47,7 +47,7 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
             try {
                 await html5QrCode.start(
                     { facingMode: facingMode },
-                    config,
+                    config as any,
                     (decodedText) => {
                         if (hasScannedRef.current || isAnalyzing) return;
                         hasScannedRef.current = true;
