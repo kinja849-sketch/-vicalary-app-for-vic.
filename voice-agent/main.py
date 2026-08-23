@@ -1,0 +1,203 @@
+import asyncio
+import logging
+import os
+from pathlib import Path
+from typing import Dict, Optional
+
+from dotenv import load_dotenv
+from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from vision_agents.core import Agent, User
+from vision_agents.plugins import getstream, openai
+
+# Load environment variables from parent .env or local .env
+parent_env_local = Path(__file__).resolve().parent.parent / ".env.local"
+parent_env = Path(__file__).resolve().parent.parent / ".env"
+local_env = Path(__file__).resolve().parent / ".env"
+
+if local_env.exists():
+    load_dotenv(local_env)
+elif parent_env_local.exists():
+    load_dotenv(parent_env_local)
+elif parent_env.exists():
+    load_dotenv(parent_env)
+
+# Ensure Stream credentials and OpenAI key exist
+STREAM_API_KEY = os.getenv("STREAM_API_KEY") or os.getenv("NEXT_PUBLIC_STREAM_API_KEY")
+STREAM_API_SECRET = os.getenv("STREAM_API_SECRET")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("NEXT_PUBLIC_OPENAI_API_KEY")
+
+if STREAM_API_KEY:
+    os.environ["STREAM_API_KEY"] = STREAM_API_KEY
+if STREAM_API_SECRET:
+    os.environ["STREAM_API_SECRET"] = STREAM_API_SECRET
+if OPENAI_API_KEY:
+    os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("voice-agent")
+
+app = FastAPI(title="VICALARY Voice Agent Service")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Store active sessions
+active_agents: Dict[str, Agent] = {}
+
+PERSONA_PROMPTS = {
+    "cooking_guide": """
+You are the VICALARY AI Cooking Guide (Master Chef Avatar).
+Your goal is to guide the user in real time through voice conversation on what to cook, step-by-step recipe instructions, ingredient substitutions, and culinary advice.
+Keep your responses conversational, enthusiastic, concise, clear, and easy to follow while cooking in the kitchen.
+Avoid complex formatting, code, or special markdown characters since your output is spoken directly to the user.
+""",
+    "health_coach": """
+You are the VICALARY AI Health & Wellness Coach.
+Your goal is to hold a warm, encouraging, and direct voice conversation with the user regarding their nutrition, daily progress, calorie/macro goals, hydration, and overall physical wellness.
+Listen actively, offer constructive advice, celebrate progress, and gently keep the user accountable.
+Keep your responses natural, empathetic, and concise since your output is spoken directly to the user.
+""",
+}
+
+LANGUAGE_NAMES = {
+    "en": "English",
+    "id": "Indonesian",
+    "ar": "Arabic",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "hi": "Hindi",
+    "zh": "Mandarin Chinese",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "ru": "Russian",
+    "pt": "Portuguese",
+    "tr": "Turkish",
+    "vi": "Vietnamese",
+    "ur": "Urdu",
+    "bn": "Bengali",
+    "ta": "Tamil",
+    "te": "Telugu",
+    "mr": "Marathi",
+    "my": "Burmese",
+    "so": "Somali",
+    "sw": "Swahili",
+}
+
+class StartSessionRequest(BaseModel):
+    call_id: str
+    call_type: str = "default"
+    mode: str = "cooking_guide"  # "cooking_guide" or "health_coach"
+    language: Optional[str] = "en"
+    user_id: Optional[str] = "user"
+    user_name: Optional[str] = "User"
+
+class StopSessionRequest(BaseModel):
+    call_id: str
+
+def build_instructions(mode: str, language_code: Optional[str]) -> str:
+    base_prompt = PERSONA_PROMPTS.get(mode, PERSONA_PROMPTS["cooking_guide"])
+    lang_name = LANGUAGE_NAMES.get((language_code or "en").lower(), "English")
+
+    language_instruction = (
+        f"\n\nIMPORTANT LANGUAGE REQUIREMENT:\n"
+        f"By default, speak and respond in {lang_name} ({language_code or 'en'}). "
+        f"If the user speaks a different language, respond fluently in that language. "
+        f"If {lang_name} is unavailable or unrecognized, fall back gracefully to English."
+    )
+    return base_prompt.strip() + language_instruction
+
+async def run_agent_session(agent: Agent, call_type: str, call_id: str):
+    try:
+        call = await agent.create_call(call_type=call_type, call_id=call_id)
+        logger.info(f"Agent joining call {call_id} (type: {call_type})")
+        async for _ in agent.join(call):
+            pass
+    except asyncio.CancelledError:
+        logger.info(f"Session for call {call_id} was cancelled.")
+    except Exception as e:
+        logger.error(f"Error in agent session for call {call_id}: {e}", exc_info=True)
+    finally:
+        active_agents.pop(call_id, None)
+        try:
+            agent.close()
+        except Exception:
+            pass
+
+@app.get("/health")
+def health_check():
+    return {
+        "status": "ok",
+        "active_sessions": len(active_agents),
+        "stream_api_key_configured": bool(STREAM_API_KEY),
+        "openai_api_key_configured": bool(OPENAI_API_KEY),
+    }
+
+@app.post("/start-session")
+async def start_session(req: StartSessionRequest, background_tasks: BackgroundTasks):
+    if not STREAM_API_KEY or not STREAM_API_SECRET:
+        raise HTTPException(status_code=500, detail="Stream API credentials not configured in environment.")
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OpenAI API Key not configured in environment.")
+
+    if req.call_id in active_agents:
+        return {"status": "already_running", "call_id": req.call_id}
+
+    mode = req.mode if req.mode in PERSONA_PROMPTS else "cooking_guide"
+    instructions = build_instructions(mode, req.language)
+
+    agent_id = f"ai-{mode.replace('_', '-')}"
+    agent_name = "Chef Avatar" if mode == "cooking_guide" else "Health Coach"
+
+    edge = getstream.Edge(
+        api_key=STREAM_API_KEY,
+        api_secret=STREAM_API_SECRET,
+    )
+
+    llm = openai.Realtime(
+        model="gpt-4o-realtime-preview",
+        api_key=OPENAI_API_KEY,
+    )
+
+    agent = Agent(
+        edge=edge,
+        agent_user=User(id=agent_id, name=agent_name),
+        instructions=instructions,
+        llm=llm,
+    )
+
+    active_agents[req.call_id] = agent
+    background_tasks.add_task(run_agent_session, agent, req.call_type, req.call_id)
+
+    return {
+        "status": "started",
+        "call_id": req.call_id,
+        "mode": mode,
+        "language": req.language or "en",
+        "agent_id": agent_id,
+    }
+
+@app.post("/stop-session")
+async def stop_session(req: StopSessionRequest):
+    agent = active_agents.pop(req.call_id, None)
+    if not agent:
+        return {"status": "not_found", "call_id": req.call_id}
+
+    try:
+        agent.close()
+    except Exception as e:
+        logger.warning(f"Error closing agent for {req.call_id}: {e}")
+
+    return {"status": "stopped", "call_id": req.call_id}
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8080))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

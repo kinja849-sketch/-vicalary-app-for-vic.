@@ -1,0 +1,16 @@
+language: en-US
+reviews:
+  profile: assertive
+  high_level_summary: true
+  request_changes_workflow: true
+  path_instructions:
+    - path: "app/api/**"
+      instructions: |
+        Enforce server-only secrets. No service-role or banking keys in responses.
+        Thin routes. Business logic and AI calls stay server-side.
+    - path: "lib/**"
+      instructions: |
+        Preserve existing architecture. No client exposure of secrets.
+    - path: "app/**/*.tsx"
+      instructions: |
+        UI only displays data. No privileged operations or secrets.
