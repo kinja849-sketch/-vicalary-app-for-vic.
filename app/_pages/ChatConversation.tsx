@@ -16,7 +16,7 @@ import { useTranslation } from '@/lib/api/translation';
 import CameraCapture from '@/components/CameraCapture';
 import { useAnalysisStore } from '@/store/analysisStore';
 import { useCoachInjectionStore } from '@/store/coachInjectionStore';
-import StreamCallOverlay from '@/components/calls/StreamCallOverlay';
+import { useCall } from '@/lib/CallContext';
 import IncomingCallModal from '@/components/calls/IncomingCallModal';
 import AICoachVoiceModal from '@/components/AICoachVoiceModal';
 import { Sparkles } from 'lucide-react';
@@ -299,8 +299,7 @@ export default function ChatConversation() {
     const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
     const [isMenuOpen, setIsMenuOpen] = useState(false);
 
-    // Stream Audio & Video Call State
-    const [streamCall, setStreamCall] = useState<{ active: boolean; type: 'audio' | 'video' } | null>(null);
+    const { startCall } = useCall();
     const [showAiVoiceModal, setShowAiVoiceModal] = useState(false);
 
     const [showLastSeen, setShowLastSeen] = useState(true);
@@ -655,67 +654,38 @@ export default function ChatConversation() {
     // --- Actions ---
 
     const handleStartCall = async (type: 'audio' | 'video' | 'voice') => {
-        const callType: 'audio' | 'video' = (type === 'video') ? 'video' : 'audio';
+        const callType: 'voice' | 'video' = (type === 'video') ? 'video' : 'voice';
 
         if (!user?.id || !localActiveId) {
             toast.error("Unable to start call: Session invalid");
             return;
         }
 
+        if (isSelf) {
+            toast.error("Cannot call yourself.");
+            return;
+        }
+
         if (isAI) {
-            toast.info("Cooking Guide AI Agent is ready in Guided Cooking mode!");
+            toast.error("Calls are not supported with Health Coach.");
             return;
         }
 
         const targetUserId = otherParticipantId || virtualTargetId;
-        if (!targetUserId) {
+        if (!targetUserId || targetUserId === user.id) {
             toast.error("Call participant not found");
             return;
         }
 
-        // 1. Open caller overlay in "Ringing..." / "Calling..." state
-        setStreamCall({ active: true, type: callType });
-
-        // 2. Trigger server API to insert calls record and broadcast event
-        try {
-            const res = await fetch('/api/stream/call', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    conversation_id: localActiveId,
-                    caller_id: user.id,
-                    receiver_id: targetUserId,
-                    type: callType
-                })
-            });
-
-            const data = await res.json();
-            console.log('[handleStartCall] Call session initiated:', data);
-
-            // 3. Send Supabase Realtime broadcast signal directly to receiver's user channel
-            const userChannel = supabase.channel(`user_calls_${targetUserId}`);
-            await userChannel.subscribe(async (status) => {
-                if (status === 'SUBSCRIBED') {
-                    await userChannel.send({
-                        type: 'broadcast',
-                        event: 'incoming_call',
-                        payload: {
-                            callId: data.callRecord?.id || `call_${Date.now()}`,
-                            conversationId: localActiveId,
-                            callerId: user.id,
-                            callerName: profile?.full_name || profile?.username || 'Vicalary User',
-                            callerAvatar: profile?.avatar_url || null,
-                            callType: callType === 'video' ? 'video' : 'voice'
-                        }
-                    });
-                    console.log('[handleStartCall] Broadcasted incoming call to receiver:', targetUserId);
-                }
-            });
-
-        } catch (err: any) {
-            console.error('[handleStartCall Error]:', err);
-            toast.error("Failed to connect call signal");
-        }
+        await startCall({
+            conversationId: localActiveId,
+            receiverId: targetUserId,
+            type: callType,
+            partnerName: displayName || 'Vicalary User',
+            partnerAvatar: displayAvatar || null,
+            isSelf,
+            isAI
+        });
     };
 
     const onEmojiClick = (emojiData: any) => {
@@ -2528,21 +2498,6 @@ export default function ChatConversation() {
                             }
                         }}
                         onClose={() => setShowCamera(false)}
-                    />
-                )}
-                {/* Stream Audio / Video Call Overlay */}
-                {streamCall && (
-                    <StreamCallOverlay
-                        conversationId={localActiveId}
-                        userId={user!.id}
-                        receiverId={otherParticipantId}
-                        targetOnline={otherUserOnline}
-                        userName={profile?.full_name || profile?.username || 'User'}
-                        userAvatar={profile?.avatar_url}
-                        partnerName={displayName}
-                        partnerAvatar={displayAvatar}
-                        callType={streamCall.type}
-                        onClose={() => setStreamCall(null)}
                     />
                 )}
                 {/* AI Health Coach Live Voice Conversation Modal (ChatGPT / Gemini style) */}

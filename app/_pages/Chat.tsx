@@ -311,9 +311,9 @@ export default function Chat() {
       .filter((c: any) => c.conversation_type !== 'self' && c.conversation_type !== 'ai')
       .map((c: any) => ({
         ...c,
-        display_name: c.name || c.other_participant_info?.full_name || c.other_participant_info?.username || c.other_participant_info?.phone_number || 'User',
-        display_avatar: c.other_participant_info?.avatar_url,
-        display_phone: c.other_participant_info?.phone_number
+        display_name: c.display_name || (c.name && c.name !== 'Direct Chat' ? c.name : null) || c.other_participant_info?.full_name || c.other_participant_info?.username || c.other_participant_info?.phone_number || 'User',
+        display_avatar: c.display_avatar || c.other_participant_info?.avatar_url || null,
+        display_phone: c.display_phone || c.other_participant_info?.phone_number || null
       }));
 
     // CRITICAL FIX: DO NOT create "Virtual" contactConvs and merge them into peerConvs.

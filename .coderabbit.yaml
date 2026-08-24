@@ -3,6 +3,21 @@ reviews:
   profile: assertive
   high_level_summary: true
   request_changes_workflow: true
+  auto_review:
+    enabled: true
+    ignore_title_keywords:
+      - "wip"
+      - "draft"
+    drafts: false
+  path_filters:
+    - "!node_modules/**"
+    - "!.next/**"
+    - "!package-lock.json"
+    - "!tsconfig.tsbuildinfo"
+    - "!public/**"
+    - "!dist/**"
+    - "!build/**"
+    - "!*.lock"
   path_instructions:
     - path: "app/api/**"
       instructions: |
@@ -14,3 +29,4 @@ reviews:
     - path: "app/**/*.tsx"
       instructions: |
         UI only displays data. No privileged operations or secrets.
+

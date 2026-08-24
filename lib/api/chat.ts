@@ -5,29 +5,97 @@ const COACH_ID = '00000000-0000-0000-0000-000000000001';
 
 export const getConversationsV2 = async (userId: string) => {
     console.log(`[API] getConversationsV2 for user: ${userId}`);
-    // 1. Provision system conversations if needed (self-chat + Health Coach)
     try {
-        const { error: rpcError } = await (supabase as any).rpc('provision_user_system_chats', { p_user_id: userId });
-        if (rpcError) console.warn('[API] provision_user_system_chats RPC error:', rpcError);
+        await (supabase as any).rpc('provision_user_system_chats', { p_user_id: userId });
     } catch (err) {
         console.warn('[API] provision_user_system_chats failed (non-fatal):', err);
     }
 
-    // 2. Get all conversations using the new optimized RPC
-    const { data: rawConvs, error: participationError } = await (supabase as any).rpc('get_user_conversations', { 
-        p_user_id: userId 
-    });
-    
-    if (participationError) {
-        console.error('[API] get_user_conversations RPC failed:', participationError);
-        throw participationError;
+    let rawConvs: any[] = [];
+    try {
+        const { data, error } = await (supabase as any).rpc('get_user_conversations', { 
+            p_user_id: userId 
+        });
+        if (!error && Array.isArray(data)) {
+            rawConvs = data;
+        }
+    } catch (err) {
+        console.warn('[API] get_user_conversations RPC failed, using fallback query:', err);
     }
 
-    // 4. Process display info from the optimized RPC results
+    // Fallback query if RPC returned empty or failed
+    if (!rawConvs || rawConvs.length === 0) {
+        const { data: userParts, error: partErr } = await (supabase
+            .from('conversation_participants') as any)
+            .select(`
+                conversation_id,
+                is_archived,
+                is_muted,
+                conversations!inner(*)
+            `)
+            .eq('user_id', userId)
+            .is('deleted_at', null);
+
+        if (!partErr && userParts) {
+            rawConvs = userParts.map((p: any) => ({
+                ...p.conversations,
+                is_archived: p.is_archived,
+                is_muted: p.is_muted
+            }));
+        }
+    }
+
+    // Collect peer conversation IDs needing participant profiles
+    const peerConvIds = (rawConvs || [])
+        .filter((c: any) => c.conversation_type !== 'self' && c.conversation_type !== 'ai')
+        .map((c: any) => c.id);
+
+    let participantProfilesMap: Record<string, any> = {};
+
+    if (peerConvIds.length > 0) {
+        try {
+            const { data: pData } = await (supabase
+                .from('conversation_participants') as any)
+                .select(`
+                    conversation_id,
+                    user_id,
+                    user_profiles:user_id(
+                        id,
+                        full_name,
+                        username,
+                        avatar_url,
+                        chat_users!chat_users_user_id_fkey(phone_number)
+                    )
+                `)
+                .in('conversation_id', peerConvIds)
+                .neq('user_id', userId)
+                .neq('user_id', COACH_ID);
+
+            if (pData) {
+                pData.forEach((row: any) => {
+                    const rawProfile = row.user_profiles;
+                    const profile = Array.isArray(rawProfile) ? rawProfile[0] : rawProfile;
+                    if (profile) {
+                        const chatUser = Array.isArray(profile.chat_users) ? profile.chat_users[0] : profile.chat_users;
+                        participantProfilesMap[row.conversation_id] = {
+                            id: profile.id,
+                            full_name: profile.full_name,
+                            username: profile.username,
+                            avatar_url: profile.avatar_url,
+                            phone_number: chatUser?.phone_number
+                        };
+                    }
+                });
+            }
+        } catch (e) {
+            console.warn('[API] Failed to batch fetch participant profiles:', e);
+        }
+    }
+
     const processed = (rawConvs || []).map((conv: any) => {
         let display_name = 'Unknown';
         let display_avatar: string | null = null;
-        let display_phone = null;
+        let display_phone: string | null = null;
 
         if (conv.conversation_type === 'self') {
             display_name = 'Personal Notes (Me)';
@@ -35,10 +103,12 @@ export const getConversationsV2 = async (userId: string) => {
             display_name = 'Health Coach';
             display_avatar = '/app logo.png';
         } else {
-            const profile = conv.other_participant_info || {};
-            display_name = profile.full_name || profile.username || 'User';
-            display_avatar = profile.avatar_url || null;
-            display_phone = profile.phone_number || null;
+            const rpcProfile = conv.other_participant_info || {};
+            const fetchedProfile = participantProfilesMap[conv.id] || {};
+
+            display_name = fetchedProfile.full_name || fetchedProfile.username || rpcProfile.full_name || rpcProfile.username || (conv.name && conv.name !== 'Direct Chat' ? conv.name : null) || fetchedProfile.phone_number || rpcProfile.phone_number || 'User';
+            display_avatar = fetchedProfile.avatar_url || rpcProfile.avatar_url || null;
+            display_phone = fetchedProfile.phone_number || rpcProfile.phone_number || null;
         }
 
         const lastMsg = conv.last_message_content ? {
@@ -548,13 +618,40 @@ export const sendTypingIndicator = async (channel: RealtimeChannel, userId: stri
 }
 
 export const initiateCallV2 = async (conversationId: string, callerId: string, receiverId: string, type: 'voice' | 'video') => {
+    try {
+        const res = await fetch('/api/calls/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                conversation_id: conversationId,
+                caller_id: callerId,
+                receiver_id: receiverId,
+                type: type
+            })
+        });
+
+        const data = await res.json();
+        if (res.ok && data.callRecord) {
+            return data.callRecord;
+        }
+        if (data.error) {
+            throw new Error(data.error);
+        }
+    } catch (apiErr) {
+        console.warn('[initiateCallV2] API route failed, using Supabase fallback:', apiErr);
+    }
+
+    // Direct Supabase Fallback
     const { data: roomData, error: roomError } = await (supabase as any).rpc('create_daily_room_rpc', {
         conversation_id: conversationId
     });
 
-    if (roomError) throw roomError;
-    const roomUrl = (roomData as any)?.room_url;
-    if (!roomUrl) throw new Error('Room URL missing');
+    let roomUrl = (roomData as any)?.room_url;
+    if (!roomUrl) {
+        const sanitizedConvId = conversationId.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const dailyDomain = process.env.NEXT_PUBLIC_DAILY_DOMAIN || 'vicalary';
+        roomUrl = `https://${dailyDomain}.daily.co/vicalary_call_${sanitizedConvId}`;
+    }
 
     const { data, error } = await (supabase as any)
         .from('calls')
@@ -568,8 +665,8 @@ export const initiateCallV2 = async (conversationId: string, callerId: string, r
         })
         .select(`
             *,
-            caller:user_profiles!caller_id(full_name, avatar_url),
-            receiver:user_profiles!receiver_id(full_name, avatar_url)
+            caller:user_profiles!caller_id(id, full_name, username, avatar_url),
+            receiver:user_profiles!receiver_id(id, full_name, username, avatar_url)
         `)
         .single();
 
@@ -577,9 +674,23 @@ export const initiateCallV2 = async (conversationId: string, callerId: string, r
     return data;
 }
 
-export const updateCallStatus = async (callId: string, status: 'connected' | 'ended' | 'missed' | 'declined') => {
+export const updateCallStatus = async (callId: string, status: 'connected' | 'ended' | 'missed' | 'declined' | 'cancelled') => {
+    try {
+        const res = await fetch('/api/calls/status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ call_id: callId, status })
+        });
+        const data = await res.json();
+        if (res.ok && data.data) {
+            return Array.isArray(data.data) ? data.data[0] : data.data;
+        }
+    } catch (e) {
+        console.warn('[updateCallStatus] API route failed, using Supabase fallback:', e);
+    }
+
     const update: any = { status };
-    if (status === 'ended') update.ended_at = new Date().toISOString();
+    if (status === 'ended' || status === 'declined' || status === 'missed') update.ended_at = new Date().toISOString();
 
     const { data, error } = await (supabase as any)
         .from('calls')

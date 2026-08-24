@@ -62,4 +62,9 @@ voice-agent/inspect_out.txt
 .stream/
 .stream
 
+# Gemini / Antigravity
+.gemini/
+inspect_rpc.js
+
+
 

@@ -1,19 +1,16 @@
 import { NextResponse } from 'next/server';
-import { createServerSupabaseClient } from '@/lib/supabase-server';
+import { createServerSupabaseClient, getAuthenticatedUser } from '@/lib/supabase-server';
 
 export async function GET(request: Request) {
     try {
-        const { searchParams } = new URL(request.url);
-        const urlUserId = searchParams.get('userId');
-
-        const supabase = createServerSupabaseClient();
-        const { data: { session } } = await supabase.auth.getSession();
-        
-        const userId = urlUserId || session?.user?.id;
-
-        if (!userId) {
+        const user = await getAuthenticatedUser(request);
+        if (!user) {
             return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
         }
+
+        const userId = user.id;
+        const supabase = createServerSupabaseClient(request);
+
 
         const { data: connectedBanks, error: banksError } = await supabase
             .from('connected_banks')
