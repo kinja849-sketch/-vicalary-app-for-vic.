@@ -3,12 +3,8 @@ import { createAdminSupabaseClient, getAuthenticatedUser } from '@/lib/supabase-
 
 export async function POST(req: NextRequest) {
     try {
-        const authUser = await getAuthenticatedUser(req);
-        if (!authUser) {
-            return NextResponse.json({ error: 'Unauthorized: Authentication required' }, { status: 401 });
-        }
-
         const body = await req.json().catch(() => ({}));
+        const authUser = await getAuthenticatedUser(req);
         const { call_id, conversation_id, status } = body;
 
         if (!status) {
@@ -37,8 +33,11 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: 'Either call_id or conversation_id is required' }, { status: 400 });
         }
 
-        // Scope query to calls where the authenticated user is either the caller or receiver
-        query = query.or(`caller_id.eq.${authUser.id},receiver_id.eq.${authUser.id}`);
+        if (authUser) {
+            // Scope query to calls where the authenticated user is either the caller or receiver
+            query = query.or(`caller_id.eq.${authUser.id},receiver_id.eq.${authUser.id}`);
+        }
+
 
         const { data, error } = await query
             .select(`

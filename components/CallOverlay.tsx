@@ -7,6 +7,7 @@ interface CallOverlayProps {
     type: 'voice' | 'video';
     status: 'ringing' | 'connected' | 'ended';
     caller: { name: string; avatar?: string; };
+    localUser?: { name?: string; avatar?: string; };
     onAccept: () => void;
     onDecline: () => void;
     onEnd: () => void;
@@ -21,12 +22,13 @@ interface CallOverlayProps {
 }
 
 export default function CallOverlay({
-    type, status, caller, direction,
+    type, status, caller, localUser, direction,
     onAccept, onDecline, onEnd,
     isMinimized = false, onToggleMinimize,
     onToggleMic, onToggleCamera,
     localVideoTrack, remoteVideoTrack, remoteAudioTrack,
 }: CallOverlayProps) {
+
     const { t } = useTranslation();
     const [duration, setDuration] = useState(0);
     const [isMuted, setIsMuted] = useState(false);
@@ -265,8 +267,11 @@ export default function CallOverlay({
                             <div className="flex flex-col items-center gap-4">
                                 <div className="size-28 rounded-full overflow-hidden ring-4 ring-white/10 bg-slate-800 flex items-center justify-center">
                                     <img
-                                        src={caller.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(caller.name || 'User')}&background=00A884&color=fff&size=200`}
-                                        alt={caller.name || 'User'}
+                                        src={
+                                            (isMainLocal ? localUser?.avatar : caller.avatar) ||
+                                            `https://ui-avatars.com/api/?name=${encodeURIComponent((isMainLocal ? localUser?.name : caller.name) || 'User')}&background=00A884&color=fff&size=200`
+                                        }
+                                        alt={isMainLocal ? 'You' : (caller.name || 'User')}
                                         className="w-full h-full object-cover"
                                     />
                                 </div>
@@ -309,16 +314,20 @@ export default function CallOverlay({
                             <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 p-2 bg-[#1f2c34] pointer-events-none">
                                 <div className="size-12 rounded-full overflow-hidden ring-2 ring-white/10">
                                     <img
-                                        src={caller.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(caller.name || 'User')}&background=00A884&color=fff&size=100`}
+                                        src={
+                                            (isPipLocal ? localUser?.avatar : caller.avatar) ||
+                                            `https://ui-avatars.com/api/?name=${encodeURIComponent((isPipLocal ? localUser?.name : caller.name) || 'User')}&background=00A884&color=fff&size=100`
+                                        }
                                         alt="Avatar"
                                         className="w-full h-full object-cover"
                                     />
                                 </div>
                                 <span className="text-[10px] text-white/60 font-medium text-center truncate w-full">
-                                    {isPipLocal ? 'Camera off' : 'No video'}
+                                    {isPipLocal ? 'Camera off' : (caller.name || 'No video')}
                                 </span>
                             </div>
                         )}
+
 
                         {/* Swap indicator badge */}
                         <div className="absolute top-1.5 right-1.5 bg-black/60 backdrop-blur-md rounded-full p-1 border border-white/10 pointer-events-none">

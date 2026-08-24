@@ -22,6 +22,37 @@ export default function RootLayout({
         {/* eslint-disable-next-line @next/next/no-sync-scripts */}
         <script src="https://cdn.lordicon.com/lordicon.js" async />
         <script
+          id="suppress-netlify-banner"
+          dangerouslySetInnerHTML={{
+            __html: `
+              if (typeof window !== 'undefined') {
+                const removeNetlifyElements = () => {
+                  const selectors = [
+                    'netlify-drawer',
+                    '[data-netlify-drawer]',
+                    '[id*="netlify-drawer"]',
+                    '[class*="netlify-drawer"]',
+                    '[id*="netlify-feedback"]',
+                    '[class*="netlify-feedback"]',
+                    '.netlify-badge',
+                    '#netlify-badge',
+                    'iframe[src*="netlify"]',
+                    'iframe[title*="Netlify"]'
+                  ];
+                  selectors.forEach(sel => {
+                    document.querySelectorAll(sel).forEach(el => el.remove());
+                  });
+                };
+                removeNetlifyElements();
+                const observer = new MutationObserver(removeNetlifyElements);
+                if (document.documentElement) {
+                  observer.observe(document.documentElement, { childList: true, subtree: true });
+                }
+              }
+            `,
+          }}
+        />
+        <script
           id="suppress-plaid-warn"
           dangerouslySetInnerHTML={{
             __html: `
@@ -36,6 +67,7 @@ export default function RootLayout({
           }}
         />
       </head>
+
       <body suppressHydrationWarning>
         <GlobalProviders>{children}</GlobalProviders>
       </body>

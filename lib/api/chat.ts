@@ -619,9 +619,15 @@ export const sendTypingIndicator = async (channel: RealtimeChannel, userId: stri
 
 export const initiateCallV2 = async (conversationId: string, callerId: string, receiverId: string, type: 'voice' | 'video') => {
     try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const token = session?.access_token;
+
         const res = await fetch('/api/calls/create', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                ...(token ? { Authorization: `Bearer ${token}` } : {})
+            },
             body: JSON.stringify({
                 conversation_id: conversationId,
                 caller_id: callerId,
@@ -649,7 +655,7 @@ export const initiateCallV2 = async (conversationId: string, callerId: string, r
     let roomUrl = (roomData as any)?.room_url;
     if (!roomUrl) {
         const sanitizedConvId = conversationId.replace(/[^a-zA-Z0-9_-]/g, '_');
-        const dailyDomain = process.env.NEXT_PUBLIC_DAILY_DOMAIN || 'vicalary';
+        const dailyDomain = process.env.NEXT_PUBLIC_DAILY_DOMAIN || 'najibking';
         roomUrl = `https://${dailyDomain}.daily.co/vicalary_call_${sanitizedConvId}`;
     }
 
@@ -676,9 +682,15 @@ export const initiateCallV2 = async (conversationId: string, callerId: string, r
 
 export const updateCallStatus = async (callId: string, status: 'connected' | 'ended' | 'missed' | 'declined' | 'cancelled') => {
     try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const token = session?.access_token;
+
         const res = await fetch('/api/calls/status', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                ...(token ? { Authorization: `Bearer ${token}` } : {})
+            },
             body: JSON.stringify({ call_id: callId, status })
         });
         const data = await res.json();
@@ -690,7 +702,7 @@ export const updateCallStatus = async (callId: string, status: 'connected' | 'en
     }
 
     const update: any = { status };
-    if (status === 'ended' || status === 'declined' || status === 'missed') update.ended_at = new Date().toISOString();
+    if (status === 'ended' || status === 'declined' || status === 'missed' || status === 'cancelled') update.ended_at = new Date().toISOString();
 
     const { data, error } = await (supabase as any)
         .from('calls')
@@ -702,6 +714,7 @@ export const updateCallStatus = async (callId: string, status: 'connected' | 'en
     if (error) throw error;
     return data;
 }
+
 
 export const isChatVerified = async (userId: string) => {
     const { data, error } = await supabase

@@ -22,8 +22,7 @@ export async function GET(req: NextRequest) {
                     full_name, 
                     username,
                     avatar_url,
-                    updated_at,
-                    chat_users!chat_users_user_id_fkey(phone_number, is_verified)
+                    updated_at
                 )
             )
         `)
@@ -31,8 +30,10 @@ export async function GET(req: NextRequest) {
         .maybeSingle();
 
     if (error) {
+        console.error('[Conversation API] Error fetching conversation:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
     return NextResponse.json({ data });
 }
+

@@ -14,11 +14,18 @@ export function useDailyCall() {
         const parts = co.participants();
         const localP = parts.local;
         const remoteP = Object.values(parts).find((p: any) => !p.local) as any;
-        setLocalVideoTrack(localP?.tracks?.video?.persistentTrack ?? null);
-        setRemoteVideoTrack(remoteP?.tracks?.video?.persistentTrack ?? null);
-        setRemoteAudioTrack(remoteP?.tracks?.audio?.persistentTrack ?? null);
+
+        const getTrack = (trackState: any) => {
+            if (!trackState || trackState.state === 'off' || trackState.state === 'blocked') return null;
+            return trackState.persistentTrack || trackState.track || null;
+        };
+
+        setLocalVideoTrack(getTrack(localP?.tracks?.video));
+        setRemoteVideoTrack(getTrack(remoteP?.tracks?.video));
+        setRemoteAudioTrack(getTrack(remoteP?.tracks?.audio));
         setParticipants(Object.values(parts));
     }, []);
+
 
     useEffect(() => {
         if (!callObject) return;
@@ -52,12 +59,13 @@ export function useDailyCall() {
     const joinCall = useCallback(async (url: string, isVideo: boolean = false, userName?: string) => {
         if (typeof window === 'undefined') return;
         try { const existing = DailyIframe.getCallInstance(); if (existing) await existing.destroy(); } catch (_) {}
-        const co = DailyIframe.createCallObject({ audioSource: true, videoSource: isVideo });
+        const co = DailyIframe.createCallObject({ audioSource: true, videoSource: true });
         setCallObject(co);
         setStatus('joining');
         try {
             await co.join({ url, startAudioOff: false, startVideoOff: !isVideo, userName: userName || 'Vicalary User' });
         } catch (err) { console.error('[Daily] Failed to join call room:', err); setStatus('error'); }
+
     }, []);
 
     const leaveCall = useCallback(async () => {

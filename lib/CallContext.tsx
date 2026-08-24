@@ -259,14 +259,19 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
                     onDecline={handleDecline}
                     onEnd={endCall}
                     isMinimized={callSession.isMinimized}
-                    onToggleMinimize={handleToggleMinimize}
                     onToggleMic={toggleAudio}
                     onToggleCamera={toggleVideo}
+                    localUser={{
+                        name: user?.user_metadata?.full_name || 'You',
+                        avatar: user?.user_metadata?.avatar_url
+                    }}
                     localVideoTrack={localVideoTrack}
                     remoteVideoTrack={remoteVideoTrack}
                     remoteAudioTrack={remoteAudioTrack}
                 />
             )}
+
+
         </CallContext.Provider>
     );
 }
