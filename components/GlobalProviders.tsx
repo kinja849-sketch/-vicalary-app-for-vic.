@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { AuthProvider } from "@/lib/AuthContext";
 import { CurrencyProvider } from "@/lib/CurrencyContext";
+import { CallProvider } from "@/lib/CallContext";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { GlobalShell } from "@/components/GlobalShell";
 
@@ -20,7 +21,9 @@ export function GlobalProviders({ children }: { children: React.ReactNode }) {
         <ErrorBoundary>
           <CurrencyProvider>
             <AuthProvider>
-              <GlobalShell>{children}</GlobalShell>
+              <CallProvider>
+                <GlobalShell>{children}</GlobalShell>
+              </CallProvider>
             </AuthProvider>
           </CurrencyProvider>
         </ErrorBoundary>

@@ -1,15 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { StreamClient } from '@stream-io/node-sdk';
-import { createAdminSupabaseClient } from '@/lib/supabase-server';
+import { createAdminSupabaseClient, getAuthenticatedUser } from '@/lib/supabase-server';
 
 export async function POST(req: NextRequest) {
     try {
         const body = await req.json().catch(() => ({}));
-        const { user_id } = body;
+        const authUser = await getAuthenticatedUser(req);
+        const user_id = authUser?.id || body.user_id;
 
         if (!user_id) {
             return NextResponse.json({ error: 'user_id is required' }, { status: 400 });
         }
+
 
         const apiKey = process.env.STREAM_API_KEY || process.env.NEXT_PUBLIC_STREAM_API_KEY;
         const apiSecret = process.env.STREAM_API_SECRET;

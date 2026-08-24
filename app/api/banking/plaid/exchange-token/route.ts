@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { Configuration, PlaidApi, PlaidEnvironments } from 'plaid';
-import { createServerSupabaseClient } from '@/lib/supabase-server';
+import { createServerSupabaseClient, getAuthenticatedUser } from '@/lib/supabase-server';
 
 const PLAID_CLIENT_ID = process.env.PLAID_CLIENT_ID;
 const PLAID_SECRET = process.env.PLAID_SECRET;
@@ -20,10 +20,14 @@ const plaidClient = new PlaidApi(configuration);
 
 export async function POST(request: Request) {
     try {
-        const { public_token, userId, institution_id, institution_name } = await request.json();
+        const body = await request.json().catch(() => ({}));
+        const { public_token, institution_id, institution_name } = body;
+
+        const authUser = await getAuthenticatedUser(request);
+        const userId = authUser?.id || body.userId;
 
         if (!public_token || !userId) {
-            return NextResponse.json({ success: false, error: 'Missing required parameters' }, { status: 400 });
+            return NextResponse.json({ success: false, error: 'Missing required parameters or unauthenticated' }, { status: 400 });
         }
 
         // 1. Exchange the public token for an access token
@@ -35,7 +39,7 @@ export async function POST(request: Request) {
         const itemId = response.data.item_id;
 
         // 2. Store securely in backend (NOT accessible to frontend)
-        const supabase = createServerSupabaseClient();
+        const supabase = createServerSupabaseClient(request);
         
         const { error: dbError } = await supabase.from('connected_banks').upsert({
             user_id: userId,
@@ -43,6 +47,7 @@ export async function POST(request: Request) {
             institution_id: institution_id || 'unknown',
             institution_name: institution_name || 'Unknown Institution',
         }, { onConflict: 'user_id,institution_id' });
+
 
         if (dbError) {
             console.error("Database Error Storing Token:", dbError);

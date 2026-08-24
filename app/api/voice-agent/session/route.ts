@@ -1,47 +1,100 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { StreamClient } from '@stream-io/node-sdk';
+import { getAuthenticatedUser } from '@/lib/supabase-server';
 
 export async function POST(req: NextRequest) {
   try {
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return NextResponse.json(
+        { error: 'Unauthorized: Authentication required' },
+        { status: 401 }
+      );
+    }
+
     const body = await req.json().catch(() => ({}));
     const {
-      user_id = 'user-guest',
       mode = 'cooking_guide',
       language = 'en',
-      call_id: providedCallId,
     } = body;
+    const user_id = authUser.id;
 
-    const apiKey = process.env.STREAM_API_KEY || process.env.NEXT_PUBLIC_STREAM_API_KEY;
-    const apiSecret = process.env.STREAM_API_SECRET;
+    const dailyApiKey = process.env.DAILY_API_KEY;
     const voiceAgentUrl = process.env.VOICE_AGENT_URL || 'http://127.0.0.1:8080';
 
-    if (!apiKey || !apiSecret) {
+    if (!dailyApiKey) {
       return NextResponse.json(
-        { error: 'Stream credentials not configured on server' },
+        { error: 'Daily API credentials (DAILY_API_KEY) not configured on server' },
         { status: 500 }
       );
     }
 
-    const callId = providedCallId || `va_${mode}_${user_id}_${Date.now()}`;
+    const callId = `va_${mode}_${user_id}_${Date.now()}`;
 
-    // 1. Generate user token server-side
-    const serverClient = new StreamClient(apiKey, apiSecret);
-    await serverClient.upsertUsers([
-      {
-        id: user_id,
-        name: user_id === 'user-guest' ? 'Guest User' : user_id,
+    // 1. Create a Daily.co Room dynamically
+    const roomRes = await fetch('https://api.daily.co/v1/rooms', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${dailyApiKey}`
       },
-    ]);
-    const token = serverClient.generateUserToken({ user_id });
+      body: JSON.stringify({
+        properties: {
+          exp: Math.floor(Date.now() / 1000) + 3600, // 1 hour expiration
+          eject_at_room_exp: true
+        }
+      })
+    });
 
-    // 2. Notify Python Voice Agent Service to start & join the session
+    if (!roomRes.ok) {
+      const errText = await roomRes.text();
+      console.error('[Voice Agent API] Failed to create Daily room:', errText);
+      return NextResponse.json(
+        { error: `Failed to create Daily room: ${errText}` },
+        { status: 500 }
+      );
+    }
+
+    const roomData = await roomRes.json();
+    const roomUrl = roomData.url;
+    const roomName = roomData.name;
+
+    // 2. Create a Daily Meeting Token for the bot (owner)
+    const tokenRes = await fetch('https://api.daily.co/v1/meeting-tokens', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${dailyApiKey}`
+      },
+      body: JSON.stringify({
+        properties: {
+          room_name: roomName,
+          is_owner: true,
+          user_name: mode === 'cooking_guide' ? 'Chef Avatar' : 'Health Coach'
+        }
+      })
+    });
+
+    if (!tokenRes.ok) {
+      const errText = await tokenRes.text();
+      console.error('[Voice Agent API] Failed to create bot token:', errText);
+      return NextResponse.json(
+        { error: `Failed to create bot token: ${errText}` },
+        { status: 500 }
+      );
+    }
+
+    const tokenData = await tokenRes.json();
+    const botToken = tokenData.token;
+
+    // 3. Notify Python Voice Agent Service to start & join the session
     try {
       const response = await fetch(`${voiceAgentUrl}/start-session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           call_id: callId,
-          call_type: 'default',
+          room_url: roomUrl,
+          token: botToken,
           mode,
           language,
           user_id,
@@ -58,16 +111,62 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      token,
-      apiKey,
-      userId: user_id,
+      roomUrl,
       callId,
-      callType: 'default',
       mode,
       language,
     });
   } catch (err: any) {
     console.error('[Voice Agent API Error]:', err);
+    return NextResponse.json(
+      { error: err.message || 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return NextResponse.json(
+        { error: 'Unauthorized: Authentication required' },
+        { status: 401 }
+      );
+    }
+
+    const body = await req.json().catch(() => ({}));
+    const { call_id } = body;
+
+    if (!call_id) {
+      return NextResponse.json({ error: 'call_id is required' }, { status: 400 });
+    }
+
+    // Verify the call_id contains the authenticated user's ID
+    if (!call_id.includes(authUser.id)) {
+      return NextResponse.json(
+        { error: 'Forbidden: You do not have permission to terminate this session' },
+        { status: 403 }
+      );
+    }
+
+    const voiceAgentUrl = process.env.VOICE_AGENT_URL || 'http://127.0.0.1:8080';
+    
+    console.log('[Voice Agent API] Stopping session for call_id:', call_id);
+    const response = await fetch(`${voiceAgentUrl}/stop-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ call_id }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return NextResponse.json({ error: errorText }, { status: 500 });
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (err: any) {
+    console.error('[Voice Agent API DELETE Error]:', err);
     return NextResponse.json(
       { error: err.message || 'Internal server error' },
       { status: 500 }

@@ -1,12 +1,8 @@
 "use client"
-import { useState, useEffect } from "react";
+import { useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { BottomNavbar } from "./BottomNavbar";
-import IncomingCallModal from "@/components/calls/IncomingCallModal";
-import StreamCallOverlay from "@/components/calls/StreamCallOverlay";
-import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/AuthContext";
-import { toast } from "sonner";
 import { subscribeToUserConversations, unsubscribeFromMessages } from "@/lib/api/chat";
 import { useTranslation } from "@/lib/api/translation";
 import { useQueryClient } from "@tanstack/react-query";
@@ -23,108 +19,11 @@ export function GlobalShell({ children }: { children: React.ReactNode }) {
     document.documentElement.lang = lang;
   }, [lang]);
 
-  // Global Stream Call State
-  const [incomingStreamCall, setIncomingStreamCall] = useState<{
-    callId: string;
-    conversationId: string;
-    callerId: string;
-    callerName: string;
-    callerAvatar?: string | null;
-    callType: 'voice' | 'video';
-  } | null>(null);
-
-  const [activeStreamCall, setActiveStreamCall] = useState<{
-    active: boolean;
-    conversationId: string;
-    callType: 'audio' | 'video';
-    partnerName?: string;
-    partnerAvatar?: string | null;
-    receiverId?: string;
-  } | null>(null);
-
-  // Global Stream Call Listener
-  useEffect(() => {
-    if (!user?.id) return;
-
-    const channel = supabase.channel(`user_calls_${user.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'calls',
-          filter: `receiver_id=eq.${user.id}`,
-        },
-        async (payload) => {
-          console.log('[GlobalShell] Incoming call DB insert:', payload.new);
-          if (payload.new && payload.new.status === 'ringing') {
-            const { data: callerProfile } = await supabase
-              .from('user_profiles')
-              .select('full_name, username, avatar_url')
-              .eq('id', payload.new.caller_id)
-              .maybeSingle();
-
-            const name = callerProfile?.full_name || callerProfile?.username || 'Vicalary User';
-            setIncomingStreamCall({
-              callId: payload.new.id,
-              conversationId: payload.new.conversation_id,
-              callerId: payload.new.caller_id,
-              callerName: name,
-              callerAvatar: callerProfile?.avatar_url || null,
-              callType: payload.new.type === 'video' ? 'video' : 'voice'
-            });
-          }
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'calls'
-        },
-        (payload) => {
-          const newCall = payload.new;
-          if (!newCall) return;
-          if (newCall.receiver_id === user.id || newCall.caller_id === user.id) {
-            const status = newCall.status;
-            if (status === 'ended' || status === 'declined' || status === 'missed' || status === 'cancelled') {
-              setIncomingStreamCall(null);
-              setActiveStreamCall(null);
-            }
-          }
-        }
-      )
-      .on('broadcast', { event: 'incoming_call' }, (payload) => {
-        if (payload.payload && payload.payload.callerId !== user.id) {
-          console.log('[GlobalShell] Incoming call broadcast:', payload.payload);
-          setIncomingStreamCall({
-            callId: payload.payload.callId,
-            conversationId: payload.payload.conversationId,
-            callerId: payload.payload.callerId,
-            callerName: payload.payload.callerName || 'Vicalary User',
-            callerAvatar: payload.payload.callerAvatar || null,
-            callType: payload.payload.callType || 'voice'
-          });
-        }
-      })
-      .on('broadcast', { event: 'call_ended' }, (payload) => {
-        console.log('[GlobalShell] Call ended broadcast received:', payload);
-        setIncomingStreamCall(null);
-        setActiveStreamCall(null);
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [user?.id]);
-
   // Global Chat Listener for Restoration & Updates
   useEffect(() => {
     if (!user?.id) return;
 
-    const channel = subscribeToUserConversations(user.id, (payload) => {
+    const channel = subscribeToUserConversations(user.id, () => {
       const key1 = ['conversations', user.id];
       const key2 = ['unread-messages-global', user.id];
 
@@ -136,7 +35,7 @@ export function GlobalShell({ children }: { children: React.ReactNode }) {
     return () => {
       unsubscribeFromMessages(channel);
     };
-  }, [user?.id]);
+  }, [user?.id, queryClient]);
 
   // AI Coach Midnight Trigger
   useEffect(() => {
@@ -173,7 +72,7 @@ export function GlobalShell({ children }: { children: React.ReactNode }) {
     checkAndTriggerSummary();
     const interval = setInterval(checkAndTriggerSummary, 15 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [user?.id]);
+  }, [user?.id, queryClient]);
 
   // Global Auth Loader to prevent flashing
   if (loading) {
@@ -189,45 +88,6 @@ export function GlobalShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex flex-col min-h-screen">
-      {/* Global Incoming Call Screen */}
-      {incomingStreamCall && (
-        <IncomingCallModal
-          callId={incomingStreamCall.callId}
-          conversationId={incomingStreamCall.conversationId}
-          callerId={incomingStreamCall.callerId}
-          callerName={incomingStreamCall.callerName}
-          callerAvatar={incomingStreamCall.callerAvatar}
-          callType={incomingStreamCall.callType}
-          onAccept={(type) => {
-            const callData = incomingStreamCall;
-            setIncomingStreamCall(null);
-            setActiveStreamCall({
-              active: true,
-              conversationId: callData.conversationId,
-              callType: type === 'video' ? 'video' : 'audio',
-              partnerName: callData.callerName,
-              partnerAvatar: callData.callerAvatar,
-              receiverId: callData.callerId
-            });
-          }}
-          onDecline={() => setIncomingStreamCall(null)}
-        />
-      )}
-
-      {/* Global Active Call Overlay for Accepted Receiver Call */}
-      {activeStreamCall && user?.id && (
-        <StreamCallOverlay
-          conversationId={activeStreamCall.conversationId}
-          userId={user.id}
-          receiverId={activeStreamCall.receiverId}
-          userName={user.user_metadata?.full_name || 'User'}
-          partnerName={activeStreamCall.partnerName || 'Vicalary User'}
-          partnerAvatar={activeStreamCall.partnerAvatar}
-          callType={activeStreamCall.callType}
-          onClose={() => setActiveStreamCall(null)}
-        />
-      )}
-
       <main className={`flex-1 ${!isChatConversation && pathname !== '/onboarding' ? 'pb-16' : ''}`}>
         {children}
       </main>

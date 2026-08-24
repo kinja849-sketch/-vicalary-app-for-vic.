@@ -8,8 +8,34 @@ from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from vision_agents.core import Agent, User
-from vision_agents.plugins import getstream, openai
+
+# Import Pipecat components with version compatibility
+try:
+    from pipecat.transports.services.daily import DailyTransport, DailyParams
+except ImportError:
+    from pipecat.transports.daily.transport import DailyTransport, DailyParams
+
+try:
+    from pipecat.services.openai_realtime_beta import OpenAIRealtimeBetaLLMService as OpenAIRealtimeLLMService
+except ImportError:
+    try:
+        from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
+    except ImportError:
+        from pipecat.services.openai import OpenAILLMService as OpenAIRealtimeLLMService
+
+try:
+    from pipecat.processors.aggregators.llm_context import LLMContext
+    from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+except ImportError:
+    try:
+        from pipecat.processors.aggregators.llm_response import LLMUserResponseAggregator, LLMAssistantResponseAggregator
+    except ImportError:
+        pass
+
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.runner import PipelineRunner
+from pipecat.pipeline.task import PipelineTask, PipelineParams
+from pipecat.frames.frames import EndFrame
 
 # Load environment variables from parent .env or local .env
 parent_env_local = Path(__file__).resolve().parent.parent / ".env.local"
@@ -23,15 +49,12 @@ elif parent_env_local.exists():
 elif parent_env.exists():
     load_dotenv(parent_env)
 
-# Ensure Stream credentials and OpenAI key exist
-STREAM_API_KEY = os.getenv("STREAM_API_KEY") or os.getenv("NEXT_PUBLIC_STREAM_API_KEY")
-STREAM_API_SECRET = os.getenv("STREAM_API_SECRET")
+# Ensure credentials exist
+DAILY_API_KEY = os.getenv("DAILY_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("NEXT_PUBLIC_OPENAI_API_KEY")
 
-if STREAM_API_KEY:
-    os.environ["STREAM_API_KEY"] = STREAM_API_KEY
-if STREAM_API_SECRET:
-    os.environ["STREAM_API_SECRET"] = STREAM_API_SECRET
+if DAILY_API_KEY:
+    os.environ["DAILY_API_KEY"] = DAILY_API_KEY
 if OPENAI_API_KEY:
     os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
@@ -48,8 +71,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Store active sessions
-active_agents: Dict[str, Agent] = {}
+# Store active task sessions
+active_agents: Dict[str, asyncio.Task] = {}
 
 PERSONA_PROMPTS = {
     "cooking_guide": """
@@ -101,7 +124,8 @@ LANGUAGE_NAMES = {
 
 class StartSessionRequest(BaseModel):
     call_id: str
-    call_type: str = "default"
+    room_url: str
+    token: str
     mode: str = "cooking_guide"  # "cooking_guide" or "health_coach"
     language: Optional[str] = "en"
     user_id: Optional[str] = "user"
@@ -122,36 +146,75 @@ def build_instructions(mode: str, language_code: Optional[str]) -> str:
     )
     return base_prompt.strip() + language_instruction
 
-async def run_agent_session(agent: Agent, call_type: str, call_id: str):
+async def run_agent_session(room_url: str, token: str, instructions: str, call_id: str):
     try:
-        call = await agent.create_call(call_type=call_type, call_id=call_id)
-        logger.info(f"Agent joining call {call_id} (type: {call_type})")
-        async for _ in agent.join(call):
-            pass
+        # 1. Define Daily Transport
+        transport = DailyTransport(
+            room_url=room_url,
+            token=token,
+            bot_name="Chef Avatar",
+            params=DailyParams(
+                audio_in_enabled=True,
+                audio_out_enabled=True,
+                camera_out_enabled=False
+            )
+        )
+
+        # 2. Define OpenAI Realtime LLM Service
+        llm = OpenAIRealtimeLLMService(
+            api_key=OPENAI_API_KEY,
+            settings=OpenAIRealtimeLLMService.Settings(
+                system_instruction=instructions
+            )
+        )
+
+        # 3. Define context and aggregators
+        context = LLMContext()
+        context_aggregator = LLMContextAggregatorPair(context)
+
+        # 4. Construct the pipeline
+        pipeline = Pipeline([
+            transport.input(),
+            context_aggregator.user(),
+            llm,
+            transport.output(),
+            context_aggregator.assistant()
+        ])
+
+        # 5. Define PipelineTask & PipelineRunner
+        task = PipelineTask(
+            pipeline,
+            params=PipelineParams(
+                allow_interruptions=True,
+                enable_metrics=True,
+            )
+        )
+
+        runner = PipelineRunner()
+        
+        logger.info(f"Agent joining Daily room {room_url} for call_id: {call_id}")
+        await runner.run(task)
+
     except asyncio.CancelledError:
         logger.info(f"Session for call {call_id} was cancelled.")
     except Exception as e:
         logger.error(f"Error in agent session for call {call_id}: {e}", exc_info=True)
     finally:
         active_agents.pop(call_id, None)
-        try:
-            agent.close()
-        except Exception:
-            pass
 
 @app.get("/health")
 def health_check():
     return {
         "status": "ok",
         "active_sessions": len(active_agents),
-        "stream_api_key_configured": bool(STREAM_API_KEY),
+        "daily_api_key_configured": bool(DAILY_API_KEY),
         "openai_api_key_configured": bool(OPENAI_API_KEY),
     }
 
 @app.post("/start-session")
 async def start_session(req: StartSessionRequest, background_tasks: BackgroundTasks):
-    if not STREAM_API_KEY or not STREAM_API_SECRET:
-        raise HTTPException(status_code=500, detail="Stream API credentials not configured in environment.")
+    if not DAILY_API_KEY:
+        raise HTTPException(status_code=500, detail="Daily API credentials not configured in environment.")
     if not OPENAI_API_KEY:
         raise HTTPException(status_code=500, detail="OpenAI API Key not configured in environment.")
 
@@ -161,48 +224,31 @@ async def start_session(req: StartSessionRequest, background_tasks: BackgroundTa
     mode = req.mode if req.mode in PERSONA_PROMPTS else "cooking_guide"
     instructions = build_instructions(mode, req.language)
 
-    agent_id = f"ai-{mode.replace('_', '-')}"
-    agent_name = "Chef Avatar" if mode == "cooking_guide" else "Health Coach"
-
-    edge = getstream.Edge(
-        api_key=STREAM_API_KEY,
-        api_secret=STREAM_API_SECRET,
-    )
-
-    llm = openai.Realtime(
-        model="gpt-4o-realtime-preview",
-        api_key=OPENAI_API_KEY,
-        voice="nova",
-    )
-
-    agent = Agent(
-        edge=edge,
-        agent_user=User(id=agent_id, name=agent_name),
-        instructions=instructions,
-        llm=llm,
-    )
-
-    active_agents[req.call_id] = agent
-    background_tasks.add_task(run_agent_session, agent, req.call_type, req.call_id)
+    # Spawn Pipecat Pipeline runner task in background
+    task = asyncio.create_task(run_agent_session(req.room_url, req.token, instructions, req.call_id))
+    active_agents[req.call_id] = task
 
     return {
         "status": "started",
         "call_id": req.call_id,
         "mode": mode,
         "language": req.language or "en",
-        "agent_id": agent_id,
+        "room_url": req.room_url,
     }
 
 @app.post("/stop-session")
 async def stop_session(req: StopSessionRequest):
-    agent = active_agents.pop(req.call_id, None)
-    if not agent:
+    task = active_agents.pop(req.call_id, None)
+    if not task:
         return {"status": "not_found", "call_id": req.call_id}
 
     try:
-        agent.close()
+        task.cancel()
+        await task
+    except asyncio.CancelledError:
+        pass
     except Exception as e:
-        logger.warning(f"Error closing agent for {req.call_id}: {e}")
+        logger.warning(f"Error cancelling agent task for {req.call_id}: {e}")
 
     return {"status": "stopped", "call_id": req.call_id}
 

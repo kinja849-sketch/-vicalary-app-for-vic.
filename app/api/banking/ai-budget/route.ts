@@ -1,15 +1,20 @@
 import { NextResponse } from 'next/server';
-import { createServerSupabaseClient } from '@/lib/supabase-server';
+import { createServerSupabaseClient, getAuthenticatedUser } from '@/lib/supabase-server';
 
 export async function POST(request: Request) {
     try {
-        const { userId, total_budget, period_end } = await request.json();
+        const body = await request.json().catch(() => ({}));
+        const { total_budget, period_end } = body;
+
+        const authUser = await getAuthenticatedUser(request);
+        const userId = authUser?.id || body.userId;
 
         if (!userId) {
             return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
         }
 
-        const supabase = createServerSupabaseClient();
+        const supabase = createServerSupabaseClient(request);
+        const openAiApiKey = process.env.OPENAI_API_KEY || process.env.NEXT_PUBLIC_OPENAI_API_KEY;
 
         const { data: userSettings } = await supabase.from('user_settings').select('language').eq('user_id', userId).maybeSingle();
         const explicitUserLang = userSettings?.language || 'en';
@@ -41,7 +46,7 @@ export async function POST(request: Request) {
         - pacing: A suggested pacing strategy (e.g., 'Spend $X per week').
         - risk_analysis: Any risks you see (e.g., 'Low balance compared to budget').
         
-        LANGUAGE MANDATE: You MUST write your entire response fluently in this language code ('\${explicitUserLang}'). Do NOT reply in English unless their language code is 'en'.
+        LANGUAGE MANDATE: You MUST write your entire response fluently in this language code ('${explicitUserLang}'). Do NOT reply in English unless their language code is 'en'.
         `;
 
         // 4. Call OpenAI API
@@ -49,7 +54,7 @@ export async function POST(request: Request) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${process.env.NEXT_PUBLIC_OPENAI_API_KEY}` // using NEXT_PUBLIC_ just for existing env var compatibility, normally use a backend OPENAI_API_KEY
+                'Authorization': `Bearer ${openAiApiKey}`
             },
             body: JSON.stringify({
                 model: 'gpt-4o',
@@ -57,6 +62,7 @@ export async function POST(request: Request) {
                 response_format: { type: 'json_object' }
             })
         });
+
 
         const aiData = await aiResponse.json();
         const aiResult = JSON.parse(aiData.choices[0].message.content);

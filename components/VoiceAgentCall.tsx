@@ -1,17 +1,9 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import {
-  StreamVideoClient,
-  StreamVideo,
-  StreamCall,
-  SpeakerLayout,
-  CallControls,
-  useCallStateHooks,
-} from '@stream-io/video-react-sdk';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Mic, MicOff, PhoneOff, ChefHat, HeartPulse, Loader2 } from 'lucide-react';
-import '@stream-io/video-react-sdk/dist/css/styles.css';
 import HealthCoachSphere from '@/components/avatar/HealthCoachSphere';
+import { useDailyCall } from '@/hooks/useDailyCall';
 
 interface VoiceAgentCallProps {
   mode: 'cooking_guide' | 'health_coach';
@@ -22,26 +14,19 @@ interface VoiceAgentCallProps {
 
 function InnerAgentCallUI({
   mode,
+  status,
+  isMuted,
+  onToggleMic,
   onClose,
 }: {
   mode: 'cooking_guide' | 'health_coach';
+  status: 'idle' | 'joining' | 'joined' | 'leaving' | 'error';
+  isMuted: boolean;
+  onToggleMic: () => void;
   onClose: () => void;
 }) {
-  const { useCallCallingState, useMicrophoneState } = useCallStateHooks();
-  const callingState = useCallCallingState();
-  const { isMute, microphone } = useMicrophoneState();
-
-  const toggleMic = async () => {
-    if (microphone) {
-      await microphone.toggle();
-    }
-  };
-
   const isChef = mode === 'cooking_guide';
   const title = isChef ? 'AI Cooking Guide' : 'Health & Wellness Coach';
-  const avatarUrl = isChef
-    ? 'https://images.unsplash.com/photo-1577219491135-ce391730fb2c?w=400&auto=format&fit=crop&q=80'
-    : 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=400&auto=format&fit=crop&q=80';
 
   return (
     <div className="fixed inset-0 z-[100] bg-[#0b141a]/95 flex flex-col items-center justify-between p-8 text-white animate-in fade-in duration-300">
@@ -52,42 +37,37 @@ function InnerAgentCallUI({
         </div>
         <h2 className="text-2xl font-semibold">{title}</h2>
         <p className="text-sm text-emerald-400 font-medium capitalize animate-pulse">
-          {callingState === 'joined' ? 'Connected • Listening' : 'Connecting session...'}
+          {status === 'joined' ? 'Connected • Listening' : 'Connecting session...'}
         </p>
       </div>
 
       {/* 3D Sphere Avatar Display */}
       <div className="relative my-8 flex items-center justify-center">
         <HealthCoachSphere
-          state={callingState === 'joined' ? 'listening' : 'thinking'}
+          state={status === 'joined' ? 'listening' : 'thinking'}
           intent={isChef ? 'meal_planning' : 'factual_research'}
           size={220}
           className="shadow-2xl shadow-emerald-950/80"
         />
-        {callingState !== 'joined' && (
+        {status !== 'joined' && (
           <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center z-20">
             <Loader2 className="animate-spin text-emerald-400" size={44} />
           </div>
         )}
       </div>
 
-      {/* Stream Video audio tracks container */}
-      <div className="hidden">
-        <SpeakerLayout />
-      </div>
-
       {/* Controls */}
       <div className="flex items-center gap-6 mb-8">
         <button
-          onClick={toggleMic}
+          onClick={onToggleMic}
           className={`size-16 rounded-full flex items-center justify-center shadow-lg transition-all ${
-            isMute
+            isMuted
               ? 'bg-red-500/20 border border-red-500/40 text-red-400'
               : 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/30'
           }`}
-          title={isMute ? 'Unmute microphone' : 'Mute microphone'}
+          title={isMuted ? 'Unmute microphone' : 'Mute microphone'}
         >
-          {isMute ? <MicOff size={28} /> : <Mic size={28} />}
+          {isMuted ? <MicOff size={28} /> : <Mic size={28} />}
         </button>
 
         <button
@@ -108,14 +88,39 @@ export default function VoiceAgentCall({
   userId = 'user-guest',
   onClose,
 }: VoiceAgentCallProps) {
-  const [client, setClient] = useState<StreamVideoClient | null>(null);
-  const [call, setCall] = useState<any>(null);
+  const { joinCall, leaveCall, toggleAudio, status } = useDailyCall();
+  const [isMuted, setIsMuted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeCallId, setActiveCallId] = useState<string | null>(null);
+
+  const handleToggleMic = useCallback(() => {
+    const nextState = !isMuted;
+    setIsMuted(nextState);
+    toggleAudio(!nextState);
+  }, [isMuted, toggleAudio]);
+
+  const handleEndCall = useCallback(async () => {
+    // 1. Leave Daily Room
+    await leaveCall();
+
+    // 2. Notify Python backend to stop session
+    if (activeCallId) {
+      try {
+        await fetch('/api/voice-agent/session', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ call_id: activeCallId }),
+        }).catch((e) => console.warn('[VoiceAgentCall] Stop backend warning:', e));
+      } catch (e) {
+        console.warn(e);
+      }
+    }
+
+    onClose();
+  }, [leaveCall, activeCallId, onClose]);
 
   useEffect(() => {
     let isMounted = true;
-    let createdCall: any = null;
-    let videoClient: StreamVideoClient | null = null;
 
     async function initCall() {
       try {
@@ -130,29 +135,22 @@ export default function VoiceAgentCall({
         });
 
         if (!res.ok) {
-          throw new Error('Failed to create voice agent session');
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || 'Failed to create voice agent session');
         }
 
         const data = await res.json();
-        if (!data.apiKey || !data.token || !data.callId) {
+        if (!data.roomUrl || !data.callId) {
           throw new Error(data.error || 'Invalid session response from server');
         }
 
         if (!isMounted) return;
 
-        videoClient = new StreamVideoClient({
-          apiKey: data.apiKey,
-          user: { id: data.userId, name: 'User' },
-          token: data.token,
-        });
+        setActiveCallId(data.callId);
 
-        createdCall = videoClient.call(data.callType || 'default', data.callId);
-        await createdCall.join({ create: true });
+        // Client joins Daily room as dynamic voice participant
+        await joinCall(data.roomUrl, false, 'User');
 
-        if (isMounted) {
-          setClient(videoClient);
-          setCall(createdCall);
-        }
       } catch (err: any) {
         if (isMounted) {
           setError(err.message || 'Call initialization failed');
@@ -164,14 +162,8 @@ export default function VoiceAgentCall({
 
     return () => {
       isMounted = false;
-      if (createdCall) {
-        createdCall.leave().catch(() => {});
-      }
-      if (videoClient) {
-        videoClient.disconnectUser().catch(() => {});
-      }
     };
-  }, [mode, language, userId]);
+  }, [mode, language, userId, joinCall]);
 
   if (error) {
     return (
@@ -179,7 +171,7 @@ export default function VoiceAgentCall({
         <h3 className="text-xl font-semibold mb-2 text-red-400">Connection Error</h3>
         <p className="text-sm text-gray-300 mb-6">{error}</p>
         <button
-          onClick={onClose}
+          onClick={handleEndCall}
           className="px-6 py-2.5 bg-gray-800 hover:bg-gray-700 text-white rounded-xl transition-colors"
         >
           Close
@@ -188,20 +180,13 @@ export default function VoiceAgentCall({
     );
   }
 
-  if (!client || !call) {
-    return (
-      <div className="fixed inset-0 z-[100] bg-[#0b141a]/95 flex flex-col items-center justify-center p-6 text-white text-center">
-        <Loader2 className="animate-spin text-emerald-400 mb-4" size={44} />
-        <p className="text-sm text-gray-300 font-medium">Starting voice session...</p>
-      </div>
-    );
-  }
-
   return (
-    <StreamVideo client={client}>
-      <StreamCall call={call}>
-        <InnerAgentCallUI mode={mode} onClose={onClose} />
-      </StreamCall>
-    </StreamVideo>
+    <InnerAgentCallUI
+      mode={mode}
+      status={status}
+      isMuted={isMuted}
+      onToggleMic={handleToggleMic}
+      onClose={handleEndCall}
+    />
   );
 }
