@@ -9,13 +9,33 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# Import Pipecat components
-from pipecat.transports.daily.transport import DailyTransport, DailyParams
-from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
-from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+# Import Pipecat components with version compatibility
+try:
+    from pipecat.transports.services.daily import DailyTransport, DailyParams
+except ImportError:
+    from pipecat.transports.daily.transport import DailyTransport, DailyParams
+
+try:
+    from pipecat.services.openai_realtime_beta import OpenAIRealtimeBetaLLMService as OpenAIRealtimeLLMService
+except ImportError:
+    try:
+        from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
+    except ImportError:
+        from pipecat.services.openai import OpenAILLMService as OpenAIRealtimeLLMService
+
+try:
+    from pipecat.processors.aggregators.llm_context import LLMContext
+    from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+except ImportError:
+    try:
+        from pipecat.processors.aggregators.llm_response import LLMUserResponseAggregator, LLMAssistantResponseAggregator
+    except ImportError:
+        pass
+
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
+from pipecat.pipeline.task import PipelineTask, PipelineParams
+from pipecat.frames.frames import EndFrame
 
 # Load environment variables from parent .env or local .env
 parent_env_local = Path(__file__).resolve().parent.parent / ".env.local"
@@ -161,11 +181,19 @@ async def run_agent_session(room_url: str, token: str, instructions: str, call_i
             context_aggregator.assistant()
         ])
 
-        # 5. Define PipelineRunner
+        # 5. Define PipelineTask & PipelineRunner
+        task = PipelineTask(
+            pipeline,
+            params=PipelineParams(
+                allow_interruptions=True,
+                enable_metrics=True,
+            )
+        )
+
         runner = PipelineRunner()
         
         logger.info(f"Agent joining Daily room {room_url} for call_id: {call_id}")
-        await runner.run(pipeline)
+        await runner.run(task)
 
     except asyncio.CancelledError:
         logger.info(f"Session for call {call_id} was cancelled.")

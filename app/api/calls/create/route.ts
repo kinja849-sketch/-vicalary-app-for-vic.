@@ -5,13 +5,17 @@ const COACH_ID = '00000000-0000-0000-0000-000000000001';
 
 export async function POST(req: NextRequest) {
     try {
-        const body = await req.json().catch(() => ({}));
         const authUser = await getAuthenticatedUser(req);
-        const caller_id = authUser?.id || body.caller_id;
+        if (!authUser) {
+            return NextResponse.json({ error: 'Unauthorized: Authentication required to place calls' }, { status: 401 });
+        }
+
+        const body = await req.json().catch(() => ({}));
+        const caller_id = authUser.id;
         const { conversation_id, receiver_id, type = 'voice' } = body;
 
-        if (!conversation_id || !caller_id) {
-            return NextResponse.json({ error: 'conversation_id and authenticated caller_id are required' }, { status: 400 });
+        if (!conversation_id) {
+            return NextResponse.json({ error: 'conversation_id is required' }, { status: 400 });
         }
 
         const supabase = createAdminSupabaseClient();

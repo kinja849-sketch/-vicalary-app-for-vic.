@@ -36,5 +36,3 @@ ALTER TABLE public.calls REPLICA IDENTITY FULL;
 -- 8. Add calls table to Supabase realtime publication
 ALTER PUBLICATION supabase_realtime ADD TABLE public.calls;
 
--- 9. Clean up all old mock/stale calls for testing
-TRUNCATE TABLE public.calls CASCADE;

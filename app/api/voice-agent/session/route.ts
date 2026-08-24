@@ -3,14 +3,20 @@ import { getAuthenticatedUser } from '@/lib/supabase-server';
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => ({}));
     const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return NextResponse.json(
+        { error: 'Unauthorized: Authentication required' },
+        { status: 401 }
+      );
+    }
+
+    const body = await req.json().catch(() => ({}));
     const {
       mode = 'cooking_guide',
       language = 'en',
-      call_id: providedCallId,
     } = body;
-    const user_id = authUser?.id || body.user_id || 'user-guest';
+    const user_id = authUser.id;
 
     const dailyApiKey = process.env.DAILY_API_KEY;
     const voiceAgentUrl = process.env.VOICE_AGENT_URL || 'http://127.0.0.1:8080';
@@ -22,7 +28,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const callId = providedCallId || `va_${mode}_${user_id}_${Date.now()}`;
+    const callId = `va_${mode}_${user_id}_${Date.now()}`;
 
     // 1. Create a Daily.co Room dynamically
     const roomRes = await fetch('https://api.daily.co/v1/rooms', {
@@ -121,11 +127,27 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return NextResponse.json(
+        { error: 'Unauthorized: Authentication required' },
+        { status: 401 }
+      );
+    }
+
     const body = await req.json().catch(() => ({}));
     const { call_id } = body;
 
     if (!call_id) {
       return NextResponse.json({ error: 'call_id is required' }, { status: 400 });
+    }
+
+    // Verify the call_id contains the authenticated user's ID
+    if (!call_id.includes(authUser.id)) {
+      return NextResponse.json(
+        { error: 'Forbidden: You do not have permission to terminate this session' },
+        { status: 403 }
+      );
     }
 
     const voiceAgentUrl = process.env.VOICE_AGENT_URL || 'http://127.0.0.1:8080';

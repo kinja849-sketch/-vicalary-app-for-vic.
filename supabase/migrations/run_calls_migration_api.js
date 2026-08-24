@@ -3,8 +3,13 @@ const fs = require('fs');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../../.env.local') });
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://ifxrkbitnpbxqnbxkncp.supabase.co';
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlmeHJrYml0bnBieHFuYnhrbmNwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2OTIwMTcyNiwiZXhwIjoyMDg0Nzc3NzI2fQ.mRR1OdXmNm0wPsmU3nho1udQ4Pn4BorPG1z1eRfV6sg';
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl || !serviceRoleKey) {
+  console.error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in environment.");
+  process.exit(1);
+}
 
 const supabase = createClient(supabaseUrl, serviceRoleKey);
 
@@ -27,7 +32,9 @@ async function run() {
     
   } catch (err) {
     console.error("Migration failed:", err.message || err);
+    process.exit(1);
   }
 }
 
 run();
+
