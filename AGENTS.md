@@ -135,12 +135,34 @@ All privileged work stays in API routes or Edge Functions.
 8. Share exact localhost test steps.
 9. Wait for the user to say “push to GitHub” after they review.
 
-## 10. CodeRabbit & GitHub flow
-- After localhost verification and user approval to push, create a focused PR.
-- CodeRabbit will review the PR.
-- Address **exactly** the suggestions CodeRabbit makes (or discuss them with the user first).
-- Implement the fixes, push the fix commits, then merge only after CodeRabbit (and user) are satisfied.
-- Never merge with unresolved critical CodeRabbit findings without explicit user decision.
+## 10. Mandatory CodeRabbit Review Before Every Push
+
+### Objective
+Enforce a strict, non-negotiable workflow for every code change that will be pushed to GitHub: the agent must send the work to CodeRabbit first, wait for and fully apply CodeRabbit’s suggestions, then summarize and ask the user before any push.
+
+### Mandatory Process (apply to every future implementation and every push)
+
+#### Before any push or pull-request creation
+1. Package the current changes.
+2. Send them to CodeRabbit for review.
+3. Do not proceed to push or open a PR until CodeRabbit has responded.
+
+#### Use CodeRabbit’s output
+1. Carefully read every suggestion, comment, and prompt that CodeRabbit provides.
+2. Implement all of CodeRabbit’s recommendations and fixes exactly.
+3. Treat CodeRabbit’s feedback as the authoritative source for what must be corrected.
+
+#### After implementing the fixes
+1. Write a clear summary that states exactly what each CodeRabbit suggestion was about and what was changed to address it.
+2. Present this summary to the user.
+3. Explicitly ask the user whether they want to push the changes (or open the pull request) now.
+
+### Rules that never change
+- No push to GitHub and no pull-request creation is allowed until the full CodeRabbit review → implement → summarize → user-approval cycle is completed.
+- This process is required for every future change, every branch, and every push.
+- If CodeRabbit returns no suggestions, still produce a short summary stating that fact and ask the user for push approval.
+
+Follow this sequence exactly and exclusively whenever code is ready to be pushed. No exceptions.
 
 ## Stream / GetStream skills
 Stream Agent Skills may be used for live documentation lookup and for explicitly approved experiments only.

@@ -86,12 +86,15 @@ export function GlobalShell({ children }: { children: React.ReactNode }) {
     );
   }
 
+  const hiddenPaths = ['/', '/auth', '/onboarding', '/phone-input', '/verification-code'];
+  const isNavbarVisible = !hiddenPaths.includes(pathname) && !isChatConversation && !pathname.startsWith('/expert/');
+
   return (
     <div className="flex flex-col min-h-screen">
-      <main className={`flex-1 ${!isChatConversation && pathname !== '/onboarding' ? 'pb-16' : ''}`}>
+      <main className={`flex-1 ${isNavbarVisible ? 'pb-20' : ''}`}>
         {children}
       </main>
-      {!isChatConversation && <BottomNavbar />}
+      <BottomNavbar />
     </div>
   );
 }

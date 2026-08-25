@@ -9,6 +9,7 @@ interface CurrencyContextType {
     setManualOverride: (countryCode: string, currencyCode: string, currencySymbol: string) => void;
     clearOverride: () => void;
     formatCurrency: (amount: number | string) => string;
+    formatNumber: (amount: number | string, decimals?: number) => string;
     isLoading: boolean;
     exchangeRate: number;
 }
@@ -20,6 +21,7 @@ const CurrencyContext = createContext<CurrencyContextType>({
     setManualOverride: () => { },
     clearOverride: () => { },
     formatCurrency: (amount) => `$${amount}`,
+    formatNumber: (amount) => `${amount}`,
     isLoading: true,
     exchangeRate: 1,
 });
@@ -89,16 +91,33 @@ export const CurrencyProvider = ({ children }: { children: ReactNode }) => {
         fetchGeoLocation(); // Re-detect based on IP
     };
 
+    const formatNumber = (amount: number | string, decimals?: number) => {
+        const numericAmount = typeof amount === 'string' ? parseFloat(amount.replace(/[^0-9.-]+/g, "")) : amount;
+        if (isNaN(numericAmount)) return "0";
+
+        const hasDecimals = decimals !== undefined ? decimals > 0 : numericAmount % 1 !== 0;
+        return new Intl.NumberFormat('en-US', {
+            minimumFractionDigits: hasDecimals ? (decimals ?? 2) : 0,
+            maximumFractionDigits: hasDecimals ? (decimals ?? 2) : 0,
+        }).format(numericAmount);
+    };
+
     const formatCurrency = (amount: number | string) => {
         const numericAmount = typeof amount === 'string' ? parseFloat(amount.replace(/[^0-9.-]+/g, "")) : amount;
-        if (isNaN(numericAmount)) return `${currencySymbol}0.00`;
+        if (isNaN(numericAmount)) return `${currencySymbol}0`;
 
-        return new Intl.NumberFormat(countryCode === 'US' ? 'en-US' : 'en-GB', {
-            style: 'currency',
-            currency: currencyCode,
-            currencyDisplay: 'symbol'
-        }).format(numericAmount).replace(currencyCode, currencySymbol).trim();
-        // Replaced standard code with explicit symbol if Intl tries to use the 3-letter code
+        // Check if currency usually has zero decimals (e.g., IDR, JPY, KRW, VND) or if amount is an integer
+        const zeroDecimalCurrencies = ['IDR', 'JPY', 'KRW', 'VND', 'CLP', 'HUF'];
+        const isZeroDecimal = zeroDecimalCurrencies.includes(currencyCode);
+        const hasDecimals = !isZeroDecimal && numericAmount % 1 !== 0;
+
+        const formattedNumber = new Intl.NumberFormat('en-US', {
+            minimumFractionDigits: hasDecimals ? 2 : 0,
+            maximumFractionDigits: hasDecimals ? 2 : 0,
+        }).format(numericAmount);
+
+        // Prepend or append currency symbol nicely
+        return `${currencySymbol}${formattedNumber}`;
     };
 
     const value = React.useMemo(() => ({
@@ -108,6 +127,7 @@ export const CurrencyProvider = ({ children }: { children: ReactNode }) => {
         setManualOverride,
         clearOverride,
         formatCurrency,
+        formatNumber,
         isLoading,
         exchangeRate
     }), [countryCode, currencyCode, currencySymbol, isLoading, exchangeRate]);

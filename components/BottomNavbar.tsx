@@ -70,36 +70,39 @@ export const BottomNavbar: React.FC = () => {
     ];
 
     return (
-        <nav className="fixed bottom-0 left-0 right-0 z-50 bg-white dark:bg-[#0d1418] border-t border-slate-200 dark:border-slate-800 safe-area-bottom shadow-[0_-4px_12px_rgba(0,0,0,0.05)]">
+        <nav className="fixed bottom-0 left-0 right-0 z-[999] bg-white/95 dark:bg-[#0d1418]/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 safe-area-bottom shadow-[0_-4px_16px_rgba(0,0,0,0.08)] select-none">
             <div className="flex justify-around items-center h-16 max-w-md mx-auto relative px-2">
-                {navItems.map((item) => (
-                    <Link
-                        key={item.path}
-                        href={item.path}
-                        className={`
-                            flex flex-col items-center justify-center w-full h-full gap-1 transition-all duration-300 relative
-                            ${pathname === item.path ? 'text-vic-green' : 'text-slate-400 dark:text-slate-500'}
-                        `}
-                    >
-                        <div className="relative">
-                            <item.icon className={`transition-all duration-300 ${pathname === item.path ? 'scale-110' : 'scale-100'}`} size={24} />
-                            {/* Red Dot Badge */}
-                            {!!item.badge && item.badge > 0 && (
-                                <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold text-white shadow-sm ring-2 ring-white dark:ring-[#0d1418]">
-                                    {item.badge > 9 ? '9+' : item.badge}
-                                </span>
-                            )}
-                        </div>
-                        <span className="text-[10px] font-bold uppercase tracking-wider">
-                            {item.label}
-                        </span>
+                {navItems.map((item) => {
+                    const isActive = pathname === item.path;
+                    return (
+                        <Link
+                            key={item.path}
+                            href={item.path}
+                            className={`
+                                flex flex-col items-center justify-center w-full h-full gap-1 transition-all duration-200 relative touch-manipulation cursor-pointer active:scale-95
+                                ${isActive ? 'text-vic-green font-bold' : 'text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300'}
+                            `}
+                        >
+                            <div className="relative pointer-events-none">
+                                <item.icon className={`transition-all duration-200 ${isActive ? 'scale-110' : 'scale-100'}`} size={24} />
+                                {/* Red Dot Badge */}
+                                {!!item.badge && item.badge > 0 && (
+                                    <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold text-white shadow-sm ring-2 ring-white dark:ring-[#0d1418] pointer-events-none">
+                                        {item.badge > 9 ? '9+' : item.badge}
+                                    </span>
+                                )}
+                            </div>
+                            <span className="text-[10px] font-bold uppercase tracking-wider pointer-events-none">
+                                {item.label}
+                            </span>
 
-                        {/* Active Indicator Bar */}
-                        {pathname === item.path && (
-                            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-1 bg-vic-green rounded-full shadow-[0_2px_8px_rgba(19,236,55,0.4)]" />
-                        )}
-                    </Link>
-                ))}
+                            {/* Active Indicator Bar */}
+                            {isActive && (
+                                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-1 bg-vic-green rounded-full shadow-[0_2px_8px_rgba(19,236,55,0.4)] pointer-events-none" />
+                            )}
+                        </Link>
+                    );
+                })}
             </div>
         </nav>
     );

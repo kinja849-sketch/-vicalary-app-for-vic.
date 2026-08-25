@@ -85,12 +85,20 @@ export default function Welcome() {
   useEffect(() => {
     if (!loading && user) {
       if (profile && !profile.onboarding_completed) {
-        router.push("/onboarding");
+        router.replace("/onboarding");
       } else {
-        router.push("/dashboard");
+        router.replace("/dashboard");
       }
     }
   }, [user, profile, loading, router]);
+
+  if (loading || user) {
+    return (
+      <div className="w-full h-[100dvh] flex items-center justify-center bg-white dark:bg-[#0d1418]">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-vic-green"></div>
+      </div>
+    );
+  }
 
   const handleGetStarted = () => {
     setAnimationPhase("zooming");

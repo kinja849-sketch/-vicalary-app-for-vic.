@@ -7,6 +7,7 @@ import { saveOnboardingResponses, getUserProfile } from "@/lib/api/auth";
 import { useCurrency } from "@/lib/CurrencyContext";
 import { toast } from "sonner";
 import { useTranslation } from "@/lib/api/translation";
+import { Plus, Minus, Moon, Wallet, Sparkles } from "lucide-react";
 
 interface Question {
   id: number;
@@ -35,7 +36,7 @@ export default function Onboarding() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
   const { t } = useTranslation();
-  const { currencySymbol, exchangeRate } = useCurrency();
+  const { currencySymbol, exchangeRate, formatCurrency, formatNumber } = useCurrency();
   const queryClient = useQueryClient();
   const [currentStep, setCurrentStep] = useState(0);
   const [responses, setResponses] = useState<any>({});
@@ -449,7 +450,11 @@ export default function Onboarding() {
               </div>
             )}
             {currentQuestion.type === "age" && (
-              <AgeSelector value={responses[currentQuestion.key]} yearsLabel={t('years')} onChange={(val) => { updateResponse(currentQuestion.key, val); setTimeout(handleContinue, 400); }} />
+              <AgeSelector
+                value={responses[currentQuestion.key]}
+                yearsLabel={t('years')}
+                onChange={(val) => updateResponse(currentQuestion.key, val)}
+              />
             )}
             {currentQuestion.type === "gender" && (
               <RadioOptions options={currentQuestion.options || []} value={responses[currentQuestion.key]} onChange={(val) => { updateResponse(currentQuestion.key, val); setTimeout(handleContinue, 400); }} />
@@ -482,11 +487,14 @@ export default function Onboarding() {
             )}
             {currentQuestion.type === "slider" && (
               <SliderInput
-                label={t('monthly_budget')}
+                label={currentQuestion.title}
                 min={currentQuestion.min || 50}
                 max={currentQuestion.max || 1000}
                 step={currentQuestion.step || 1}
                 unit={currentQuestion.unit}
+                isCurrency={currentQuestion.key === "weekly_budget"}
+                formatCurrency={formatCurrency}
+                formatNumber={formatNumber}
                 value={responses[currentQuestion.key]}
                 onChange={(val) => updateResponse(currentQuestion.key, val)}
               />
@@ -508,7 +516,7 @@ export default function Onboarding() {
           {/* Action buttons */}
           <div className="mt-12 sm:mt-16 space-y-6 flex flex-col items-center w-full">
             {/* Hide Continue button for auto-advancing types */}
-            {!['radio', 'gender', 'age'].includes(currentQuestion.type) && (
+            {!['radio', 'gender'].includes(currentQuestion.type) && (
               <button
                 onClick={handleContinue}
                 disabled={saveMutation.isPending}
@@ -533,27 +541,57 @@ export default function Onboarding() {
 }
 
 function AgeSelector({ value, yearsLabel, onChange }: { value?: number, yearsLabel: string, onChange: (val: number) => void }) {
-  const ages = Array.from({ length: 73 }, (_, i) => i + 18);
-  const age = value || 25;
+  const age = value !== undefined ? value : 25;
+
+  useEffect(() => {
+    if (value === undefined) {
+      onChange(25);
+    }
+  }, [value, onChange]);
+
+  const pct = Math.max(0, Math.min(100, ((age - 18) / (90 - 18)) * 100));
 
   return (
-    <div className="relative w-full max-w-xs">
-      <div className="h-40 overflow-y-auto bg-white rounded-xl shadow-lg p-2 snap-y snap-mandatory">
-        {ages.map((a) => (
-          <div
-            key={a}
-            onClick={() => onChange(a)}
-            className={`py-3 text-center cursor-pointer rounded-lg font-bold transition-all ${age === a
-              ? "bg-vic-blue text-white scale-105 shadow-md"
-              : "text-vic-blue hover:bg-vic-green-start"
-              }`}
-          >
-            {a}
-          </div>
-        ))}
+    <div className="flex flex-col items-center justify-center w-full max-w-sm space-y-6 select-none touch-manipulation">
+      {/* High-visibility Age Display */}
+      <div className="bg-white/95 backdrop-blur-md rounded-3xl p-6 shadow-xl border-2 border-vic-blue/10 w-full text-center">
+        <span className="text-xs uppercase tracking-widest text-vic-blue/60 font-black block mb-1">Selected Age</span>
+        <div className="text-vic-blue text-5xl font-black flex items-baseline justify-center gap-2">
+          {age}
+          <span className="text-xl font-bold text-vic-blue/70">{yearsLabel}</span>
+        </div>
       </div>
-      <div className="mt-4 text-vic-blue text-lg font-bold text-center">
-        {age} {yearsLabel}
+
+      {/* Slider Control with Non-Interactive Visual Direction Guides */}
+      <div className="flex items-center gap-3 w-full px-2">
+        <div
+          className="size-11 rounded-2xl bg-white/80 text-vic-blue/60 shadow-sm flex items-center justify-center font-black pointer-events-none select-none shrink-0"
+          aria-hidden="true"
+        >
+          <Minus size={20} />
+        </div>
+
+        <div className="flex-1 relative flex items-center">
+          <input
+            type="range"
+            min={18}
+            max={90}
+            step={1}
+            value={age}
+            onChange={(e) => onChange(Number(e.target.value))}
+            className="onboarding-slider w-full"
+            style={{
+              background: `linear-gradient(to right, #0B3C7C ${pct}%, rgba(255,255,255,0.7) ${pct}%)`
+            }}
+          />
+        </div>
+
+        <div
+          className="size-11 rounded-2xl bg-white/80 text-vic-blue/60 shadow-sm flex items-center justify-center font-black pointer-events-none select-none shrink-0"
+          aria-hidden="true"
+        >
+          <Plus size={20} />
+        </div>
       </div>
     </div>
   );
@@ -561,22 +599,25 @@ function AgeSelector({ value, yearsLabel, onChange }: { value?: number, yearsLab
 
 function RadioOptions({ options, value, onChange }: { options: string[], value?: string, onChange: (val: string) => void }) {
   return (
-    <div className="flex flex-col space-y-3 w-full max-w-xs mb-8">
+    <div className="flex flex-col space-y-3 w-full max-w-sm mb-6 select-none touch-manipulation">
       {options.map((option) => (
-        <label
+        <button
           key={option}
-          className={`flex cursor-pointer h-14 grow items-center justify-center overflow-hidden rounded-xl px-4 py-2 ${value === option ? "bg-vic-blue text-white shadow-lg" : "bg-white text-vic-blue shadow-md"} text-base font-bold transition-all`}
+          type="button"
+          onClick={() => onChange(option)}
+          className={`flex cursor-pointer h-16 w-full items-center justify-between overflow-hidden rounded-2xl px-6 py-3 transition-all active:scale-[0.98] ${
+            value === option
+              ? "bg-vic-blue text-white shadow-xl ring-2 ring-white/50 scale-[1.02]"
+              : "bg-white/90 backdrop-blur-sm text-vic-blue shadow-md hover:bg-white hover:shadow-lg"
+          } text-base font-bold`}
         >
           <span className="truncate">{option}</span>
-          <input
-            type="radio"
-            name="option"
-            value={option}
-            checked={value === option}
-            onChange={(e) => onChange(e.target.value)}
-            className="invisible w-0"
-          />
-        </label>
+          <div className={`size-6 rounded-full border-2 flex items-center justify-center transition-all ${
+            value === option ? "border-white bg-vic-green" : "border-vic-blue/30 bg-transparent"
+          }`}>
+            {value === option && <div className="size-2.5 rounded-full bg-vic-blue" />}
+          </div>
+        </button>
       ))}
     </div>
   );
@@ -597,18 +638,30 @@ function CheckboxOptions({ options, value, onChange }: { options: string[], valu
   return (
     <div
       className={`${isLargeList ? "grid grid-cols-2 gap-3" : "flex flex-col space-y-3"
-        } w-full max-w-xs mb-8`}
+        } w-full max-w-sm mb-6 select-none touch-manipulation`}
     >
-      {options.map((option) => (
-        <label
-          key={option}
-          onClick={() => toggle(option)}
-          className={`flex cursor-pointer ${isLargeList ? "h-14" : "h-14 grow"
-            } items-center justify-center overflow-hidden rounded-xl px-3 py-2 ${selected.includes(option) ? "bg-vic-blue text-white shadow-lg" : "bg-white text-vic-blue shadow-md"} text-sm font-bold transition-all`}
-        >
-          <span className="truncate">{option}</span>
-        </label>
-      ))}
+      {options.map((option) => {
+        const isSelected = selected.includes(option);
+        return (
+          <button
+            key={option}
+            type="button"
+            onClick={() => toggle(option)}
+            className={`flex cursor-pointer ${isLargeList ? "h-14 px-4" : "h-16 px-6"} w-full items-center justify-between overflow-hidden rounded-2xl transition-all active:scale-[0.98] ${
+              isSelected
+                ? "bg-vic-blue text-white shadow-xl ring-2 ring-white/50 scale-[1.02]"
+                : "bg-white/90 backdrop-blur-sm text-vic-blue shadow-md hover:bg-white hover:shadow-lg"
+            } text-sm font-bold`}
+          >
+            <span className="truncate">{option}</span>
+            <div className={`size-5 rounded-lg border-2 flex items-center justify-center transition-all ${
+              isSelected ? "border-white bg-vic-green" : "border-vic-blue/30 bg-transparent"
+            }`}>
+              {isSelected && <div className="size-2 rounded-sm bg-vic-blue" />}
+            </div>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -632,68 +685,105 @@ function NumberSlider({
   const isWeight = defaultUnit === "kg";
   const isHeight = defaultUnit === "cm";
 
-  const displayValue = useMemo(() => {
-    const val = value || (min + max) / 2;
-    if (unit === "lbs" && isWeight) return Math.round(val * 2.20462);
-    if (unit === "inches" && isHeight) return Math.round(val / 2.54);
-    return Math.round(val);
-  }, [value, unit, min, max, isWeight, isHeight]);
+  const rawValue = value !== undefined ? value : (min + max) / 2;
 
-  const handleSliderChange = (newVal: number) => {
-    onChange(newVal);
-  };
+  useEffect(() => {
+    if (value === undefined) {
+      onChange((min + max) / 2);
+    }
+  }, [value, min, max, onChange]);
+
+  const displayValue = useMemo(() => {
+    if (unit === "lbs" && isWeight) return Math.round(rawValue * 2.20462);
+    if (unit === "inches" && isHeight) return Math.round(rawValue / 2.54);
+    return Math.round(rawValue);
+  }, [rawValue, unit, isWeight, isHeight]);
+
+  const pct = Math.max(0, Math.min(100, ((rawValue - min) / (max - min)) * 100));
 
   return (
-    <div className="flex flex-col items-center justify-center w-full max-w-xs space-y-6">
-      {/* Unit Toggle */}
-      <div className="flex bg-white/20 p-1 rounded-lg self-end mb-2">
-        {isWeight && (
-          <>
-            <button
-              onClick={() => setUnit("kg")}
-              className={`px-3 py-1 rounded-md text-xs font-bold transition-all ${unit === "kg" ? "bg-vic-blue text-white shadow-md" : "text-vic-blue"}`}
-            >
-              KG
-            </button>
-            <button
-              onClick={() => setUnit("lbs")}
-              className={`px-3 py-1 rounded-md text-xs font-bold transition-all ${unit === "lbs" ? "bg-vic-blue text-white shadow-md" : "text-vic-blue"}`}
-            >
-              LBS
-            </button>
-          </>
-        )}
-        {isHeight && (
-          <>
-            <button
-              onClick={() => setUnit("cm")}
-              className={`px-3 py-1 rounded-md text-xs font-bold transition-all ${unit === "cm" ? "bg-vic-blue text-white shadow-md" : "text-vic-blue"}`}
-            >
-              CM
-            </button>
-            <button
-              onClick={() => setUnit("inches")}
-              className={`px-3 py-1 rounded-md text-xs font-bold transition-all ${unit === "inches" ? "bg-vic-blue text-white shadow-md" : "text-vic-blue"}`}
-            >
-              IN
-            </button>
-          </>
-        )}
+    <div className="flex flex-col items-center justify-center w-full max-w-sm space-y-6 select-none touch-manipulation">
+      {/* Unit Toggle & Display Card */}
+      <div className="bg-white/95 backdrop-blur-md rounded-3xl p-6 shadow-xl border-2 border-vic-blue/10 w-full relative">
+        <div className="flex justify-between items-center mb-2">
+          <span className="text-xs uppercase tracking-widest text-vic-blue/60 font-black">Value</span>
+          {/* Unit Toggle */}
+          <div className="flex bg-vic-blue/10 p-1 rounded-xl">
+            {isWeight && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setUnit("kg")}
+                  className={`px-3 py-1 rounded-lg text-xs font-black transition-all ${unit === "kg" ? "bg-vic-blue text-white shadow-md" : "text-vic-blue"}`}
+                >
+                  KG
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUnit("lbs")}
+                  className={`px-3 py-1 rounded-lg text-xs font-black transition-all ${unit === "lbs" ? "bg-vic-blue text-white shadow-md" : "text-vic-blue"}`}
+                >
+                  LBS
+                </button>
+              </>
+            )}
+            {isHeight && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setUnit("cm")}
+                  className={`px-3 py-1 rounded-lg text-xs font-black transition-all ${unit === "cm" ? "bg-vic-blue text-white shadow-md" : "text-vic-blue"}`}
+                >
+                  CM
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUnit("inches")}
+                  className={`px-3 py-1 rounded-lg text-xs font-black transition-all ${unit === "inches" ? "bg-vic-blue text-white shadow-md" : "text-vic-blue"}`}
+                >
+                  IN
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="text-vic-blue text-5xl font-black flex items-baseline justify-center gap-2">
+          {displayValue}
+          <span className="text-xl font-bold text-vic-blue/70">{unit}</span>
+        </div>
       </div>
 
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={0.1}
-        value={value || (min + max) / 2}
-        onChange={(e) => handleSliderChange(Number(e.target.value))}
-        className="w-full h-2 bg-white rounded-lg appearance-none cursor-pointer accent-vic-blue"
-      />
+      {/* Slider Control with Non-Interactive Visual Direction Guides */}
+      <div className="flex items-center gap-3 w-full px-2">
+        <div
+          className="size-11 rounded-2xl bg-white/80 text-vic-blue/60 shadow-sm flex items-center justify-center font-black pointer-events-none select-none shrink-0"
+          aria-hidden="true"
+        >
+          <Minus size={20} />
+        </div>
 
-      <div className="text-vic-blue text-4xl font-bold flex items-baseline gap-2">
-        {displayValue}
-        <span className="text-lg opacity-80">{unit}</span>
+        <div className="flex-1 relative flex items-center">
+          <input
+            type="range"
+            min={min}
+            max={max}
+            step={1}
+            value={rawValue}
+            onChange={(e) => onChange(Number(e.target.value))}
+            className="onboarding-slider w-full"
+            style={{
+              background: `linear-gradient(to right, #0B3C7C ${pct}%, rgba(255,255,255,0.7) ${pct}%)`
+            }}
+          />
+        </div>
+
+        <div
+          className="size-11 rounded-2xl bg-white/80 text-vic-blue/60 shadow-sm flex items-center justify-center font-black pointer-events-none select-none shrink-0"
+          aria-hidden="true"
+        >
+          <Plus size={20} />
+        </div>
       </div>
     </div>
   );
@@ -705,6 +795,9 @@ function SliderInput({
   max,
   step = 1,
   unit,
+  isCurrency = false,
+  formatCurrency,
+  formatNumber,
   value,
   onChange
 }: {
@@ -713,32 +806,99 @@ function SliderInput({
   max: number;
   step?: number;
   unit?: string;
+  isCurrency?: boolean;
+  formatCurrency?: (val: number | string) => string;
+  formatNumber?: (val: number | string) => string;
   value?: number;
   onChange: (val: number) => void;
 }) {
-  const val = value || (min + max) / 2;
+  const defaultValue = Math.round(((min + max) / 2) / step) * step;
+  const rawValue = value !== undefined ? value : defaultValue;
+
+  useEffect(() => {
+    if (value === undefined) {
+      onChange(defaultValue);
+    }
+  }, [value, defaultValue, onChange]);
+
+  const pct = Math.max(0, Math.min(100, ((rawValue - min) / (max - min)) * 100));
+
+  // Formatted display
+  const formattedDisplay = isCurrency
+    ? (formatCurrency ? formatCurrency(rawValue) : `${unit}${formatNumber ? formatNumber(rawValue) : rawValue}`)
+    : `${rawValue} ${unit}`;
+
+  const minFormatted = isCurrency && formatCurrency ? formatCurrency(min) : `${min} ${unit || ''}`;
+  const maxFormatted = isCurrency && formatCurrency ? formatCurrency(max) : `${max}+ ${unit || ''}`;
 
   return (
-    <div className="flex flex-col items-center justify-center w-full max-w-xs space-y-6">
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={val}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full h-2 bg-white rounded-lg appearance-none cursor-pointer accent-vic-blue"
-      />
-      <div className="flex justify-between text-vic-blue text-sm font-medium w-full px-2">
-        <span>
-          {min} {unit}
+    <div className="flex flex-col items-center justify-center w-full max-w-sm space-y-6 select-none touch-manipulation">
+      {/* Visual Highlight Card with High Contrast Display */}
+      <div className="bg-white/95 backdrop-blur-md rounded-3xl p-6 shadow-xl border-2 border-vic-blue/10 w-full text-center relative overflow-hidden">
+        {isCurrency && (
+          <div className="absolute top-3 right-3 p-2 bg-vic-green/20 rounded-full text-vic-blue">
+            <Wallet size={16} />
+          </div>
+        )}
+        {!isCurrency && (
+          <div className="absolute top-3 right-3 p-2 bg-vic-blue/10 rounded-full text-vic-blue">
+            <Moon size={16} />
+          </div>
+        )}
+
+        <span className="text-xs uppercase tracking-widest text-vic-blue/60 font-black block mb-1">
+          {isCurrency ? "Weekly Budget Target" : "Sleep Duration"}
         </span>
-        <span>
-          {max}+ {unit}
-        </span>
+
+        <div className="text-vic-blue text-4xl sm:text-5xl font-black tracking-tight drop-shadow-sm">
+          {formattedDisplay}
+        </div>
+
+        {/* Quality status badge for sleep */}
+        {!isCurrency && (
+          <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 bg-vic-blue/10 rounded-full text-xs font-black text-vic-blue">
+            <Sparkles size={12} className="text-vic-blue" />
+            {rawValue >= 7 && rawValue <= 9 ? "Optimal Sleep Range (7-9h)" : rawValue < 7 ? "Short Sleep (<7h)" : "Extended Sleep (>9h)"}
+          </div>
+        )}
       </div>
-      <div className="text-vic-blue text-2xl font-bold">
-        {val} {unit}
+
+      {/* Slider Control with Non-Interactive Visual Direction Guides */}
+      <div className="flex items-center gap-3 w-full px-2">
+        <div
+          className="size-11 rounded-2xl bg-white/80 text-vic-blue/60 shadow-sm flex items-center justify-center font-black pointer-events-none select-none shrink-0"
+          aria-hidden="true"
+        >
+          <Minus size={20} />
+        </div>
+
+        <div className="flex-1 relative flex items-center">
+          <input
+            type="range"
+            min={min}
+            max={max}
+            step={step}
+            value={rawValue}
+            onChange={(e) => onChange(Number(e.target.value))}
+            className="onboarding-slider w-full"
+            style={{
+              background: `linear-gradient(to right, #0B3C7C ${pct}%, rgba(255,255,255,0.7) ${pct}%)`
+            }}
+          />
+        </div>
+
+        <div
+          className="size-11 rounded-2xl bg-white/80 text-vic-blue/60 shadow-sm flex items-center justify-center font-black pointer-events-none select-none shrink-0"
+          aria-hidden="true"
+        >
+          <Plus size={20} />
+        </div>
+      </div>
+
+      {/* Min / Max bounds */}
+      <div className="flex justify-between text-vic-blue text-xs font-bold w-full px-4 -mt-3">
+        <span>Min: {minFormatted}</span>
+        <span>Max: {maxFormatted}</span>
       </div>
     </div>
   );
@@ -763,30 +923,61 @@ function RangeSlider({
   t: any;
   onChange: (val: number) => void;
 }) {
-  const val = value || 0;
+  const rawValue = value !== undefined ? value : 0;
+
+  useEffect(() => {
+    if (value === undefined) {
+      onChange(0);
+    }
+  }, [value, onChange]);
+
+  const pct = Math.max(0, Math.min(100, ((rawValue - min) / (max - min)) * 100));
+  const goalText = rawValue < 0 ? t('lose_weight_opt') : rawValue > 0 ? t('gain_weight_opt') : t('maintain');
 
   return (
-    <div className="flex flex-col items-center justify-center w-full max-w-xs space-y-6">
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={val}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full h-2 bg-white rounded-lg appearance-none cursor-pointer accent-vic-blue"
-      />
-      <div className="flex justify-between text-vic-blue text-sm font-medium w-full px-2">
-        <span>
-          {t('lose_weight_opt')}
-        </span>
-        <span>{t('maintain')}</span>
-        <span>
-          {t('gain_weight_opt')}
-        </span>
+    <div className="flex flex-col items-center justify-center w-full max-w-sm space-y-6 select-none touch-manipulation">
+      {/* High Visibility Card */}
+      <div className="bg-white/95 backdrop-blur-md rounded-3xl p-6 shadow-xl border-2 border-vic-blue/10 w-full text-center">
+        <span className="text-xs uppercase tracking-widest text-vic-blue/60 font-black block mb-1">Target Change</span>
+        <div className="text-vic-blue text-4xl sm:text-5xl font-black flex items-baseline justify-center gap-2">
+          {rawValue > 0 ? `+${rawValue}` : rawValue}
+          <span className="text-xl font-bold text-vic-blue/70">{unit}</span>
+        </div>
+        <div className="mt-2 inline-block px-3 py-1 bg-vic-blue/10 rounded-full text-xs font-black text-vic-blue">
+          {goalText}
+        </div>
       </div>
-      <div className="text-vic-blue text-2xl font-bold">
-        {val} {unit}
+
+      {/* Slider with Non-Interactive Visual Direction Guides */}
+      <div className="flex items-center gap-3 w-full px-2">
+        <div
+          className="size-11 rounded-2xl bg-white/80 text-vic-blue/60 shadow-sm flex items-center justify-center font-black pointer-events-none select-none shrink-0"
+          aria-hidden="true"
+        >
+          <Minus size={20} />
+        </div>
+
+        <div className="flex-1 relative flex items-center">
+          <input
+            type="range"
+            min={min}
+            max={max}
+            step={step}
+            value={rawValue}
+            onChange={(e) => onChange(Number(e.target.value))}
+            className="onboarding-slider w-full"
+            style={{
+              background: `linear-gradient(to right, #0B3C7C ${pct}%, rgba(255,255,255,0.7) ${pct}%)`
+            }}
+          />
+        </div>
+
+        <div
+          className="size-11 rounded-2xl bg-white/80 text-vic-blue/60 shadow-sm flex items-center justify-center font-black pointer-events-none select-none shrink-0"
+          aria-hidden="true"
+        >
+          <Plus size={20} />
+        </div>
       </div>
     </div>
   );
