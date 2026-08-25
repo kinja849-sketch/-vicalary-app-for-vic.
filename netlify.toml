@@ -1,0 +1,19 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NETLIFY_DRAWER = "false"
+  NETLIFY_FEEDBACK = "false"
+
+[context.deploy-preview.environment]
+  NETLIFY_DRAWER = "false"
+  NETLIFY_FEEDBACK = "false"
+
+[context.production.environment]
+  NETLIFY_DRAWER = "false"
+  NETLIFY_FEEDBACK = "false"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+

@@ -1,0 +1,40 @@
+language: en-US
+reviews:
+  profile: assertive
+  high_level_summary: true
+  request_changes_workflow: true
+  auto_review:
+    enabled: true
+    ignore_title_keywords:
+      - "wip"
+      - "draft"
+    drafts: false
+  path_filters:
+    - "!node_modules/**"
+    - "!.next/**"
+    - "!package-lock.json"
+    - "!tsconfig.tsbuildinfo"
+    - "!public/**"
+    - "!dist/**"
+    - "!build/**"
+    - "!*.lock"
+    - "!.agents/**"
+    - "!.claude/**"
+    - "!agent/**"
+    - "!supabase/.temp/**"
+    - "!supabase/migrations/**"
+    - "!components/ui/**"
+    - "!lib/translations/**"
+    - "!skills-lock.json"
+  path_instructions:
+    - path: "app/api/**"
+      instructions: |
+        Enforce server-only secrets. No service-role or banking keys in responses.
+        Thin routes. Business logic and AI calls stay server-side.
+    - path: "lib/**"
+      instructions: |
+        Preserve existing architecture. No client exposure of secrets.
+    - path: "app/**/*.tsx"
+      instructions: |
+        UI only displays data. No privileged operations or secrets.
+
