@@ -18,6 +18,11 @@ reviews:
     - "!dist/**"
     - "!build/**"
     - "!*.lock"
+    - "!.agents/**"
+    - "!.claude/**"
+    - "!agent/**"
+    - "!supabase/.temp/**"
+    - "!skills-lock.json"
   path_instructions:
     - path: "app/api/**"
       instructions: |
