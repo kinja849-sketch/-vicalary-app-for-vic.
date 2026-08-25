@@ -9,7 +9,7 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: 'No audio file provided' }, { status: 400 });
         }
 
-        const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+        const apiKey = process.env.OPENAI_API_KEY;
         if (!apiKey) {
             throw new Error('OpenAI API key missing');
         }
@@ -31,20 +31,20 @@ export async function POST(req: NextRequest) {
 
         if (!response.ok) {
             const errorText = await response.text();
-            throw new Error(`Whisper API error: ${errorText}`);
+            console.error('[Whisper API Error]:', errorText);
+            throw new Error('Audio transcription failed');
         }
 
         const data = await response.json();
         
         if (data.text) {
-            console.log(`[Cooking-Assistant-Transcribe] Transcription success: ${data.text}`);
             return NextResponse.json({ text: data.text });
         } else {
             throw new Error("No transcription returned");
         }
 
     } catch (error: any) {
-        console.error('[Cooking-Assistant-Transcribe Error]:', error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
+        console.error('[Cooking-Assistant-Transcribe Error]:', error?.message);
+        return NextResponse.json({ error: 'Failed to transcribe audio' }, { status: 500 });
     }
 }

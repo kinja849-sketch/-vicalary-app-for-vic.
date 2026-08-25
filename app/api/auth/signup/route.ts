@@ -15,63 +15,8 @@ export async function POST(request: Request) {
 
     const normalizedEmail = email.trim().toLowerCase();
 
-    // 1. Safety Check: Check for orphaned public profiles with this email
-    // This handles cases where auth.users was deleted but public data remained.
-    // This ensures that when a user signs up again, they start with a CLEAN SLATE.
-    const { data: orphanedProfile } = await supabaseAdmin
-      .from('user_profiles')
-      .select('id')
-      .eq('email', normalizedEmail)
-      .maybeSingle();
-
-    if (orphanedProfile) {
-      console.log(`[Signup-Defensive] Found orphaned profile for ${normalizedEmail}. Performing safety wipe...`);
-      // Wipe storage
-      const buckets = ['user-avatars', 'food-images', 'chat-media'];
-      for (const bucket of buckets) {
-        try {
-          const { data: files } = await supabaseAdmin.storage.from(bucket).list(orphanedProfile.id);
-          if (files && files.length > 0) {
-            const paths = files.map(f => `${orphanedProfile.id}/${f.name}`);
-            await supabaseAdmin.storage.from(bucket).remove(paths);
-          }
-        } catch (e) {}
-      }
-      // Delete from DB (The cascade will handle related tables if SQL was applied)
-      await supabaseAdmin.from('user_profiles').delete().eq('id', orphanedProfile.id);
-      console.log(`[Signup-Defensive] Orphaned data for ${normalizedEmail} has been purged.`);
-    }
-
-    // 2. Super Reset Logic: If a user needs a hard reset (dev only), delete them from auth.users
-    const isSuperReset = normalizedEmail.includes('super');
-    if (isSuperReset) {
-      const { data: userData } = await supabaseAdmin.auth.admin.listUsers();
-      const users = userData?.users || [];
-      const existingUser = users.find((u: any) => u.email?.toLowerCase() === normalizedEmail);
-      
-      if (existingUser) {
-        console.log(`[HARD RESET] Deleting existing auth.user ${existingUser.id}...`);
-        
-        // Storage Cleanup
-        const buckets = ['user-avatars', 'food-images', 'chat-media'];
-        for (const bucket of buckets) {
-          try {
-            const { data: files } = await supabaseAdmin.storage.from(bucket).list(existingUser.id);
-            if (files && files.length > 0) {
-              const paths = files.map(f => `${existingUser.id}/${f.name}`);
-              await supabaseAdmin.storage.from(bucket).remove(paths);
-            }
-          } catch (e) {}
-        }
-        
-        await supabaseAdmin.auth.admin.deleteUser(existingUser.id);
-      }
-    }
-
-    // 3. Generate Verification Link via Supabase Admin Client
+    // Generate Verification Link via Supabase Admin Client
     // This creates the user in the unconfirmed state in auth.users and generates the link.
-    // By doing this on the server via admin key, we bypass Supabase's Custom SMTP completely,
-    // avoiding the 504 Gateway Timeout!
     const requestUrl = new URL(request.url);
     const redirectTo = `${requestUrl.origin}/onboarding`;
 

@@ -74,7 +74,6 @@ export default function Auth() {
     } catch (error: any) {
       console.error("[Auth] Sync and navigate failed:", error);
       toast.error("Failed to restore session. Please try again.");
-      router.push("/onboarding");
     }
   };
 
@@ -198,6 +197,8 @@ export default function Auth() {
                 <form onSubmit={handleAuth} className="flex w-full flex-col items-center space-y-4">
                   <input
                     type="email"
+                    name="email"
+                    autoComplete="email"
                     placeholder={t('email_addr')}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -206,6 +207,8 @@ export default function Auth() {
                   />
                   <input
                     type="password"
+                    name="password"
+                    autoComplete="current-password"
                     placeholder={t('password_label')}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
@@ -277,7 +280,9 @@ export default function Auth() {
                     <form onSubmit={handleAuth} className="flex w-full flex-col items-center space-y-4">
                       <input
                         type="email"
-                        placeholder="Email address"
+                        name="email"
+                        autoComplete="email"
+                        placeholder={t('email_addr')}
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
                         className="w-full px-4 py-3 rounded-lg bg-white/10 border border-white/20 text-white placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-vic-green"
@@ -285,7 +290,9 @@ export default function Auth() {
                       />
                       <input
                         type="password"
-                        placeholder="Password"
+                        name="password"
+                        autoComplete="new-password"
+                        placeholder={t('password_label')}
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         className="w-full px-4 py-3 rounded-lg bg-white/10 border border-white/20 text-white placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-vic-green"

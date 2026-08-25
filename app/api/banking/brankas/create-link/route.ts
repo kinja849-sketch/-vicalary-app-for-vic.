@@ -1,11 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServerSupabaseClient } from '@/lib/supabase-server';
+import { getAuthenticatedUser } from '@/lib/supabase-server';
 
 const BRANKAS_API_KEY = process.env.BRANKAS_API_KEY;
 
 export async function POST(request: Request) {
     try {
-        const { userId, bankId, countryCode } = await request.json();
+        const authUser = await getAuthenticatedUser(request);
+        const body = await request.json().catch(() => ({}));
+        const userId = authUser?.id || body.userId;
+        const bankId = body.bankId;
+        const countryCode = body.countryCode;
+
+        if (!userId) {
+            return NextResponse.json({ success: false, error: 'Unauthorized: Valid user session required' }, { status: 401 });
+        }
+
+        if (!bankId) {
+            return NextResponse.json({ success: false, error: 'bankId is required' }, { status: 400 });
+        }
 
         if (!BRANKAS_API_KEY) {
             return NextResponse.json({ success: false, error: 'Brankas API Key is missing in backend' }, { status: 500 });
@@ -14,15 +26,6 @@ export async function POST(request: Request) {
         // Generate a deterministic or random transaction ID for tracking
         const transactionId = `txn_${Date.now()}_${Math.random().toString(36).substring(7)}`;
         const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-
-        const payload = {
-            bank_id: bankId,
-            country: countryCode || 'ID',
-            callback: {
-                success_url: `${siteUrl}/api/banking/brankas/callback?status=SUCCESS&user_id=${userId}&bank_id=${bankId}&transaction_id=${transactionId}`,
-                fail_url: `${siteUrl}/api/banking/brankas/callback?status=FAIL&user_id=${userId}&bank_id=${bankId}`
-            }
-        };
 
         let redirectUrl = '';
         try {
@@ -49,15 +52,17 @@ export async function POST(request: Request) {
                 }
             } else {
                 const errorText = await response.text();
-                console.warn("Brankas Live API Error, using fallback:", errorText);
+                console.warn("Brankas Live API Error:", errorText);
             }
         } catch (e: any) {
-            console.warn("Failed to connect to Brankas API, using fallback:", e.message);
+            console.warn("Failed to connect to Brankas API:", e.message);
         }
 
-        // If the live Brankas setup fails or is not enabled, fall back to a mock statement link
-        // so that the user's dashboard integration functions perfectly in sandbox/dev mode.
+        // In non-production development environments, provide a mock statement link if key is inactive
         if (!redirectUrl) {
+            if (process.env.NODE_ENV === 'production' && BRANKAS_API_KEY !== 'mock') {
+                return NextResponse.json({ success: false, error: 'Failed to initialize bank statement link with Brankas' }, { status: 502 });
+            }
             const mockStatementId = `stmt_mock_${Date.now()}`;
             redirectUrl = `${siteUrl}/api/banking/brankas/callback?status=SUCCESS&user_id=${userId}&bank_id=${bankId}&transaction_id=${transactionId}&statement_id=${mockStatementId}`;
         }

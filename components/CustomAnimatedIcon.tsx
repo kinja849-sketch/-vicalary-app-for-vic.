@@ -39,11 +39,16 @@ export const CustomAnimatedIcon: React.FC<CustomAnimatedIconProps> = ({
             video.playbackRate = playbackRate;
             playPromiseRef.current = video.play();
             if (playPromiseRef.current !== undefined) {
-                playPromiseRef.current.catch(() => { /* Ignore interruption errors */ });
+                playPromiseRef.current
+                    .catch(() => { /* Ignore interruption errors */ })
+                    .finally(() => {
+                        playPromiseRef.current = null;
+                    });
             }
         } else {
             video.pause();
             video.currentTime = 0;
+            playPromiseRef.current = null;
         }
     }, [loop, playbackRate]);
 
@@ -66,8 +71,7 @@ export const CustomAnimatedIcon: React.FC<CustomAnimatedIconProps> = ({
                         }
                     })
                     .finally(() => {
-                        // We don't clear playPromiseRef here if we want to pause it later
-                        // but we need a way to know it's done.
+                        playPromiseRef.current = null;
                     });
             }
         }
@@ -88,7 +92,6 @@ export const CustomAnimatedIcon: React.FC<CustomAnimatedIconProps> = ({
                 playPromiseRef.current
                     .then(pauseVideo)
                     .catch(() => {
-                        // If play was aborted, ensure it's paused
                         pauseVideo();
                     });
             } else {
@@ -108,8 +111,7 @@ export const CustomAnimatedIcon: React.FC<CustomAnimatedIconProps> = ({
                 <img
                     src={src}
                     alt="Animated Icon"
-                    className="w-full h-full object-contain pointer-events-none dark:mix-blend-screen dark:brightness-150 mixed-blend-multiply"
-                    style={{ mixBlendMode: 'inherit' }}
+                    className="w-full h-full object-contain pointer-events-none dark:mix-blend-screen dark:brightness-150 mix-blend-multiply"
                 />
                 <div className="absolute inset-0 bg-white/20 blur-xl rounded-full opacity-0 dark:opacity-40 pointer-events-none" />
             </div>
@@ -130,8 +132,7 @@ export const CustomAnimatedIcon: React.FC<CustomAnimatedIconProps> = ({
                 playsInline
                 loop={loop}
                 preload="auto"
-                className="w-full h-full object-contain pointer-events-none dark:mix-blend-screen dark:brightness-150 mixed-blend-multiply"
-                style={{ mixBlendMode: 'inherit' }} // Controlled by tailwind classes instead for flexibility
+                className="w-full h-full object-contain pointer-events-none dark:mix-blend-screen dark:brightness-150 mix-blend-multiply"
             />
             {/* Dark mode gradient highlight behind icon */}
             <div className="absolute inset-0 bg-white/20 blur-xl rounded-full opacity-0 dark:opacity-40 pointer-events-none" />

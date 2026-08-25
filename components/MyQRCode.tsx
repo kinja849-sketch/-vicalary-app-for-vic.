@@ -19,8 +19,8 @@ export const MyQRCode: React.FC<MyQRCodeProps> = ({ data, fullName }) => {
         const ctx = canvas.getContext("2d");
         const img = new Image();
         img.onload = () => {
-            canvas.width = img.width;
-            canvas.height = img.height;
+            canvas.width = img.width || 256;
+            canvas.height = img.height || 256;
             ctx?.drawImage(img, 0, 0);
             const pngFile = canvas.toDataURL("image/png");
             const downloadLink = document.createElement("a");
@@ -28,7 +28,26 @@ export const MyQRCode: React.FC<MyQRCodeProps> = ({ data, fullName }) => {
             downloadLink.href = pngFile;
             downloadLink.click();
         };
-        img.src = "data:image/svg+xml;base64," + btoa(svgData);
+        // Safe base64 encoding for UTF-8 SVG content
+        img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svgData);
+    };
+
+    const handleShare = async () => {
+        if (typeof navigator !== 'undefined' && navigator.share) {
+            try {
+                await navigator.share({
+                    title: 'My VicCode',
+                    text: 'Scan this to chat with me on VicCalary!',
+                    url: window.location.href
+                });
+            } catch (err: any) {
+                if (err.name !== 'AbortError') {
+                    console.warn("Share failed:", err);
+                }
+            }
+        } else if (typeof navigator !== 'undefined' && navigator.clipboard) {
+            await navigator.clipboard.writeText(window.location.href);
+        }
     };
 
     return (
@@ -59,6 +78,7 @@ export const MyQRCode: React.FC<MyQRCodeProps> = ({ data, fullName }) => {
                 <div className="flex gap-3 w-full">
                     <Button
                         variant="secondary"
+                        aria-label="Download QR Code"
                         className="flex-1 bg-white/10 hover:bg-white/20 border-white/10 text-white"
                         onClick={handleDownload}
                     >
@@ -67,8 +87,9 @@ export const MyQRCode: React.FC<MyQRCodeProps> = ({ data, fullName }) => {
                     </Button>
                     <Button
                         variant="default"
+                        aria-label="Share QR Code"
                         className="flex-1 bg-gradient-to-r from-blue-500 to-emerald-500 hover:from-blue-600 hover:to-emerald-600 text-white border-0"
-                        onClick={() => navigator.share?.({ title: 'My VicCode', text: 'Scan this to chat with me on VicCalary!', url: window.location.href })}
+                        onClick={handleShare}
                     >
                         <Share2 className="w-4 h-4 mr-2" />
                         Share

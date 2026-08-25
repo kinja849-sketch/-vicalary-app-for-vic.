@@ -65,11 +65,33 @@ const countryToLangMap: Record<string, string[]> = {
 };
 
 function extractMediaUrl(record: any): string | null {
-  const meta = record.metadata
+  const meta = record?.metadata
   if (!meta) return null
-  if (typeof meta === 'object') return meta.url || meta.publicUrl || null
-  if (typeof meta === 'string' && meta.startsWith('http')) return meta
-  return null
+  let url = ''
+  if (typeof meta === 'object') url = meta.url || meta.publicUrl || ''
+  if (typeof meta === 'string' && meta.startsWith('http')) url = meta
+  if (!url) return null
+
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null
+    // Guard against SSRF to internal/cloud metadata networks
+    const hostname = parsed.hostname.toLowerCase()
+    if (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '0.0.0.0' ||
+      hostname === '169.254.169.254' ||
+      hostname.startsWith('10.') ||
+      hostname.startsWith('192.168.') ||
+      hostname.startsWith('172.16.')
+    ) {
+      return null
+    }
+    return parsed.toString()
+  } catch {
+    return null
+  }
 }
 
 async function getGeoInfo(supabase: any, clientIp: string) {
@@ -118,7 +140,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ message: 'Ignored' })
     }
 
-    const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY || process.env.OPENAI_API_KEY
+    const apiKey = process.env.OPENAI_API_KEY
     if (!apiKey || apiKey.startsWith('your_') || apiKey.startsWith('sk-your')) {
       console.error('[Coach-Reply] Critical Error: OPENAI_API_KEY is missing or is a placeholder. Check .env.local');
       throw new Error('AI Provider API key not set or is a placeholder')
@@ -443,6 +465,6 @@ Directly state your articulate, research-backed human answer now.`
       error: true,
       message: err.message,
       actionable_feedback: 'The AI Coach is momentarily overwhelmed. Re-sending your message might help.',
-    })
+    }, { status: 500 })
   }
 }

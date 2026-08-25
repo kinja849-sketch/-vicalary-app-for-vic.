@@ -8,7 +8,7 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: 'Missing prompt parameter' }, { status: 400 });
         }
 
-        const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+        const apiKey = process.env.OPENAI_API_KEY;
         if (!apiKey) {
             throw new Error('OpenAI API key missing');
         }
@@ -23,7 +23,8 @@ export async function POST(req: NextRequest) {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                prompt: prompt,
+                model: 'dall-e-3',
+                prompt: String(prompt).slice(0, 1000),
                 n: 1,
                 size: '1024x1024'
             }),

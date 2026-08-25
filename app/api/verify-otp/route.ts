@@ -1,13 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getAuthenticatedUser } from '@/lib/supabase-server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
 export async function POST(req: NextRequest) {
   try {
+    const authUser = await getAuthenticatedUser(req)
     const body = await req.json()
-    const { userId, phoneNumber, code } = body
+    const { phoneNumber, code } = body
+    const userId = authUser?.id || body.userId
 
     if (!userId || !phoneNumber || !code) {
       return NextResponse.json({ success: false, message: 'Missing required fields' }, { status: 400 })
+    }
+
+    if (typeof phoneNumber !== 'string' || typeof code !== 'string') {
+      return NextResponse.json({ success: false, message: 'Invalid field types' }, { status: 400 })
     }
 
     const cleanPhone = phoneNumber.replace(/\D/g, '')
@@ -36,10 +43,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, message: 'Verification code has expired' }, { status: 400 })
     }
 
-    // 3. Update status to verified
+    // 3. Update status to verified and invalidate the used code
     const { error: updateError } = await supabase
       .from('chat_users')
-      .update({ is_verified: true })
+      .update({ 
+        is_verified: true,
+        verification_code: null,
+        verification_expires_at: null
+      })
       .eq('id', userData.id)
 
     if (updateError) {
@@ -48,7 +59,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, message: 'Phone verified successfully' })
   } catch (error: any) {
-    console.error('verify-otp error:', error)
+    console.error('verify-otp error:', error?.message)
     return NextResponse.json({ success: false, message: error.message || 'An unexpected error occurred' }, { status: 500 })
   }
 }

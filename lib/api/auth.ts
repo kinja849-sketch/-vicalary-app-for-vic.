@@ -44,14 +44,8 @@ export const syncUserWithSupabase = async (supabaseUser: any) => {
         .eq('id', supabaseUser.id)
         .maybeSingle();
 
-    const extractNameFromEmail = (email: string) => {
-        if (!email) return 'User';
-        const namePart = email.split('@')[0];
-        return namePart.charAt(0).toUpperCase() + namePart.slice(1).replace(/[._-]/g, ' ');
-    };
-
     const metadataName = supabaseUser.user_metadata?.full_name || supabaseUser.user_metadata?.first_name;
-    const finalName = metadataName || (existingProfile?.full_name && existingProfile.full_name !== '-' ? existingProfile.full_name : extractNameFromEmail(supabaseUser.email));
+    const finalName = metadataName || (existingProfile?.full_name && existingProfile.full_name !== '-' ? existingProfile.full_name : 'User');
 
     const profilePayload: any = {
         id: supabaseUser.id,
@@ -112,13 +106,34 @@ export const updateUserProfile = async (userId: string, updates: any) => {
 }
 
 export const uploadAvatar = async (userId: string, file: File) => {
-    const fileExt = file.name.split('.').pop()
+    // 1. Validate file size (max 5MB)
+    const MAX_SIZE = 5 * 1024 * 1024;
+    if (file.size > MAX_SIZE) {
+        throw new Error('Avatar file size must be less than 5MB');
+    }
+
+    // 2. Validate MIME type and map to safe extension
+    const mimeMap: Record<string, string> = {
+        'image/jpeg': 'jpg',
+        'image/png': 'png',
+        'image/webp': 'webp',
+        'image/gif': 'gif'
+    };
+
+    const fileExt = mimeMap[file.type.toLowerCase()];
+    if (!fileExt) {
+        throw new Error('Invalid image format. Allowed formats: JPG, PNG, WEBP, GIF');
+    }
+
     const fileName = `${Date.now()}.${fileExt}`
     const filePath = `${userId}/${fileName}`
 
     const { error: uploadError } = await supabase.storage
         .from('user-avatars')
-        .upload(filePath, file)
+        .upload(filePath, file, {
+            contentType: file.type,
+            upsert: true
+        })
 
     if (uploadError) throw uploadError
 
@@ -137,7 +152,11 @@ export const uploadAvatar = async (userId: string, file: File) => {
 }
 
 export const searchUsers = async (query: string, currentUserId: string) => {
-    if (!query || query.length < 2) return [];
+    if (!query || query.trim().length < 2) return [];
+
+    // Sanitize query to avoid PostgREST syntax injection (commas, parens, dots, percent)
+    const sanitized = query.replace(/[(),.%]/g, '').trim();
+    if (!sanitized || sanitized.length < 2) return [];
 
     // Only search for users who are fully verified for chat
     const { data, error } = await (supabase
@@ -150,11 +169,11 @@ export const searchUsers = async (query: string, currentUserId: string) => {
         `)
         .neq('id', currentUserId)
         .eq('chat_users.is_verified', true)
-        .or(`full_name.ilike.%${query}%, email.ilike.%${query}%`)
+        .or(`full_name.ilike.%${sanitized}%,email.ilike.%${sanitized}%`)
         .limit(10) as any);
 
     if (error) throw error;
-    return data;
+    return data || [];
 }
 
 // ============================================================================
@@ -256,36 +275,34 @@ export const saveOnboardingResponses = async (userId: string, responses: any) =>
         });
     }
 
-    // Initialize daily progress and user settings in the background to avoid blocking the user redirect
-    (async () => {
-        try {
-            const today = new Date().toISOString().split('T')[0];
-            
-            // 1. Initialize daily progress (Fixed: removed non-existent columns causing 400 error)
-            await supabase.from('daily_progress').upsert({
-                user_id: userId,
-                progress_date: today,
-                calories_goal: dailyCalorieGoal,
-                calories_consumed: 0,
-                meals_logged: 0
-            }, { onConflict: 'user_id,progress_date' });
+    // Initialize daily progress and user settings before returning to ensure state persistence
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        
+        // 1. Initialize daily progress
+        await supabase.from('daily_progress').upsert({
+            user_id: userId,
+            progress_date: today,
+            calories_goal: dailyCalorieGoal,
+            calories_consumed: 0,
+            meals_logged: 0
+        }, { onConflict: 'user_id,progress_date' });
 
-            // 2. Detect location to save settings
-            const loc = await detectLocation();
-            await supabase.from('user_settings').upsert({
-                user_id: userId,
-                language: getPrimaryLanguage(loc?.languages),
-                currency: loc?.currency || 'USD',
-                timezone: loc?.timezone || 'UTC',
-                country_code: loc?.country_code,
-                updated_at: new Date().toISOString()
-            }, { onConflict: 'user_id' });
-        } catch (err) {
-            console.warn("Non-critical background post-onboarding tasks failed:", err);
-        }
-    })();
+        // 2. Detect location to save settings
+        const loc = await detectLocation();
+        await supabase.from('user_settings').upsert({
+            user_id: userId,
+            language: getPrimaryLanguage(loc?.languages),
+            currency: loc?.currency || 'USD',
+            timezone: loc?.timezone || 'UTC',
+            country_code: loc?.country_code,
+            updated_at: new Date().toISOString()
+        }, { onConflict: 'user_id' });
+    } catch (err) {
+        console.warn("Post-onboarding initialization completed with non-fatal warning:", err);
+    }
 
-    return data
+    return data;
 
 }
 

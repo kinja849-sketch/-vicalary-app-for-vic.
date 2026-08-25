@@ -112,12 +112,14 @@ export const searchRecipes = async (searchTerm: string) => {
         const data = await res.json();
         return data.results || [];
     } catch (error) {
+        const sanitized = searchTerm.replace(/[(),.%]/g, '').trim();
+        if (!sanitized) return [];
         const { data, error: dbError } = await supabase
             .from('recipes')
             .select('*')
-            .or(`title.ilike.%${searchTerm}%,description.ilike.%${searchTerm}%`)
+            .or(`title.ilike.%${sanitized}%,description.ilike.%${sanitized}%`)
         if (dbError) throw dbError;
-        return data;
+        return data || [];
     }
 }
 
@@ -402,5 +404,14 @@ const updateDailyRecipeCount = async (userId: string) => {
     const { data: existingProgress } = await supabase.from('daily_progress').select('*').eq('user_id', userId).eq('progress_date', today).maybeSingle()
     if (existingProgress) {
         await supabase.from('daily_progress').update({ recipes_cooked: ((existingProgress as any).recipes_cooked || 0) + 1 } as any).eq('id', existingProgress.id)
+    } else {
+        await supabase.from('daily_progress').insert({
+            user_id: userId,
+            progress_date: today,
+            recipes_cooked: 1,
+            calories_consumed: 0,
+            calories_goal: 2000,
+            meals_logged: 0
+        } as any)
     }
 }
