@@ -177,7 +177,12 @@ export default function Budget() {
                         <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-6">{t('new_budget')}</h2>
                         <form onSubmit={handleCreateBudget} className="space-y-4">
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">{t('total_amount_label')} ({currencySymbol})</label>
+                                <div className="flex justify-between items-center mb-1">
+                                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">{t('total_amount_label')} ({currencySymbol})</label>
+                                    <span className="text-xs font-bold text-vic-green px-2 py-0.5 bg-vic-green/10 rounded-full">
+                                        Preview: {formatCurrency(newBudget.amount || 0)}
+                                    </span>
+                                </div>
                                 <input
                                     type="number"
                                     value={newBudget.amount}
@@ -185,6 +190,26 @@ export default function Budget() {
                                     className="w-full p-4 rounded-xl border-2 border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#0d1418] text-slate-900 dark:text-white text-lg font-bold focus:border-vic-green outline-none transition-all"
                                     required
                                 />
+                                {/* Quick Presets */}
+                                <div className="flex flex-wrap gap-2 mt-2">
+                                    {[100, 250, 500, 1000, 2500].map((amt) => {
+                                        const scaledAmt = currencySymbol === 'Rp' ? amt * 10000 : amt;
+                                        return (
+                                            <button
+                                                key={amt}
+                                                type="button"
+                                                onClick={() => setNewBudget(prev => ({ ...prev, amount: scaledAmt }))}
+                                                className={`px-2.5 py-1 text-xs font-bold rounded-lg border transition-all ${
+                                                    newBudget.amount === scaledAmt
+                                                        ? 'bg-vic-green text-slate-900 border-vic-green'
+                                                        : 'bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-400 border-transparent hover:bg-slate-200'
+                                                }`}
+                                            >
+                                                {formatCurrency(scaledAmt)}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div>

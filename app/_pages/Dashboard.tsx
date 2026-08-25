@@ -21,7 +21,6 @@ import { CustomAnimatedIcon } from "@/components/CustomAnimatedIcon";
 import { CheckpointCalendar } from "@/components/CheckpointCalendar";
 import { useTranslation } from "@/lib/api/translation";
 import { useCurrency } from "@/lib/CurrencyContext";
-import { BottomNavbar } from "@/components/BottomNavbar";
 import { supabase } from "@/lib/supabase";
 import { SpiritualReminder } from "@/components/SpiritualReminder";
 import { ManualProgressInput } from "@/components/ManualProgressInput";
@@ -777,66 +776,68 @@ export default function Dashboard() {
       <div className="grid grid-cols-4 gap-3 px-4 py-6">
         <div className="flex flex-col items-center gap-2">
           <button
+            type="button"
             onClick={openCamera}
-            className="aspect-square w-full rounded-2xl bg-[#D1F7C4] dark:bg-[#1a2e21] flex items-center justify-center transition-all hover:brightness-95 active:scale-95 border-none shadow-none overflow-hidden relative group"
+            className="aspect-square w-full rounded-2xl bg-[#D1F7C4] dark:bg-[#1a2e21] flex items-center justify-center transition-all hover:brightness-95 active:scale-95 border-none shadow-none overflow-hidden relative group touch-manipulation cursor-pointer"
           >
-            <div className="absolute inset-0 bg-white/5 opacity-0 dark:group-hover:opacity-20 transition-opacity" />
+            <div className="absolute inset-0 bg-white/5 opacity-0 dark:group-hover:opacity-20 transition-opacity pointer-events-none" />
             <CustomAnimatedIcon
               src="/cute-camera.gif"
               size={120}
-              className="w-[110%] h-[110%]"
-              loop={window.innerWidth < 768}
+              className="w-[110%] h-[110%] pointer-events-none"
+              loop={typeof window !== 'undefined' && window.innerWidth < 768}
             />
           </button>
-          <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-tighter">{t('camera')}</span>
+          <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-tighter pointer-events-none">{t('camera')}</span>
         </div>
 
         <div className="flex flex-col items-center gap-2">
           <button
+            type="button"
             onClick={openScanner}
-            className="aspect-square w-full rounded-2xl bg-[#D1F7C4] dark:bg-[#1a2e21] flex items-center justify-center transition-all hover:brightness-95 active:scale-95 border-none shadow-none overflow-hidden relative group"
+            className="aspect-square w-full rounded-2xl bg-[#D1F7C4] dark:bg-[#1a2e21] flex items-center justify-center transition-all hover:brightness-95 active:scale-95 border-none shadow-none overflow-hidden relative group touch-manipulation cursor-pointer"
           >
-            <div className="absolute inset-0 bg-white/5 opacity-0 dark:group-hover:opacity-20 transition-opacity" />
+            <div className="absolute inset-0 bg-white/5 opacity-0 dark:group-hover:opacity-20 transition-opacity pointer-events-none" />
             <CustomAnimatedIcon
               src="/scan.gif"
               size={120}
-              className="w-[110%] h-[110%]"
-              loop={window.innerWidth < 768}
+              className="w-[110%] h-[110%] pointer-events-none"
+              loop={typeof window !== 'undefined' && window.innerWidth < 768}
             />
           </button>
-          <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-tighter">{t('scanner')}</span>
+          <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-tighter pointer-events-none">{t('scanner')}</span>
         </div>
 
         <div className="flex flex-col items-center gap-2">
           <Link
             href="/cookbook?tab=suggested"
-            className="aspect-square w-full rounded-2xl bg-[#D1F7C4] dark:bg-[#1a2e21] flex items-center justify-center transition-all hover:brightness-95 active:scale-95 border-none shadow-none overflow-hidden relative group"
+            className="aspect-square w-full rounded-2xl bg-[#D1F7C4] dark:bg-[#1a2e21] flex items-center justify-center transition-all hover:brightness-95 active:scale-95 border-none shadow-none overflow-hidden relative group touch-manipulation cursor-pointer"
           >
-            <div className="absolute inset-0 bg-white/5 opacity-0 dark:group-hover:opacity-20 transition-opacity" />
+            <div className="absolute inset-0 bg-white/5 opacity-0 dark:group-hover:opacity-20 transition-opacity pointer-events-none" />
             <CustomAnimatedIcon
               src="/chef.gif"
               size={120}
-              className="w-[110%] h-[110%]"
-              loop={window.innerWidth < 768}
+              className="w-[110%] h-[110%] pointer-events-none"
+              loop={typeof window !== 'undefined' && window.innerWidth < 768}
             />
           </Link>
-          <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-tighter">{t('cook')}</span>
+          <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-tighter pointer-events-none">{t('cook')}</span>
         </div>
 
         <div className="flex flex-col items-center gap-2">
           <Link
             href="/budget"
-            className="aspect-square w-full rounded-2xl bg-[#D1F7C4] dark:bg-[#1a2e21] flex items-center justify-center transition-all hover:brightness-95 active:scale-95 border-none shadow-none overflow-hidden relative group"
+            className="aspect-square w-full rounded-2xl bg-[#D1F7C4] dark:bg-[#1a2e21] flex items-center justify-center transition-all hover:brightness-95 active:scale-95 border-none shadow-none overflow-hidden relative group touch-manipulation cursor-pointer"
           >
-            <div className="absolute inset-0 bg-white/5 opacity-0 dark:group-hover:opacity-20 transition-opacity" />
+            <div className="absolute inset-0 bg-white/5 opacity-0 dark:group-hover:opacity-20 transition-opacity pointer-events-none" />
             <CustomAnimatedIcon
               src="/money-bag.gif"
               size={120}
-              className="w-[110%] h-[110%]"
-              loop={window.innerWidth < 768}
+              className="w-[110%] h-[110%] pointer-events-none"
+              loop={typeof window !== 'undefined' && window.innerWidth < 768}
             />
           </Link>
-          <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-tighter">{t('budget')}</span>
+          <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-tighter pointer-events-none">{t('budget')}</span>
         </div>
       </div>
 
@@ -856,7 +857,7 @@ export default function Dashboard() {
         />
       )}
 
-      <div className="mt-4 pb-20"> {/* Bottom padding for navbar */}
+      <div className="mt-4 pb-4">
         <FoodCarousel
           breakfastMeals={suggestions?.breakfast || []}
           lunchMeals={suggestions?.lunch || []}
@@ -865,8 +866,6 @@ export default function Dashboard() {
           strictMode={false}
         />
       </div>
-
-      <BottomNavbar />
     </div>
   );
 }

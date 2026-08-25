@@ -102,7 +102,7 @@ export const CustomAnimatedIcon: React.FC<CustomAnimatedIconProps> = ({
     if (isGif) {
         return (
             <div
-                className={`relative inline-flex items-center justify-center overflow-hidden ${className}`}
+                className={`relative inline-flex items-center justify-center overflow-hidden pointer-events-none ${className}`}
                 style={{ width: size, height: size }}
             >
                 <img
@@ -118,7 +118,7 @@ export const CustomAnimatedIcon: React.FC<CustomAnimatedIconProps> = ({
 
     return (
         <div
-            className={`relative inline-flex items-center justify-center overflow-hidden ${className}`}
+            className={`relative inline-flex items-center justify-center overflow-hidden pointer-events-none ${className}`}
             onMouseEnter={handleMouseEnter}
             onMouseLeave={handleMouseLeave}
             style={{ width: size, height: size }}
