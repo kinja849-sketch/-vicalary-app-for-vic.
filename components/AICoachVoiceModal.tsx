@@ -30,6 +30,15 @@ interface TurnMetricsHUD {
   audioStatus: string;
 }
 
+const ALLOWED_TRANSITIONS: Record<ConversationState, ConversationState[]> = {
+  idle: ['listening', 'error'],
+  listening: ['transcribing', 'processing', 'idle', 'error'],
+  transcribing: ['processing', 'listening', 'idle', 'error'],
+  processing: ['speaking', 'error', 'idle'],
+  speaking: ['listening', 'idle', 'error'],
+  error: ['idle', 'listening']
+};
+
 export default function AICoachVoiceModal({
   userId,
   userName = 'Vic',
@@ -71,7 +80,7 @@ export default function AICoachVoiceModal({
   const abortControllerRef = useRef<AbortController | null>(null);
   const sessionTurnsRef = useRef<{ role: 'user' | 'assistant'; content: string; created_at: string }[]>([]);
 
-  // Mobile Web Audio unlocker
+  // Mobile Web Audio unlocker (Triggered on early user gestures)
   const unlockAudioContext = useCallback(async () => {
     try {
       if (!audioContextRef.current) {
@@ -89,14 +98,23 @@ export default function AICoachVoiceModal({
     }
   }, []);
 
-  // Synchronized state updater
-  const updateVoiceState = useCallback((nextState: ConversationState) => {
+  // Synchronized state updater with strict transition validation
+  const updateVoiceState = useCallback((nextState: ConversationState, reason = 'standard') => {
+    const currentState = voiceStateRef.current;
+    if (currentState !== nextState) {
+      const allowed = ALLOWED_TRANSITIONS[currentState] || [];
+      if (!allowed.includes(nextState)) {
+        console.warn(`[VOICE BLOCKED] Illegal state transition from ${currentState} -> ${nextState} (reason: ${reason}, activeTurn: ${activeTurnIdRef.current})`);
+        return;
+      }
+    }
+
     voiceStateRef.current = nextState;
     if (isMountedRef.current) {
       setState(nextState);
       setDebugHUD(prev => ({ ...prev, state: nextState }));
     }
-    console.log(`[VOICE TURN ${activeTurnIdRef.current || 'INIT'}] STATE: ${nextState}`);
+    console.log(`[VOICE TURN ${activeTurnIdRef.current || 'INIT'}] STATE: ${nextState} (${reason})`);
   }, []);
 
   // Sync mute state refs
@@ -197,16 +215,24 @@ export default function AICoachVoiceModal({
       const audio = new Audio(audioSrc);
       currentAudioRef.current = audio;
 
+      console.log(`[VOICE TURN ${turnId}] audio.play() called`);
       await new Promise<void>((resolve) => {
-        audio.onended = () => resolve();
-        audio.onerror = (e) => {
-          console.warn('[AICoachVoiceModal] Audio error:', e);
+        audio.onended = () => {
+          console.log(`[VOICE TURN ${turnId}] Audio onended event fired`);
           resolve();
         };
-        audio.play().catch((playErr) => {
-          console.warn('[AICoachVoiceModal] audio.play() prevented by browser:', playErr);
+        audio.onerror = (e) => {
+          console.warn(`[VOICE TURN ${turnId}] Audio onerror event fired:`, e);
           resolve();
-        });
+        };
+        audio.play()
+          .then(() => {
+            console.log(`[VOICE TURN ${turnId}] Audio playback SUCCESS`);
+          })
+          .catch((playErr: any) => {
+            console.error(`[VOICE TURN ${turnId}] audio.play() FAILED: ${playErr?.name || 'Error'} - ${playErr?.message || playErr}`);
+            resolve();
+          });
       });
     } catch (err) {
       console.warn('[AICoachVoiceModal] Direct audio playback error:', err);
@@ -219,10 +245,10 @@ export default function AICoachVoiceModal({
         setDebugHUD(prev => ({ ...prev, audioStatus: 'Idle' }));
         if (isMountedRef.current && !isMutedRef.current) {
           console.log(`[VOICE TURN ${turnId}] 5. Audio ended -> Returning to LISTENING`);
-          updateVoiceState('listening');
+          updateVoiceState('listening', 'AUDIO_COMPLETED');
           startListening();
         } else if (isMountedRef.current) {
-          updateVoiceState('idle');
+          updateVoiceState('idle', 'AUDIO_COMPLETED_MUTED');
         }
       }
     }
@@ -234,7 +260,7 @@ export default function AICoachVoiceModal({
     if (!isMountedRef.current || isAudioMutedRef.current || !text.trim()) {
       activeTurnIdRef.current = null;
       if (isMountedRef.current && !isMutedRef.current) {
-        updateVoiceState('listening');
+        updateVoiceState('listening', 'SPEAK_SKIPPED');
         startListening();
       }
       return;
@@ -266,13 +292,21 @@ export default function AICoachVoiceModal({
 
         const audio = new Audio(audioUrl);
         currentAudioRef.current = audio;
-        updateVoiceState('speaking');
+        updateVoiceState('speaking', 'TTS_FALLBACK_START');
         setDebugHUD(prev => ({ ...prev, audioStatus: 'Playing ⚡' }));
 
+        console.log(`[VOICE TURN ${turnId}] Fallback TTS audio.play() called`);
         await new Promise<void>((resolve) => {
           audio.onended = () => resolve();
           audio.onerror = () => resolve();
-          audio.play().catch(() => resolve());
+          audio.play()
+            .then(() => {
+              console.log(`[VOICE TURN ${turnId}] Fallback TTS playback SUCCESS`);
+            })
+            .catch((playErr: any) => {
+              console.error(`[VOICE TURN ${turnId}] Fallback TTS audio.play() FAILED:`, playErr);
+              resolve();
+            });
         });
 
         try { URL.revokeObjectURL(audioUrl); } catch (e) {}
@@ -287,10 +321,10 @@ export default function AICoachVoiceModal({
         activeTurnIdRef.current = null;
         setDebugHUD(prev => ({ ...prev, audioStatus: 'Idle' }));
         if (isMountedRef.current && !isMutedRef.current) {
-          updateVoiceState('listening');
+          updateVoiceState('listening', 'TTS_FALLBACK_COMPLETED');
           startListening();
         } else if (isMountedRef.current) {
-          updateVoiceState('idle');
+          updateVoiceState('idle', 'TTS_FALLBACK_COMPLETED_MUTED');
         }
       }
     }
@@ -627,6 +661,7 @@ export default function AICoachVoiceModal({
 
   // Request Microphone Permission with echo cancellation and noise suppression
   const requestMicPermission = async () => {
+    await unlockAudioContext();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -651,9 +686,9 @@ export default function AICoachVoiceModal({
   // Auto-start listening if permission is already granted on mount
   useEffect(() => {
     if (hasMicPermission === true) {
-      startListening();
+      unlockAudioContext().then(() => startListening());
     }
-  }, [hasMicPermission, startListening]);
+  }, [hasMicPermission, startListening, unlockAudioContext]);
 
   const toggleMute = () => {
     if (isMuted) {
