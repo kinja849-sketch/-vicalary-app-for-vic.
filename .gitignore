@@ -64,5 +64,9 @@ voice-agent/inspect_out.txt
 .gemini/
 inspect_rpc.js
 
+# Netlify
+.netlify/
+
+
 
 
