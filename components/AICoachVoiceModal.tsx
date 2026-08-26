@@ -79,6 +79,7 @@ export default function AICoachVoiceModal({
   const turnIdRef = useRef<number>(0);
   const abortControllerRef = useRef<AbortController | null>(null);
   const sessionTurnsRef = useRef<{ role: 'user' | 'assistant'; content: string; created_at: string }[]>([]);
+  const startListeningRef = useRef<() => void>(() => {});
 
   // Mobile Web Audio unlocker (Triggered on early user gestures)
   const unlockAudioContext = useCallback(async () => {
@@ -126,7 +127,7 @@ export default function AICoachVoiceModal({
     isAudioMutedRef.current = isAudioMuted;
   }, [isAudioMuted]);
 
-  // Check initial microphone permission on mount
+  // Check initial microphone permission on mount (One-time check, no reactive turn interference)
   useEffect(() => {
     isMountedRef.current = true;
 
@@ -136,14 +137,14 @@ export default function AICoachVoiceModal({
           const status = await navigator.permissions.query({ name: 'microphone' as any });
           if (status.state === 'granted') {
             setHasMicPermission(true);
+            unlockAudioContext().then(() => {
+              if (isMountedRef.current && voiceStateRef.current === 'idle' && activeTurnIdRef.current === null) {
+                startListeningRef.current();
+              }
+            });
           } else {
             setHasMicPermission(false);
           }
-          status.onchange = () => {
-            if (isMountedRef.current) {
-              setHasMicPermission(status.state === 'granted');
-            }
-          };
         } catch {
           setHasMicPermission(false);
         }
@@ -167,7 +168,7 @@ export default function AICoachVoiceModal({
         } catch (e) {}
       }
     };
-  }, []);
+  }, [unlockAudioContext]);
 
   // Instant interruption helper: cuts off AI speech and aborts in-flight turn immediately
   const interruptAgent = useCallback(() => {
@@ -623,15 +624,23 @@ export default function AICoachVoiceModal({
       };
 
       recognition.onerror = (event: any) => {
+        // If turn is active (processing or speaking), completely ignore STT errors (standard mobile audio focus switches)
+        if (activeTurnIdRef.current !== null || voiceStateRef.current === 'processing' || voiceStateRef.current === 'speaking') {
+          console.log(`[STT] Ignoring onerror '${event.error}' during active turn (state=${voiceStateRef.current}, turn=${activeTurnIdRef.current})`);
+          return;
+        }
+
         if (event.error === 'not-allowed') {
-          setHasMicPermission(false);
-          toast.error('Microphone permission blocked. Please enable mic access.');
-          updateVoiceState('idle');
+          if (voiceStateRef.current === 'listening' && activeTurnIdRef.current === null) {
+            setHasMicPermission(false);
+            toast.error('Microphone permission blocked. Please enable mic access.');
+            updateVoiceState('idle', 'MIC_PERMISSION_BLOCKED');
+          }
         } else if (event.error !== 'no-speech' && event.error !== 'aborted') {
           console.warn('[AICoachVoiceModal] STT Error:', event.error);
-        }
-        if (event.error !== 'no-speech' && event.error !== 'aborted' && isMountedRef.current && activeTurnIdRef.current === null) {
-          updateVoiceState('idle');
+          if (isMountedRef.current && activeTurnIdRef.current === null) {
+            updateVoiceState('idle', `STT_ERROR_${event.error}`);
+          }
         }
       };
 
@@ -651,13 +660,15 @@ export default function AICoachVoiceModal({
       };
 
       recognitionRef.current = recognition;
-      updateVoiceState('listening');
+      updateVoiceState('listening', 'START_LISTENING');
       recognition.start();
     } catch (e) {
       console.error('[AICoachVoiceModal] Start listening error:', e);
-      updateVoiceState('idle');
+      updateVoiceState('idle', 'START_LISTENING_FAILED');
     }
   }, [voiceLang, processUserSpeech, updateVoiceState]);
+
+  startListeningRef.current = startListening;
 
   // Request Microphone Permission with echo cancellation and noise suppression
   const requestMicPermission = async () => {
@@ -674,7 +685,9 @@ export default function AICoachVoiceModal({
       stream.getTracks().forEach(track => track.stop());
       setHasMicPermission(true);
       setTimeout(() => {
-        startListening();
+        if (isMountedRef.current && voiceStateRef.current === 'idle' && activeTurnIdRef.current === null) {
+          startListening();
+        }
       }, 200);
     } catch (err) {
       console.error('[AICoachVoiceModal] Microphone access denied:', err);
@@ -682,13 +695,6 @@ export default function AICoachVoiceModal({
       setHasMicPermission(false);
     }
   };
-
-  // Auto-start listening if permission is already granted on mount
-  useEffect(() => {
-    if (hasMicPermission === true) {
-      unlockAudioContext().then(() => startListening());
-    }
-  }, [hasMicPermission, startListening, unlockAudioContext]);
 
   const toggleMute = () => {
     if (isMuted) {
