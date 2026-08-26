@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, MicOff, Volume2, VolumeX, X, ShieldCheck } from 'lucide-react';
+import { Mic, MicOff, Volume2, VolumeX, X, ShieldCheck, Activity } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
@@ -21,6 +21,15 @@ import { normalizeSpokenInput } from '@/lib/services/ai/SpeechNormalizer';
 
 type ConversationState = 'idle' | 'listening' | 'transcribing' | 'processing' | 'speaking' | 'error';
 
+interface TurnMetricsHUD {
+  turnId: string | null;
+  state: ConversationState;
+  heard: string;
+  apiStatus: string;
+  latencyMs: number | null;
+  audioStatus: string;
+}
+
 export default function AICoachVoiceModal({
   userId,
   userName = 'Vic',
@@ -38,6 +47,15 @@ export default function AICoachVoiceModal({
   // Default explicitly to 'en-US' (independent of IP geographic location)
   const [voiceLang, setVoiceLang] = useState<'en-US' | 'id-ID' | 'es-ES' | 'ar-SA' | 'fr-FR'>('en-US');
   const [liveInterim, setLiveInterim] = useState<string>('');
+  const [showDebugHUD, setShowDebugHUD] = useState(false);
+  const [debugHUD, setDebugHUD] = useState<TurnMetricsHUD>({
+    turnId: null,
+    state: 'idle',
+    heard: '',
+    apiStatus: 'Ready',
+    latencyMs: null,
+    audioStatus: 'Ready'
+  });
 
   const voiceStateRef = useRef<ConversationState>('idle');
   const activeTurnIdRef = useRef<string | null>(null);
@@ -45,6 +63,7 @@ export default function AICoachVoiceModal({
   const isAudioMutedRef = useRef(false);
   const recognitionRef = useRef<any>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
   const isMountedRef = useRef(true);
   const silenceTimerRef = useRef<any>(null);
   const sessionIdRef = useRef<string>(crypto.randomUUID ? crypto.randomUUID() : `sess_${Date.now()}`);
@@ -52,13 +71,32 @@ export default function AICoachVoiceModal({
   const abortControllerRef = useRef<AbortController | null>(null);
   const sessionTurnsRef = useRef<{ role: 'user' | 'assistant'; content: string; created_at: string }[]>([]);
 
+  // Mobile Web Audio unlocker
+  const unlockAudioContext = useCallback(async () => {
+    try {
+      if (!audioContextRef.current) {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioCtx) {
+          audioContextRef.current = new AudioCtx();
+        }
+      }
+      if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
+        console.log('[VOICE] AudioContext unlocked successfully');
+      }
+    } catch (err) {
+      console.warn('[VOICE] AudioContext unlock warning:', err);
+    }
+  }, []);
+
   // Synchronized state updater
   const updateVoiceState = useCallback((nextState: ConversationState) => {
     voiceStateRef.current = nextState;
     if (isMountedRef.current) {
       setState(nextState);
+      setDebugHUD(prev => ({ ...prev, state: nextState }));
     }
-    console.log(`[VOICE] STATE: ${nextState} (turn: ${activeTurnIdRef.current || 'none'})`);
+    console.log(`[VOICE TURN ${activeTurnIdRef.current || 'INIT'}] STATE: ${nextState}`);
   }, []);
 
   // Sync mute state refs
@@ -138,6 +176,7 @@ export default function AICoachVoiceModal({
 
   // Direct Fast Audio Playback from Server Payload
   const playDirectAudio = useCallback(async (audioSrc: string, turnId: string) => {
+    await unlockAudioContext();
     if (!isMountedRef.current || isAudioMutedRef.current) {
       activeTurnIdRef.current = null;
       if (isMountedRef.current && !isMutedRef.current) {
@@ -152,6 +191,7 @@ export default function AICoachVoiceModal({
     }
 
     updateVoiceState('speaking');
+    setDebugHUD(prev => ({ ...prev, audioStatus: 'Playing ⚡' }));
 
     try {
       const audio = new Audio(audioSrc);
@@ -159,8 +199,14 @@ export default function AICoachVoiceModal({
 
       await new Promise<void>((resolve) => {
         audio.onended = () => resolve();
-        audio.onerror = () => resolve();
-        audio.play().catch(() => resolve());
+        audio.onerror = (e) => {
+          console.warn('[AICoachVoiceModal] Audio error:', e);
+          resolve();
+        };
+        audio.play().catch((playErr) => {
+          console.warn('[AICoachVoiceModal] audio.play() prevented by browser:', playErr);
+          resolve();
+        });
       });
     } catch (err) {
       console.warn('[AICoachVoiceModal] Direct audio playback error:', err);
@@ -170,8 +216,9 @@ export default function AICoachVoiceModal({
       // Only transition back to listening if this turn is still the active turn
       if (activeTurnIdRef.current === turnId) {
         activeTurnIdRef.current = null;
+        setDebugHUD(prev => ({ ...prev, audioStatus: 'Idle' }));
         if (isMountedRef.current && !isMutedRef.current) {
-          console.log('[STT] Starting because: AI_RESPONSE_COMPLETED');
+          console.log(`[VOICE TURN ${turnId}] 5. Audio ended -> Returning to LISTENING`);
           updateVoiceState('listening');
           startListening();
         } else if (isMountedRef.current) {
@@ -179,10 +226,11 @@ export default function AICoachVoiceModal({
         }
       }
     }
-  }, [updateVoiceState]);
+  }, [updateVoiceState, unlockAudioContext]);
 
   // Strict OpenAI Fast Neural Voice Playback (Fallback)
   const speakText = useCallback(async (text: string, turnId: string) => {
+    await unlockAudioContext();
     if (!isMountedRef.current || isAudioMutedRef.current || !text.trim()) {
       activeTurnIdRef.current = null;
       if (isMountedRef.current && !isMutedRef.current) {
@@ -219,6 +267,7 @@ export default function AICoachVoiceModal({
         const audio = new Audio(audioUrl);
         currentAudioRef.current = audio;
         updateVoiceState('speaking');
+        setDebugHUD(prev => ({ ...prev, audioStatus: 'Playing ⚡' }));
 
         await new Promise<void>((resolve) => {
           audio.onended = () => resolve();
@@ -236,6 +285,7 @@ export default function AICoachVoiceModal({
 
       if (activeTurnIdRef.current === turnId) {
         activeTurnIdRef.current = null;
+        setDebugHUD(prev => ({ ...prev, audioStatus: 'Idle' }));
         if (isMountedRef.current && !isMutedRef.current) {
           updateVoiceState('listening');
           startListening();
@@ -244,7 +294,7 @@ export default function AICoachVoiceModal({
         }
       }
     }
-  }, [voiceLang, updateVoiceState]);
+  }, [voiceLang, updateVoiceState, unlockAudioContext]);
 
   // Process user speech with AI Health Coach (Single-Flight Turn Manager)
   const processUserSpeech = useCallback(async (userText: string) => {
@@ -257,6 +307,8 @@ export default function AICoachVoiceModal({
     activeTurnIdRef.current = turnId;
     turnIdRef.current += 1;
     const currentTurn = turnIdRef.current;
+
+    await unlockAudioContext();
 
     // Interrupt any previous controller/audio
     if (abortControllerRef.current) {
@@ -275,6 +327,14 @@ export default function AICoachVoiceModal({
 
     updateVoiceState('processing');
     setLiveInterim('');
+    setDebugHUD(prev => ({
+      ...prev,
+      turnId: turnId.slice(0, 8),
+      heard: cleanedText,
+      apiStatus: 'Dispatching...',
+      latencyMs: null,
+      audioStatus: 'Waiting'
+    }));
 
     // Record user turn in-memory
     sessionTurnsRef.current.push({
@@ -315,7 +375,7 @@ export default function AICoachVoiceModal({
       }
 
       const reqStartTime = performance.now();
-      console.log(`[VOICE] Dispatched turn ${turnId} to /api/conversation/process...`);
+      console.log(`[VOICE TURN ${turnId}] 2. Dispatched to /api/conversation/process...`);
 
       // 3. Call unified conversation orchestrator with live streaming
       const coachRes = await fetch('/api/conversation/process', {
@@ -340,7 +400,10 @@ export default function AICoachVoiceModal({
         }),
       });
 
-      if (!coachRes.ok) throw new Error('AI Coach process conversation failed');
+      if (!coachRes.ok) {
+        setDebugHUD(prev => ({ ...prev, apiStatus: `Error ${coachRes.status}` }));
+        throw new Error(`AI Coach process conversation failed with status ${coachRes.status}`);
+      }
 
       let replyText = '';
       let hasStartedAudio = false;
@@ -366,14 +429,20 @@ export default function AICoachVoiceModal({
                 if (event.type === 'first_audio' && event.audioBase64 && !hasStartedAudio && activeTurnIdRef.current === turnId) {
                   hasStartedAudio = true;
                   const timeToAudio = Math.round(performance.now() - reqStartTime);
-                  console.log(`[VOICE] Time-to-first-audio: ${timeToAudio}ms ⚡ (Blob speaking now!)`, event.metrics);
+                  console.log(`[VOICE TURN ${turnId}] 3. First audio chunk received (${timeToAudio}ms ⚡)`, event.metrics);
+                  setDebugHUD(prev => ({
+                    ...prev,
+                    apiStatus: '200 OK (Stream)',
+                    latencyMs: timeToAudio,
+                    audioStatus: 'Playing ⚡'
+                  }));
                   if (isMountedRef.current && !isAudioMutedRef.current) {
                     playDirectAudio(event.audioBase64, turnId).catch(err => console.error('[AICoachVoiceModal] Audio play error:', err));
                   }
                 } else if (event.type === 'done') {
                   replyText = event.fullText;
                   const serverDuration = Math.round(performance.now() - reqStartTime);
-                  console.log(`[VOICE] Complete turn finished in ${serverDuration}ms:`, event.metrics);
+                  console.log(`[VOICE TURN ${turnId}] 4. Complete turn finished in ${serverDuration}ms:`, event.metrics);
                 }
               } catch (e) {}
             }
@@ -382,10 +451,15 @@ export default function AICoachVoiceModal({
       } else {
         // Fallback for standard JSON response
         const data = await coachRes.json();
+        const timeToAudio = Math.round(performance.now() - reqStartTime);
+        setDebugHUD(prev => ({
+          ...prev,
+          apiStatus: '200 OK (JSON)',
+          latencyMs: timeToAudio
+        }));
         replyText = data.content || data.replyText || data.message || `I hear you, ${resolvedUserName}. How can I best guide your health goals today?`;
         if (data.audioBase64 && isMountedRef.current && !isAudioMutedRef.current && activeTurnIdRef.current === turnId) {
-          const timeToAudio = Math.round(performance.now() - reqStartTime);
-          console.log(`[VOICE] Time-to-first-audio: ${timeToAudio}ms ⚡ (Blob speaking)`, data.metrics);
+          console.log(`[VOICE TURN ${turnId}] 3. Audio payload received (${timeToAudio}ms ⚡)`, data.metrics);
           await playDirectAudio(data.audioBase64, turnId);
           hasStartedAudio = true;
         }
@@ -633,7 +707,7 @@ export default function AICoachVoiceModal({
         exit={{ opacity: 0 }}
         className="fixed inset-0 z-[120] bg-slate-950/95 backdrop-blur-3xl flex flex-col justify-between items-center p-6 select-none text-white overflow-hidden font-display"
       >
-        {/* Clean Top Header with Language Selector */}
+        {/* Clean Top Header with Language Selector & Live Diagnostic HUD */}
         <div className="relative z-10 flex items-center justify-between w-full max-w-md pt-2 px-1">
           <div className="flex items-center gap-2">
             <h3 className="font-bold text-base text-slate-100">Health Coach</h3>
@@ -660,6 +734,18 @@ export default function AICoachVoiceModal({
                 <option value="fr-FR" className="bg-slate-900 text-white">🇫🇷 French (fr-FR)</option>
               </select>
             </div>
+
+            {/* Diagnostic HUD Toggle */}
+            <button
+              onClick={() => setShowDebugHUD(!showDebugHUD)}
+              className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase transition-all flex items-center gap-1 ${
+                showDebugHUD ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/30' : 'bg-white/10 text-slate-300 hover:text-white'
+              }`}
+              title="Toggle Mobile Voice Diagnostics"
+            >
+              <Activity size={12} />
+              <span>HUD</span>
+            </button>
           </div>
 
           <button
@@ -737,6 +823,37 @@ export default function AICoachVoiceModal({
               >
                 <span className="text-slate-400 mr-1.5 font-medium">Heard:</span>
                 <span className="italic font-semibold text-white">"{liveInterim}"</span>
+              </motion.div>
+            )}
+
+            {/* Real-Time Mobile Diagnostic HUD */}
+            {showDebugHUD && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 8 }}
+                className="w-full max-w-sm px-3.5 py-2.5 rounded-2xl bg-black/75 backdrop-blur-xl border border-white/15 text-[11px] font-mono text-slate-300 space-y-1.5 shadow-2xl text-left"
+              >
+                <div className="flex justify-between items-center text-emerald-400 font-bold border-b border-white/10 pb-1">
+                  <span className="flex items-center gap-1.5">
+                    <Activity size={12} className="text-emerald-400 animate-pulse" />
+                    <span>MOBILE DIAGNOSTICS</span>
+                  </span>
+                  <span className="uppercase text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-bold">
+                    {debugHUD.state}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-x-2 gap-y-1 pt-0.5 text-[10.5px]">
+                  <div><span className="text-slate-500">Turn:</span> <span className="text-slate-200 font-bold">{debugHUD.turnId || 'none'}</span></div>
+                  <div><span className="text-slate-500">API:</span> <span className="text-emerald-300 font-bold">{debugHUD.apiStatus}</span></div>
+                  <div><span className="text-slate-500">TTS:</span> <span className="text-cyan-300 font-bold">{debugHUD.audioStatus}</span></div>
+                  <div><span className="text-slate-500">Latency:</span> <span className="text-amber-300 font-bold">{debugHUD.latencyMs ? `${debugHUD.latencyMs}ms` : '--'}</span></div>
+                </div>
+                {debugHUD.heard && (
+                  <div className="truncate text-slate-200 border-t border-white/10 pt-1 text-[10.5px]">
+                    <span className="text-slate-500">Last Utterance:</span> <span className="italic">"{debugHUD.heard}"</span>
+                  </div>
+                )}
               </motion.div>
             )}
           </div>
