@@ -12,8 +12,19 @@ export const getDynamicDailyBudget = (budget: BudgetData | null) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const end = new Date(budget.period_end);
-    end.setHours(23, 59, 59, 999);
+    let end: Date;
+    if (budget.period_end) {
+        const parts = budget.period_end.split('T')[0].split('-');
+        if (parts.length === 3) {
+            end = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 23, 59, 59, 999);
+        } else {
+            end = new Date(budget.period_end);
+            end.setHours(23, 59, 59, 999);
+        }
+    } else {
+        end = new Date();
+        end.setHours(23, 59, 59, 999);
+    }
     
     // Ensure we don't calculate for past dates
     if (today.getTime() > end.getTime()) return 0;

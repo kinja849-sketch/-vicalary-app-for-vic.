@@ -95,19 +95,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             try {
                 const settings = await getUserSettings(uid);
                 // If language is already manually set or settings exist with values, we might skip
-                // But the user wants real-time detection to set default language.
-                if (!settings || settings.is_language_auto !== false) {
+                if (!settings || !settings.country_code) {
                     const loc = await detectLocation();
                     if (loc) {
-                        const lang = getPrimaryLanguage(loc.languages);
                         await updateSettings(uid, {
-                            language: lang,
                             country_code: loc.country_code,
                             timezone: loc.timezone,
                             currency: loc.currency,
-                            is_language_auto: true
+                            is_language_auto: false
                         });
-                        console.log(`[Auth] Auto-configured location: ${loc.country_name}, Lang: ${lang}, Method: ${loc.method}`);
+                        console.log(`[Auth] Auto-configured location: ${loc.country_name}, Timezone: ${loc.timezone}, Method: ${loc.method}`);
                     } else {
                         console.warn("[Auth] No location detected by detectLocation()");
                     }

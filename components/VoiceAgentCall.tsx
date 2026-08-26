@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Mic, MicOff, PhoneOff, ChefHat, HeartPulse, Loader2 } from 'lucide-react';
 import HealthCoachSphere from '@/components/avatar/HealthCoachSphere';
 import { useDailyCall } from '@/hooks/useDailyCall';
@@ -123,7 +123,11 @@ export default function VoiceAgentCall({
     onClose();
   }, [leaveCall, activeCallId, onClose]);
 
+  const initializedRef = useRef(false);
+
   useEffect(() => {
+    if (initializedRef.current) return;
+    initializedRef.current = true;
     let isMounted = true;
 
     async function initCall() {
@@ -169,7 +173,7 @@ export default function VoiceAgentCall({
     return () => {
       isMounted = false;
     };
-  }, [mode, language, userId, recipeContext, extraContext, joinCall]);
+  }, [mode, language, userId, joinCall]);
 
   if (error) {
     return (

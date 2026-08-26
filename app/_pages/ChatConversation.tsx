@@ -1392,6 +1392,7 @@ export default function ChatConversation() {
             });
 
             setMessage("");
+            if (inputRef.current) inputRef.current.style.height = 'auto';
             setShowEmoji(false);
             scrollToBottom();
 
@@ -2158,43 +2159,20 @@ export default function ChatConversation() {
                                 <div className="animate-spin size-5 border-2 border-vic-green border-t-transparent rounded-full"></div>
                             </div>
                         ) : (
-                            <div className="flex-1 flex items-end gap-1 md:gap-2 bg-white dark:bg-[#202C33] rounded-[24px] shadow-sm py-[8px] px-2 relative border border-black/5 dark:border-white/5 min-w-0">
-                                {/* Emoji Button */}
+                            <div className="flex-1 flex items-end gap-1.5 bg-white dark:bg-[#202C33] rounded-[24px] shadow-sm py-[6px] px-2 relative border border-black/5 dark:border-white/5 min-w-0">
+                                {/* Leading Attachment Button */}
                                 <button
-                                    onClick={() => setShowEmoji(!showEmoji)}
-                                    className={`p-2 text-[#54656F] dark:text-[#8696A0] hover:text-[#111B21] dark:hover:text-[#D1D7DB] transition-colors rounded-full hover:bg-black/5 ${showEmoji ? 'text-[#00A884]' : ''}`}
+                                    type="button"
+                                    onClick={() => {
+                                        setShowAttachments(!showAttachments);
+                                        setShowEmoji(false);
+                                    }}
+                                    className={`p-2 text-[#54656F] dark:text-[#8696A0] hover:text-[#111B21] dark:hover:text-[#D1D7DB] transition-colors rounded-full hover:bg-black/5 shrink-0 ${showAttachments ? 'text-vic-green bg-black/5' : ''}`}
+                                    title="Add attachment or emoji"
+                                    aria-label="Add attachment or emoji"
                                 >
-                                    <Smile size={26} />
+                                    <Plus size={22} className={`transition-transform duration-200 ${showAttachments ? 'rotate-45 text-vic-green' : ''}`} />
                                 </button>
-
-                                {/* Pin (Attachment) Button */}
-                                <button
-                                    onClick={() => setShowAttachments(!showAttachments)}
-                                    className={`p-2 text-[#54656F] dark:text-[#8696A0] hover:text-[#111B21] transition-colors rounded-full hover:bg-black/5 ${showAttachments ? 'text-[#00A884] bg-black/5' : ''}`}
-                                >
-                                    <Paperclip className="rotate-45" size={26} />
-                                </button>
-
-                                {/* STT button */}
-                                <button
-                                    onClick={startDictation}
-                                    className={`p-2 transition-colors rounded-full hover:bg-black/5 ${isDictating ? 'text-red-500 animate-pulse bg-red-50' : 'text-[#54656F] dark:text-[#8696A0] hover:text-[#111B21]'}`}
-                                    title="Dictate"
-                                >
-                                    <Mic size={26} />
-                                </button>
-
-                                {/* Live AI Voice Conversation Mode (ChatGPT / Gemini style) */}
-                                {isAI && (
-                                    <button
-                                        type="button"
-                                        onClick={() => setShowAiVoiceModal(true)}
-                                        className="p-2 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-md shadow-emerald-500/30 hover:scale-110 active:scale-95 transition-all flex items-center justify-center shrink-0 border border-emerald-400/40 animate-pulse"
-                                        title="Start ChatGPT/Gemini Live Voice Conversation"
-                                    >
-                                        <Sparkles size={20} />
-                                    </button>
-                                )}
 
                                 {/* Text Input */}
                                 <textarea
@@ -2206,20 +2184,21 @@ export default function ChatConversation() {
                                         setMessage(e.target.value);
                                         handleTyping();
                                         e.target.style.height = 'auto';
-                                        e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+                                        e.target.style.height = Math.min(e.target.scrollHeight, 100) + 'px';
                                     }}
                                     onKeyDown={(e) => {
                                         if (e.key === 'Enter' && !e.shiftKey) {
                                             e.preventDefault();
                                             handleSend();
+                                            if (inputRef.current) inputRef.current.style.height = 'auto';
                                         }
                                     }}
-                                    className="flex-1 bg-transparent border-none py-2 px-2 text-[15px] leading-[22px] focus:ring-0 text-[#111B21] dark:text-[#D1D7DB] placeholder-[#667781] resize-none max-h-[120px] min-h-[40px]"
+                                    className="flex-1 bg-transparent border-none py-2 px-1 text-[15px] leading-[20px] focus:ring-0 text-[#111B21] dark:text-[#D1D7DB] placeholder-[#667781] resize-none max-h-[100px] min-h-[38px] outline-none min-w-0"
                                 />
                             </div>
                         )}
 
-                        <div className="flex items-center gap-2 relative">
+                        <div className="flex items-center gap-2 relative shrink-0">
                             {/* Recording Preview Overlay */}
                             {recordingStatus === 'preview' && recordedAudio && (
                                 <div className="absolute bottom-[60px] right-0 left-[-300px] md:left-[-400px] bg-white dark:bg-[#202c33] p-3 rounded-2xl shadow-2xl border border-black/10 dark:border-white/10 flex items-center gap-4 animate-in slide-in-from-bottom-2">
@@ -2246,25 +2225,29 @@ export default function ChatConversation() {
                             )}
 
                             <button
+                                type="button"
                                 onMouseDown={(e) => {
-                                    if (!message.trim() && recordingStatus === 'idle') {
+                                    if (!message.trim() && recordingStatus === 'idle' && !isAI) {
                                         startRecording(e);
                                     }
                                 }}
                                 onTouchStart={(e) => {
-                                    if (!message.trim() && recordingStatus === 'idle') {
+                                    if (!message.trim() && recordingStatus === 'idle' && !isAI) {
                                         startRecording(e);
                                     }
                                 }}
                                 onClick={(e) => {
                                     if (message.trim()) {
                                         handleSend();
+                                        if (inputRef.current) inputRef.current.style.height = 'auto';
+                                    } else if (isAI) {
+                                        setShowAiVoiceModal(true);
                                     } else if (recordingStatus === 'recording' && isRecordingLocked) {
                                         stopRecording(false, true);
                                     }
                                 }}
                                 onMouseUp={() => {
-                                    if (recordingStatus === 'recording' && !isRecordingLocked) {
+                                    if (!isAI && recordingStatus === 'recording' && !isRecordingLocked) {
                                         if (recordingDuration < 1) {
                                             stopRecording(true);
                                             toast("Hold to record, release to send", { duration: 2000 });
@@ -2274,7 +2257,7 @@ export default function ChatConversation() {
                                     }
                                 }}
                                 onTouchEnd={() => {
-                                    if (recordingStatus === 'recording' && !isRecordingLocked) {
+                                    if (!isAI && recordingStatus === 'recording' && !isRecordingLocked) {
                                         if (recordingDuration < 1) {
                                             stopRecording(true);
                                             toast("Hold to record, release to send", { duration: 2000 });
@@ -2283,24 +2266,27 @@ export default function ChatConversation() {
                                         }
                                     }
                                 }}
-                                className={`size-[50px] shrink-0 rounded-full flex items-center justify-center transition-all duration-300 relative z-20 shadow-lg ${isRecording
-                                        ? 'bg-rose-500 scale-125 shadow-rose-500/50'
+                                aria-label={message.trim() ? "Send message" : isAI ? "Start Health Coach Voice" : "Record voice note"}
+                                className={`size-[44px] shrink-0 rounded-full flex items-center justify-center transition-all duration-200 relative z-20 shadow-md ${isRecording
+                                        ? 'bg-rose-500 scale-110 shadow-rose-500/50'
                                         : message.trim()
-                                            ? 'bg-vic-green text-white'
-                                            : recordingStatus === 'preview'
-                                                ? 'bg-slate-200 dark:bg-slate-800 text-slate-400'
-                                                : 'bg-white dark:bg-[#202C33] text-[#54656F] dark:text-[#8696A0]'
+                                            ? 'bg-vic-green text-white active:scale-95'
+                                            : isAI
+                                                ? 'bg-vic-green text-white hover:bg-emerald-600 active:scale-95'
+                                                : recordingStatus === 'preview'
+                                                    ? 'bg-slate-200 dark:bg-slate-800 text-slate-400'
+                                                    : 'bg-white dark:bg-[#202C33] text-[#54656F] dark:text-[#8696A0] hover:text-[#111B21] active:scale-95'
                                     }`}
                                 style={{
-                                    transform: recordingStatus === 'recording' && !isRecordingLocked ? `translateY(${-Math.min(recordingDragY, 60)}px)` : 'none',
+                                    transform: !isAI && recordingStatus === 'recording' && !isRecordingLocked ? `translateY(${-Math.min(recordingDragY, 60)}px)` : 'none',
                                 }}
                             >
                                 {isRecording ? (
                                     <div className="size-4 bg-white rounded-[2px] animate-pulse" />
                                 ) : message.trim() ? (
-                                    <Send size={24} />
+                                    <Send size={20} />
                                 ) : (
-                                    <Mic size={26} />
+                                    <Mic size={22} />
                                 )}
 
                                 {/* Pulse Effect for Recording */}
@@ -2436,6 +2422,17 @@ export default function ChatConversation() {
                     {showAttachments && (
                         <div className="absolute bottom-[70px] left-2 z-50 animate-in slide-in-from-bottom-5 fade-in duration-200">
                             <div className="flex flex-col gap-2">
+                                {/* Emoji & Stickers */}
+                                <div className="flex items-center gap-3 group cursor-pointer" onClick={() => {
+                                    setShowAttachments(false);
+                                    setShowEmoji(true);
+                                }}>
+                                    <div className="size-12 rounded-full bg-gradient-to-t from-[#E5A93B] to-[#F5BE4E] flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
+                                        <Smile className="text-white" size={22} />
+                                    </div>
+                                    <span className="bg-white dark:bg-[#202C33] px-2 py-1 rounded-md text-sm font-medium shadow-md">Emoji & Stickers</span>
+                                </div>
+
                                 {/* Document */}
                                 <div className="flex items-center gap-3 group cursor-pointer" onClick={() => {
                                     const input = document.createElement('input');

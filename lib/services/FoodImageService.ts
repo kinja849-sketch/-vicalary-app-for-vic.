@@ -165,10 +165,12 @@ export function getFoodImageUrl(dishName: string = '', cuisine: string = 'Indone
   const lowerTitle = dishName.toLowerCase().trim();
   const lowerCat = category.toLowerCase().trim();
 
-  // 1. Direct match against verified culinary catalog
+  // 1. Direct match against verified culinary catalog using whole-word / phrase matching
   for (const entry of CULINARY_PHOTO_CATALOG) {
     for (const kw of entry.keywords) {
-      if (lowerTitle.includes(kw)) {
+      const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(`(^|\\s|[^a-zA-Z0-9])${escaped}($|\\s|[^a-zA-Z0-9])`, 'i');
+      if (regex.test(lowerTitle)) {
         return entry.url;
       }
     }

@@ -226,12 +226,30 @@ export async function loadMealPlanContext(
     const today = new Date().toISOString().split('T')[0];
     
     // Load logged food for today
-    const { data: loggedHistory } = await supabase
+    const { data: loggedHistory, error: historyError } = await supabase
       .from('food_analysis_history')
       .select('meal_type, food_name, calories, protein, carbs, fat')
       .eq('user_id', userId)
       .gte('created_at', `${today}T00:00:00.000Z`)
       .lte('created_at', `${today}T23:59:59.999Z`);
+
+    if (historyError) {
+      console.warn('[ContextAssembler] Error loading food_analysis_history:', historyError);
+      return null;
+    }
+
+    // Get daily progress target if exists
+    const { data: progress, error: progressError } = await supabase
+      .from('daily_progress')
+      .select('calories_goal')
+      .eq('user_id', userId)
+      .eq('progress_date', today)
+      .maybeSingle();
+
+    if (progressError) {
+      console.warn('[ContextAssembler] Error loading daily_progress:', progressError);
+      return null;
+    }
 
     const meals = (loggedHistory || []).map((item: any) => ({
       mealType: item.meal_type || 'meal',
@@ -243,14 +261,6 @@ export async function loadMealPlanContext(
     }));
 
     const totalCalories = meals.reduce((sum: number, m: any) => sum + (m.calories || 0), 0);
-
-    // Get daily progress target if exists
-    const { data: progress } = await supabase
-      .from('daily_progress')
-      .select('calories_goal')
-      .eq('user_id', userId)
-      .eq('progress_date', today)
-      .maybeSingle();
 
     return {
       todaysMeals: meals,
@@ -306,17 +316,19 @@ export async function loadAffiliationContext(
   queryOrEntity?: string | null
 ): Promise<AffiliationRecord | null> {
   if (!queryOrEntity) return null;
-  try {
-    const term = queryOrEntity.trim();
-    // Search in companies table by name or alias
-    const { data: company } = await supabase
-      .from('companies')
-      .select('name, parent_company_id, affiliation_type, us_affiliated, israel_affiliated, uae_affiliated, notes, data_sources, enrichment_status')
-      .ilike('name', `%${term}%`)
-      .limit(1)
-      .maybeSingle();
+  const term = queryOrEntity.trim();
+  if (!term || term.length < 2) return null;
 
-    if (!company) return null;
+  try {
+    // Search in companies table by exact normalized name or aliases
+    const { data: companies } = await supabase
+      .from('companies')
+      .select('name, parent_company_id, affiliation_type, us_affiliated, israel_affiliated, uae_affiliated, notes, data_sources, enrichment_status, aliases')
+      .or(`name.ilike.${term},aliases.cs.{${term}}`)
+      .limit(2);
+
+    if (!companies || companies.length !== 1) return null;
+    const company = companies[0];
 
     return {
       companyName: company.name,

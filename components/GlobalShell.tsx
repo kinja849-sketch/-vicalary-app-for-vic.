@@ -93,11 +93,13 @@ export function GlobalShell({ children }: { children: React.ReactNode }) {
   const isNavbarVisible = !hiddenPaths.includes(pathname) && !isChatConversation && !pathname.startsWith('/expert/');
 
   return (
-    <div className="flex flex-col min-h-screen">
-      <main className={`flex-1 ${isNavbarVisible ? 'pb-20' : ''}`}>
-        {children}
-      </main>
-      <BottomNavbar />
+    <div className="min-h-[100dvh] w-full bg-slate-100 dark:bg-slate-950 flex justify-center items-stretch">
+      <div className="w-full max-w-[480px] min-h-[100dvh] bg-white dark:bg-[#0b141a] flex flex-col relative shadow-2xl overflow-x-hidden">
+        <main className={`flex-1 flex flex-col ${isNavbarVisible ? 'pb-20' : ''}`}>
+          {children}
+        </main>
+        <BottomNavbar />
+      </div>
     </div>
   );
 }
