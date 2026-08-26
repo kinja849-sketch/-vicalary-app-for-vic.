@@ -83,20 +83,73 @@ export const getRecipes = async (filters?: {
 }
 
 export const getRecipeDetails = async (recipeId: string | number) => {
+    const rawId = String(recipeId || '').trim();
+    if (!rawId) throw new Error("Recipe ID is required");
+
     try {
         const res = await fetch('/api/recipe-details', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: recipeId?.toString() })
+            body: JSON.stringify({ id: rawId })
         });
         const data = await res.json();
         if (!res.ok || data.error) throw new Error(data?.error || "Failed to fetch details");
         return data;
-    } catch (e) {
-        if (typeof recipeId === 'string' && recipeId.includes('-')) {
-            const { data: recipe } = await supabase.from('recipes').select('*').eq('id', recipeId).maybeSingle();
-            if (recipe) return recipe;
+    } catch (e: any) {
+        // Direct client fallback to Supabase if API endpoint fails
+        try {
+            const cleanId = rawId.replace(/^(themealdb_|cocktail_|spoonacular_)/i, '');
+            const { data: cached } = await (supabase as any)
+                .from('cached_recipes')
+                .select('*')
+                .or(`id.eq.${rawId},id.eq.${cleanId}`)
+                .maybeSingle();
+
+            if (cached) {
+                const c = cached as any;
+                return {
+                    id: String(c.id),
+                    title: c.title || 'Untitled Recipe',
+                    image_url: c.image_url || '',
+                    cuisine_type: c.cuisine_region || c.cuisine_type || 'International',
+                    dietary_tags: Array.isArray(c.dietary_tags) ? c.dietary_tags : [],
+                    ingredients: typeof c.ingredients === 'string' ? JSON.parse(c.ingredients) : (c.ingredients || []),
+                    instructions: typeof c.instructions_steps === 'string' ? JSON.parse(c.instructions_steps) : (c.instructions_steps || c.instructions || []),
+                    prep_time_minutes: c.preparation_time || c.prep_time_minutes || 15,
+                    cook_time_minutes: c.cook_time_minutes || 0,
+                    total_calories: c.nutrition?.calories || c.total_calories || 0,
+                    protein_g: Number(c.nutrition?.protein || c.protein_g || 0),
+                    carbs_g: Number(c.nutrition?.carbs || c.carbs_g || 0),
+                    fat_g: Number(c.nutrition?.fat || c.fat_g || 0),
+                    servings: c.servings || 2
+                };
+            }
+
+            const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawId);
+            let query = supabase.from('recipes').select('*');
+            if (isUuid) {
+                query = query.eq('id', rawId);
+            } else {
+                const isNumeric = !isNaN(Number(cleanId)) && cleanId.trim() !== '';
+                if (isNumeric) {
+                    query = query.or(`external_id.eq.${rawId},external_id.eq.${cleanId},spoonacular_id.eq.${cleanId}`);
+                } else {
+                    query = query.or(`external_id.eq.${rawId},external_id.eq.${cleanId}`);
+                }
+            }
+            const { data: recipe } = await query.maybeSingle();
+            if (recipe) {
+                const r = recipe as any;
+                return {
+                    ...r,
+                    ingredients: typeof r.ingredients === 'string' ? JSON.parse(r.ingredients) : (r.ingredients || []),
+                    instructions: typeof r.instructions === 'string' ? JSON.parse(r.instructions) : (r.instructions || [])
+                };
+            }
+        } catch (dbErr) {
+            console.warn('[getRecipeDetails] Direct DB fallback failed:', dbErr);
         }
+
         throw e;
     }
 }
@@ -276,51 +329,35 @@ export const getPersonalizedSuggestions = async (userId: string) => {
 }
 
 export const getCookbookSuggestions = async (userId: string) => {
-    const fetchFromApi = async (type: string) => {
-        try {
-            const count = (type === 'breakfast' || type === 'main course') ? 24 : 4; 
-            const res = await fetch('/api/search-recipes', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ type: type || 'main course', number: count, userId })
-            });
-            if (!res.ok) return [];
-            const data = await res.json();
-            return (data?.results || []).map((m: any) => ({
-                ...m,
-                id: String(m.id),
-                name: m.title,
-                calories: m.calories,
-                subtitle: `${m.calories} cal`,
-                image: m.image
-            }));
-        } catch (e) { return []; }
-    };
-
-    const categories = ['breakfast', 'main course', 'snack', 'drink', 'dessert'];
-    const [b, m, s, dr, ds] = await Promise.all(categories.map(cat => fetchFromApi(cat)));
-
-    const allFetched = [...b, ...m, ...s, ...dr, ...ds];
-    const uuidMap = await ensureRecipesUuids(allFetched);
-    const mapWithUuid = (list: any[]) => list.map(m => ({ ...m, internal_id: uuidMap[m.id] }));
-
-    const lunch = m.slice(0, 12);
-    const dinner = m.slice(12, 24);
-
-    return { 
-        breakfast: mapWithUuid(b), 
-        lunch: mapWithUuid(lunch), 
-        dinner: mapWithUuid(dinner), 
-        snacks: mapWithUuid(s), 
-        drinks: mapWithUuid(dr), 
-        desserts: mapWithUuid(ds) 
-    };
+    try {
+        const plan = await getDailyMealSuggestions(userId);
+        return {
+            breakfast: (plan.breakfast || []).map((m: any) => ({ ...m, name: m.title, subtitle: `${m.calories} kcal` })),
+            lunch: (plan.lunch || []).map((m: any) => ({ ...m, name: m.title, subtitle: `${m.calories} kcal` })),
+            dinner: (plan.dinner || []).map((m: any) => ({ ...m, name: m.title, subtitle: `${m.calories} kcal` })),
+            snacks: (plan.snacks || []).map((m: any) => ({ ...m, name: m.title, subtitle: `${m.calories} kcal` })),
+            drinks: (plan.drinks || []).map((m: any) => ({ ...m, name: m.title, subtitle: `${m.calories} kcal` })),
+            desserts: (plan.desserts || []).map((m: any) => ({ ...m, name: m.title, subtitle: `${m.calories} kcal` }))
+        };
+    } catch (e) {
+        console.error('[Cookbook] Error fetching AI cookbook suggestions:', e);
+        return { breakfast: [], lunch: [], dinner: [], snacks: [], drinks: [], desserts: [] };
+    }
 }
 
-export const getDailyMealSuggestions = async (userId: string) => {
+export const getDailyMealSuggestions = async (userId?: string, forceRefresh = false) => {
+    const isUuid = !!userId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId);
+
     // 1. Fetch user timezone from settings
-    const { data: settings } = await supabase.from('user_settings').select('timezone').eq('user_id', userId).maybeSingle();
-    const userTz = settings?.timezone || (typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC');
+    let userTz = typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'Asia/Jakarta';
+    if (isUuid) {
+        try {
+            const { data: settings } = await (supabase as any).from('user_settings').select('timezone').eq('user_id', userId).maybeSingle();
+            if (settings?.timezone) userTz = settings.timezone;
+        } catch (tzErr) {
+            console.warn("[Recipes] Could not fetch user timezone:", tzErr);
+        }
+    }
 
     // 2. Calculate current hour based on user's timezone
     const now = new Date();
@@ -334,31 +371,39 @@ export const getDailyMealSuggestions = async (userId: string) => {
 
     const today = now.toISOString().split('T')[0];
     
-    // 3. Check if a plan exists for today
-    const { data: existingPlan, error: existingError } = await (supabase as any)
-        .from('user_daily_meal_plans')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('plan_date', today)
-        .maybeSingle();
+    // 3. Check if an active AI-generated plan exists for today
+    if (isUuid && !forceRefresh) {
+        try {
+            const { data: existingPlan, error: existingError } = await (supabase as any)
+                .from('user_daily_meal_plans')
+                .select('*')
+                .eq('user_id', userId)
+                .eq('plan_date', today)
+                .maybeSingle();
 
-    if (existingError && existingError.code !== 'PGRST116') {
-        console.error("[Recipes] Error fetching daily plan:", existingError);
+            if (existingError && existingError.code !== 'PGRST116') {
+                console.error("[Recipes] Error fetching daily plan:", existingError);
+            }
+
+            const isLegacyPlaceholder = existingPlan?.breakfast?.[0]?.id === 'b1' || existingPlan?.lunch?.[0]?.id === 'l1';
+
+            if (existingPlan && Array.isArray(existingPlan.breakfast) && existingPlan.breakfast.length > 0 && !isLegacyPlaceholder) {
+                return {
+                    breakfast: existingPlan.breakfast || [],
+                    lunch: existingPlan.lunch || [],
+                    dinner: existingPlan.dinner || [],
+                    snacks: existingPlan.snacks || [],
+                    drinks: existingPlan.drinks || [],
+                    desserts: existingPlan.desserts || [],
+                    currentSession
+                };
+            }
+        } catch (fetchErr) {
+            console.warn("[Recipes] Could not query user_daily_meal_plans:", fetchErr);
+        }
     }
 
-    if (existingPlan && Array.isArray((existingPlan as any).breakfast) && (existingPlan as any).breakfast.length > 0) {
-        return {
-            breakfast: (existingPlan as any).breakfast || [],
-            lunch: (existingPlan as any).lunch || [],
-            dinner: (existingPlan as any).dinner || [],
-            snacks: (existingPlan as any).snacks || [],
-            drinks: (existingPlan as any).drinks || [],
-            desserts: (existingPlan as any).desserts || [],
-            currentSession
-        };
-    }
-
-    // 4. Generate new plan via unified recommendation API
+    // 4. Generate new plan via AI culinary recommendation engine
     try {
         const { getUserLocation } = await import('./location');
         const loc = await getUserLocation();
@@ -366,7 +411,7 @@ export const getDailyMealSuggestions = async (userId: string) => {
         const res = await fetch('/api/daily-meal-plan', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId, locationContext: loc, localHour })
+            body: JSON.stringify({ userId: isUuid ? userId : undefined, locationContext: loc, localHour, forceRefresh })
         });
         
         if (!res.ok) throw new Error("Failed to fetch daily meal plan");
@@ -374,7 +419,7 @@ export const getDailyMealSuggestions = async (userId: string) => {
         const data = await res.json();
         
         const planToInsert = {
-            user_id: userId,
+            user_id: isUuid ? userId : undefined,
             plan_date: today,
             breakfast: data.breakfast || [],
             lunch: data.lunch || [],
@@ -384,15 +429,21 @@ export const getDailyMealSuggestions = async (userId: string) => {
             desserts: data.desserts || []
         };
 
-        // Insert into DB
-        await (supabase as any).from('user_daily_meal_plans').upsert([planToInsert], { onConflict: 'user_id,plan_date' });
+        // Insert / update in DB if valid user
+        if (isUuid) {
+            try {
+                await (supabase as any).from('user_daily_meal_plans').upsert([planToInsert], { onConflict: 'user_id,plan_date' });
+            } catch (dbErr) {
+                console.warn("[Recipes] Could not upsert daily plan:", dbErr);
+            }
+        }
 
         return {
             ...planToInsert,
             currentSession
         };
     } catch (err) {
-        console.error("[Recipes] Error generating daily meal plan:", err);
+        console.error("[Recipes] Error generating AI daily meal plan:", err);
         return {
             breakfast: [], lunch: [], dinner: [], snacks: [], drinks: [], desserts: [], currentSession
         };

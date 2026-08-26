@@ -13,6 +13,7 @@ import { useTranslation } from "@/lib/api/translation";
 import { toast } from "sonner";
 import { FavoriteButton } from "@/components/FavoriteButton";
 import ChefAvatar from "@/components/guide/ChefAvatar";
+import { getFoodImageUrl } from "@/lib/services/FoodImageService";
 
 export default function RecipeDetails() {
     const { id } = useParams() as { id: string };
@@ -76,7 +77,7 @@ export default function RecipeDetails() {
     }, []);
 
     // Fetch recipe details
-    const { data: recipe, isLoading } = useQuery<any>({
+    const { data: recipe, isLoading, isError, error, refetch } = useQuery<any>({
         queryKey: ['recipe', id],
         queryFn: () => getRecipeDetails(id!),
         enabled: !!id,
@@ -537,19 +538,46 @@ export default function RecipeDetails() {
         return (
             <div className="flex items-center justify-center h-screen bg-white dark:bg-[#0d1418]">
                 <div className="animate-pulse flex flex-col items-center">
-                    <div className="size-20 bg-vic-green/20 rounded-full mb-4" />
+                    <div className="size-20 bg-vic-green/20 rounded-full mb-4 flex items-center justify-center">
+                        <Loader2 className="animate-spin text-vic-green" size={32} />
+                    </div>
                     <div className="h-4 w-32 bg-slate-200 dark:bg-slate-800 rounded" />
                 </div>
             </div>
         );
     }
 
-    if (!recipe) {
+    if (isError || !recipe) {
+        const errorMessage = (error as Error)?.message || '';
+        const isNotFound = errorMessage.toLowerCase().includes('not found') || (!recipe && !isError);
+
         return (
             <div className="flex flex-col items-center justify-center h-screen p-8 text-center bg-white dark:bg-[#0d1418]">
                 <AlertCircle className="text-vic-pink mb-4" size={48} />
-                <h2 className="text-xl font-bold mb-2">{t('recipe_missing') || 'Recipe Missing'}</h2>
-                <button onClick={() => router.back()} className="text-vic-green font-bold">{t('go_back') || 'Go Back'}</button>
+                <h2 className="text-xl font-black mb-2 dark:text-white uppercase tracking-tight">
+                    {isNotFound ? (t('recipe_missing') || 'Recipe Not Found') : (t('recipe_error') || 'Unable to Load Recipe')}
+                </h2>
+                <p className="text-sm text-slate-500 max-w-xs mb-6 font-medium">
+                    {isNotFound
+                        ? 'The recipe you requested could not be found or may have been removed.'
+                        : (errorMessage || 'There was a problem connecting to the server. Please try again.')}
+                </p>
+                <div className="flex gap-4">
+                    {!isNotFound && (
+                        <button
+                            onClick={() => refetch()}
+                            className="bg-vic-green text-slate-900 px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 transition-all shadow-md"
+                        >
+                            {t('retry') || 'Retry'}
+                        </button>
+                    )}
+                    <button
+                        onClick={() => router.back()}
+                        className="bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-slate-200 px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-300 dark:hover:bg-white/20 transition-all"
+                    >
+                        {t('go_back') || 'Go Back'}
+                    </button>
+                </div>
             </div>
         );
     }
@@ -559,11 +587,14 @@ export default function RecipeDetails() {
             {/* Normal UI hidden when Voice Mode is active */}
             <div className={`flex flex-col h-full overflow-hidden ${isVoiceMode ? 'hidden' : 'block'}`}>
                 {/* Immersive Header */}
-                <div className="relative h-80 shrink-0">
+                <div className="relative h-80 shrink-0 bg-slate-800">
                     <img 
-                        src={recipe.image_url} 
-                        alt={recipe.title} 
+                        src={recipe.image_url || getFoodImageUrl(recipe.title, recipe.cuisine_type, recipe.meal_type)} 
+                        alt={recipe.title || 'Recipe'} 
                         className="w-full h-full object-cover"
+                        onError={(e) => {
+                            (e.currentTarget as HTMLImageElement).src = getFoodImageUrl(recipe.title, recipe.cuisine_type, recipe.meal_type);
+                        }}
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/20" />
                     
@@ -658,28 +689,47 @@ export default function RecipeDetails() {
                     <h3 className="text-xl font-black dark:text-white mb-4 uppercase tracking-tight">{t('ingredients') || 'Ingredients'}</h3>
                     <div className="bg-white dark:bg-[#1f2c34] rounded-3xl p-6 shadow-sm mb-8">
                         <div className="space-y-4">
-                            {recipe.ingredients?.map((ing: any, i: number) => (
-                                <div key={i} className="flex justify-between items-center border-b border-slate-50 dark:border-white/5 pb-3 last:border-none">
-                                    <span className="text-slate-700 dark:text-slate-300 font-medium">{ing.item}</span>
-                                    <span className="text-sm font-black dark:text-white">{ing.amount} {ing.unit}</span>
-                                </div>
-                            ))}
+                            {recipe.ingredients && recipe.ingredients.length > 0 ? (
+                                recipe.ingredients.map((ing: any, i: number) => {
+                                    const itemText = typeof ing === 'string' ? ing : (ing?.item || ing?.name || '');
+                                    const amountText = typeof ing === 'object' && (ing?.amount || ing?.unit)
+                                        ? `${ing?.amount || ''} ${ing?.unit || ''}`.trim()
+                                        : '';
+
+                                    return (
+                                        <div key={i} className="flex justify-between items-center border-b border-slate-50 dark:border-white/5 pb-3 last:border-none">
+                                            <span className="text-slate-700 dark:text-slate-300 font-medium">{itemText}</span>
+                                            {amountText && <span className="text-sm font-black dark:text-white">{amountText}</span>}
+                                        </div>
+                                    );
+                                })
+                            ) : (
+                                <p className="text-sm text-slate-400 italic">No specific ingredients listed.</p>
+                            )}
                         </div>
                     </div>
 
                     {/* Instructions */}
                     <h3 className="text-xl font-black dark:text-white mb-4 uppercase tracking-tight">{t('instructions') || 'Instructions'}</h3>
                     <div className="space-y-6 mb-20">
-                        {recipe.instructions?.map((step: string, i: number) => (
-                            <div key={i} className="flex gap-4">
-                                <div className="size-8 rounded-xl bg-vic-green/10 text-vic-green flex items-center justify-center font-black shrink-0">
-                                    {i + 1}
-                                </div>
-                                <p className="text-slate-600 dark:text-slate-400 leading-relaxed pt-1">
-                                    {step}
-                                </p>
-                            </div>
-                        ))}
+                        {recipe.instructions && recipe.instructions.length > 0 ? (
+                            recipe.instructions.map((step: any, i: number) => {
+                                const stepText = typeof step === 'string' ? step : (step?.step || step?.instruction || String(step));
+
+                                return (
+                                    <div key={i} className="flex gap-4">
+                                        <div className="size-8 rounded-xl bg-vic-green/10 text-vic-green flex items-center justify-center font-black shrink-0">
+                                            {i + 1}
+                                        </div>
+                                        <p className="text-slate-600 dark:text-slate-400 leading-relaxed pt-1">
+                                            {stepText}
+                                        </p>
+                                    </div>
+                                );
+                            })
+                        ) : (
+                            <p className="text-sm text-slate-400 italic">No specific instructions listed.</p>
+                        )}
                     </div>
                 </main>
             </div>

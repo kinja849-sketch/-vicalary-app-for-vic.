@@ -17,50 +17,54 @@
   */
   :root {
     --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --foreground: 138 47% 8%;
 
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 138 47% 8%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover-foreground: 138 47% 8%;
 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
+    /* Earthy soft-green primary — deep forest */
+    --primary: 138 47% 12%;
+    --primary-foreground: 60 9% 98%;
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    /* Pale sage secondary */
+    --secondary: 120 30% 95%;
+    --secondary-foreground: 138 47% 12%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    /* Neutral muted with green undertone */
+    --muted: 120 20% 96%;
+    --muted-foreground: 120 5% 45%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    /* Pale sage accent */
+    --accent: 120 30% 95%;
+    --accent-foreground: 138 47% 12%;
 
     --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive-foreground: 60 9% 98%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    --border: 120 15% 88%;
+    --input: 120 15% 88%;
+    --ring: 138 47% 12%;
 
     --radius: 0.5rem;
 
-    --sidebar-background: 0 0% 98%;
+    --sidebar-background: 120 20% 98%;
 
-    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-foreground: 138 30% 22%;
 
-    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary: 138 47% 12%;
 
-    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-primary-foreground: 60 9% 98%;
 
-    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent: 120 30% 95%;
 
-    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-accent-foreground: 138 47% 12%;
 
-    --sidebar-border: 220 13% 91%;
+    --sidebar-border: 120 15% 88%;
 
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-ring: 138 80% 40%;
   }
 
   .dark {
@@ -110,8 +114,6 @@
   body {
     @apply bg-background text-foreground;
     font-family: "Epilogue", "Inter", sans-serif;
-    /* Match the theme start color to prevent white gaps */
-    background-color: #D9F7C4;
     min-height: 100vh;
     margin: 0;
     overflow-x: hidden;

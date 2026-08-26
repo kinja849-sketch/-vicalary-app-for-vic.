@@ -1,10 +1,12 @@
-"use client";
+﻿"use client";
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, MicOff, PhoneOff, Sparkles, Volume2, VolumeX, Loader2, Brain, X, Search } from 'lucide-react';
+import { Mic, MicOff, Sparkles, Volume2, VolumeX, X, ShieldCheck, Globe } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
-import HealthCoachSphere, { AvatarState } from '@/components/avatar/HealthCoachSphere';
+import { useQueryClient } from '@tanstack/react-query';
+import { supabase } from '@/lib/supabase';
+import HealthCoachSphere from '@/components/avatar/HealthCoachSphere';
 
 interface AICoachVoiceModalProps {
   userId: string;
@@ -14,74 +16,164 @@ interface AICoachVoiceModalProps {
   onClose: () => void;
 }
 
-type ConversationState = 'idle' | 'listening' | 'transcribing' | 'thinking' | 'researching' | 'speaking';
+type ConversationState = 'idle' | 'listening' | 'thinking' | 'speaking';
 
 export default function AICoachVoiceModal({
   userId,
-  userName = 'User',
-  userAvatar,
+  userName = 'Vic',
   conversationId,
   onClose,
 }: AICoachVoiceModalProps) {
+  const queryClient = useQueryClient();
+  const resolvedUserName = (!userName || userName === 'User' || userName === 'there') ? 'Vic' : userName;
+
+  const [hasMicPermission, setHasMicPermission] = useState<boolean | null>(null);
   const [state, setState] = useState<ConversationState>('idle');
-  const [intent, setIntent] = useState<string>('casual_chat');
-  const [transcript, setTranscript] = useState('');
-  const [aiResponse, setAiResponse] = useState('');
   const [isMuted, setIsMuted] = useState(false);
   const [isAudioMuted, setIsAudioMuted] = useState(false);
-  const [sessionDuration, setSessionDuration] = useState(0);
+  const [voiceLang, setVoiceLang] = useState<'en-US' | 'id-ID' | 'es-ES' | 'ar-SA' | 'fr-FR'>('en-US');
 
   const recognitionRef = useRef<any>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const isMountedRef = useRef(true);
   const isSpeakingRef = useRef(false);
+  const isProcessingRef = useRef(false);
   const silenceTimerRef = useRef<any>(null);
-  const lastRecognizedTextRef = useRef<string>('');
-  const hasProcessedSpeechRef = useRef<boolean>(false);
-  const audioUrlsRef = useRef<string[]>([]);
+  const sessionIdRef = useRef<string>(crypto.randomUUID ? crypto.randomUUID() : `sess_${Date.now()}`);
+  const turnIdRef = useRef<number>(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const sessionTurnsRef = useRef<{ role: 'user' | 'assistant'; content: string; created_at: string }[]>([]);
 
-  // Cleanup audio URLs on unmount
+  // Check initial microphone permission on mount
   useEffect(() => {
+    isMountedRef.current = true;
+
+    const checkPermission = async () => {
+      if (typeof navigator !== 'undefined' && navigator.permissions?.query) {
+        try {
+          const status = await navigator.permissions.query({ name: 'microphone' as any });
+          if (status.state === 'granted') {
+            setHasMicPermission(true);
+          } else {
+            setHasMicPermission(false);
+          }
+          status.onchange = () => {
+            if (isMountedRef.current) {
+              setHasMicPermission(status.state === 'granted');
+            }
+          };
+        } catch {
+          setHasMicPermission(false);
+        }
+      } else {
+        setHasMicPermission(false);
+      }
+    };
+
+    checkPermission();
+
     return () => {
-      audioUrlsRef.current.forEach(url => {
-        try { URL.revokeObjectURL(url); } catch (e) {}
-      });
-      audioUrlsRef.current = [];
+      isMountedRef.current = false;
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch (e) {}
+      }
+      if (currentAudioRef.current) {
+        try {
+          currentAudioRef.current.pause();
+          currentAudioRef.current.currentTime = 0;
+        } catch (e) {}
+      }
     };
   }, []);
 
-  // Session timer
-  useEffect(() => {
-    const timer = setInterval(() => setSessionDuration(prev => prev + 1), 1000);
-    return () => clearInterval(timer);
+  // Instant interruption helper: cuts off AI speech immediately
+  const interruptAgent = useCallback(() => {
+    if (abortControllerRef.current) {
+      try { abortControllerRef.current.abort(); } catch (e) {}
+      abortControllerRef.current = null;
+    }
+    if (currentAudioRef.current) {
+      try {
+        currentAudioRef.current.pause();
+        currentAudioRef.current.currentTime = 0;
+      } catch (e) {}
+      currentAudioRef.current = null;
+    }
+    isSpeakingRef.current = false;
   }, []);
 
-  const formatDuration = (secs: number) => {
-    const m = Math.floor(secs / 60);
-    const s = secs % 60;
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
-  };
+  // Direct Fast Audio Playback from Server Payload
+  const playDirectAudio = useCallback(async (audioSrc: string) => {
+    if (!isMountedRef.current || isAudioMuted) {
+      isProcessingRef.current = false;
+      isSpeakingRef.current = false;
+      if (isMountedRef.current && !isMuted) startListening();
+      return;
+    }
 
-  // Play AI voice via /api/cooking-assistant/tts (OpenAI HD Voice: nova) or SpeechSynthesis fallback
-  const speakText = useCallback(async (text: string) => {
-    if (!isMountedRef.current || isAudioMuted) return;
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch (e) {}
+    }
 
     isSpeakingRef.current = true;
     setState('speaking');
 
     try {
-      // 1. Try OpenAI HD TTS API with 'nova' natural human voice
+      const audio = new Audio(audioSrc);
+      currentAudioRef.current = audio;
+
+      await new Promise<void>((resolve) => {
+        audio.onended = () => resolve();
+        audio.onerror = () => resolve();
+        audio.play().catch(() => resolve());
+      });
+    } catch (err) {
+      console.warn('[AICoachVoiceModal] Direct audio playback error:', err);
+    } finally {
+      isSpeakingRef.current = false;
+      isProcessingRef.current = false;
+      currentAudioRef.current = null;
+
+      if (isMountedRef.current && !isMuted) {
+        startListening();
+      } else if (isMountedRef.current) {
+        setState('idle');
+      }
+    }
+  }, [isAudioMuted, isMuted]);
+
+  // Strict OpenAI Fast Neural Voice Playback (Fallback)
+  const speakText = useCallback(async (text: string) => {
+    if (!isMountedRef.current || isAudioMuted || !text.trim()) {
+      isProcessingRef.current = false;
+      isSpeakingRef.current = false;
+      if (isMountedRef.current && !isMuted) startListening();
+      return;
+    }
+
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch (e) {}
+    }
+
+    isSpeakingRef.current = true;
+    setState('speaking');
+
+    try {
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
       const res = await fetch('/api/cooking-assistant/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, voice: 'nova', speed: 1.0 }),
-      });
+        body: JSON.stringify({ text, voice: 'nova', speed: 1.05 }),
+        signal: controller.signal,
+      }).catch(() => null);
 
-      if (res.ok) {
+      if (res && res.ok && isSpeakingRef.current && isMountedRef.current) {
         const audioBlob = await res.blob();
         const audioUrl = URL.createObjectURL(audioBlob);
-        audioUrlsRef.current.push(audioUrl);
-        
+
         const audio = new Audio(audioUrl);
         currentAudioRef.current = audio;
 
@@ -90,194 +182,187 @@ export default function AICoachVoiceModal({
           audio.onerror = () => resolve();
           audio.play().catch(() => resolve());
         });
-      } else {
-        // Fallback to browser SpeechSynthesis
-        await new Promise<void>((resolve) => {
-          if ('speechSynthesis' in window) {
-            window.speechSynthesis.cancel();
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.rate = 1.0;
-            utterance.pitch = 1.0;
-            utterance.onend = () => resolve();
-            utterance.onerror = () => resolve();
-            window.speechSynthesis.speak(utterance);
-          } else {
-            resolve();
-          }
-        });
+
+        try { URL.revokeObjectURL(audioUrl); } catch (e) {}
       }
     } catch (err) {
-      console.warn('[AICoachVoiceModal] TTS Playback error, using fallback:', err);
+      console.warn('[AICoachVoiceModal] Voice playback error:', err);
     } finally {
       isSpeakingRef.current = false;
+      isProcessingRef.current = false;
+      currentAudioRef.current = null;
+      abortControllerRef.current = null;
+
       if (isMountedRef.current && !isMuted) {
-        // Automatically start listening again for continuous back-and-forth conversation!
-        setTimeout(() => {
-          if (isMountedRef.current && !isMuted) {
-            startListening();
-          }
-        }, 400);
+        startListening();
       } else if (isMountedRef.current) {
         setState('idle');
       }
     }
   }, [isAudioMuted, isMuted]);
 
-  // Process user message with AI Health Coach
+  // Process user speech with AI Health Coach (Single-Flight Turn Manager)
   const processUserSpeech = useCallback(async (userText: string) => {
-    if (!userText.trim() || !isMountedRef.current) return;
+    const cleanedText = userText.trim();
+    if (!cleanedText || cleanedText.length < 2 || !isMountedRef.current || isProcessingRef.current) {
+      return;
+    }
+
+    isProcessingRef.current = true;
+    turnIdRef.current += 1;
+    const currentTurn = turnIdRef.current;
+
+    interruptAgent();
 
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
     }
 
-    // Check if question asks for scientific/web research
-    const isResearch = /research|study|science|scientific|evidence|proven|why|how does|benefit|side effect|ingredients|calorie|protein|macro|micro|vitamin|longevity|intermittent fasting|supplement|ketogenic|keto|creatine|recommend|best|what is/i.test(userText);
-    
-    if (isResearch) {
-      setState('researching');
-      setIntent('factual_research');
-      setAiResponse('Searching internet & scientific database...');
-    } else {
-      setState('thinking');
-      setAiResponse('Reasoning...');
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch (e) {}
     }
 
+    setState('thinking');
+
+    // Record user turn in-memory
+    sessionTurnsRef.current.push({
+      role: 'user',
+      content: cleanedText,
+      created_at: new Date().toISOString(),
+    });
+
     try {
-      // Send directly to coach-reply with voice_mode: true and user_name
-      const coachRes = await fetch('/api/coach-reply', {
+      // 1. Non-blocking user speech persistence
+      supabase.from('messages').insert({
+        conversation_id: conversationId,
+        sender_id: userId,
+        content: cleanedText,
+        message_type: 'text',
+        created_at: new Date().toISOString()
+      }).then();
+
+      let userLocation = null;
+      try {
+        const locCache = localStorage.getItem('vicalary_location_v2');
+        if (locCache) userLocation = JSON.parse(locCache).data;
+      } catch (e) {}
+
+      // 2. Call unified conversation orchestrator with live dialog context and explicit language
+      const coachRes = await fetch('/api/conversation/process', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          type: 'INSERT',
-          table: 'messages',
+          conversation_id: conversationId,
+          user_id: userId,
+          content: cleanedText,
+          location_context: userLocation,
+          locale: voiceLang.split('-')[0],
           voice_mode: true,
-          user_name: userName,
-          record: {
-            id: `voice_${Date.now()}`,
-            conversation_id: conversationId,
-            sender_id: userId,
-            content: userText,
-            message_type: 'text',
-            created_at: new Date().toISOString(),
-          },
+          session_id: sessionIdRef.current,
+          turn_id: currentTurn,
+          session_turns: sessionTurnsRef.current.slice(-6)
         }),
       });
 
-      if (!coachRes.ok) throw new Error('AI Coach reply request failed');
+      if (!coachRes.ok) throw new Error('AI Coach process conversation failed');
 
       const data = await coachRes.json();
-      
-      // Extract direct reply text generated by LLM
-      let replyText = data.replyText;
-      if (!replyText || replyText === 'Already replied') {
-        replyText = data.message && data.message !== 'Already replied' 
-          ? data.message 
-          : `I heard your question clearly ${userName}! How else can I guide your health and nutrition today?`;
+      let replyText = data.content || data.replyText || data.message || `I hear you, ${resolvedUserName}. How can I best guide your health goals today?`;
+
+      // Clean spoken text: strip asterisks, bullets, markdown headers
+      replyText = replyText.replace(/[*#_~`>]/g, '').trim();
+
+      sessionTurnsRef.current.push({
+        role: 'assistant',
+        content: replyText,
+        created_at: new Date().toISOString(),
+      });
+
+      // If server returned audio directly, play it instantly without secondary network hop!
+      if (data.audioBase64 && isMountedRef.current && !isAudioMuted) {
+        await playDirectAudio(data.audioBase64);
+      } else {
+        await speakText(replyText);
       }
-
-      const detectedIntent = data.intent || (isResearch ? 'factual_research' : 'casual_chat');
-
-      setIntent(detectedIntent);
-      setAiResponse(replyText);
-      await speakText(replyText);
 
     } catch (err: any) {
       console.error('[AICoachVoiceModal] AI processing error:', err);
-      const fallbackReply = `I heard your question ${userName}! Let's work together on your health goals. What would you like to explore next?`;
-      setAiResponse(fallbackReply);
-      await speakText(fallbackReply);
+      isProcessingRef.current = false;
+      setState('listening');
+      if (isMountedRef.current && !isMuted && !isSpeakingRef.current) {
+        startListening();
+      }
     }
-  }, [conversationId, userId, userName, speakText]);
+  }, [conversationId, userId, resolvedUserName, voiceLang, speakText, playDirectAudio, interruptAgent]);
 
-  // Start continuous Web Speech recognition with active silence detection
+  // Snappy turn-taking continuous speech recognition
   const startListening = useCallback(() => {
-    if (isSpeakingRef.current || isMuted || !isMountedRef.current) return;
+    if (isSpeakingRef.current || isProcessingRef.current || isMuted || !isMountedRef.current) return;
 
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      toast.error('Speech recognition not supported in this browser');
+      toast.error('Speech recognition not supported in this browser. Please use Chrome or Edge.');
       setState('idle');
       return;
     }
 
     try {
       if (recognitionRef.current) {
-        try { recognitionRef.current.stop(); } catch(e) {}
+        try { recognitionRef.current.abort(); } catch (e) {}
       }
 
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-      hasProcessedSpeechRef.current = false;
-      lastRecognizedTextRef.current = '';
 
       const recognition = new SpeechRecognition();
-      recognition.lang = document.documentElement.lang || 'en-US';
+      // Explicitly configure STT language from user setting (default 'en-US', never derived from IP)
+      recognition.lang = voiceLang;
       recognition.interimResults = true;
-      recognition.continuous = false;
+      recognition.continuous = true;
 
       recognition.onstart = () => {
-        if (isMountedRef.current) {
+        if (isMountedRef.current && !isSpeakingRef.current && !isProcessingRef.current) {
           setState('listening');
-          setTranscript('Listening...');
         }
       };
 
       recognition.onresult = (event: any) => {
-        let text = '';
-        let hasFinalChunk = false;
+        if (isSpeakingRef.current || isProcessingRef.current) return;
 
+        let accumulatedText = '';
         for (let i = 0; i < event.results.length; ++i) {
-          text += event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            hasFinalChunk = true;
-          }
+          accumulatedText += event.results[i][0].transcript;
         }
 
-        const trimmedText = text.trim();
-
-        if (isMountedRef.current && trimmedText) {
-          lastRecognizedTextRef.current = trimmedText;
-          setTranscript(trimmedText);
-
-          // Reset silence timer on every new spoken chunk
+        const trimmed = accumulatedText.trim();
+        if (isMountedRef.current && trimmed && trimmed.length >= 2) {
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 
-          if (hasFinalChunk) {
-            if (!hasProcessedSpeechRef.current) {
-              hasProcessedSpeechRef.current = true;
-              try { recognition.stop(); } catch(e) {}
-              processUserSpeech(trimmedText);
+          // 700ms natural breathing silence detection
+          silenceTimerRef.current = setTimeout(() => {
+            if (!isProcessingRef.current && !isSpeakingRef.current && isMountedRef.current) {
+              try { recognition.abort(); } catch (e) {}
+              processUserSpeech(trimmed);
             }
-          } else {
-            // Set 1.2s silence timer after speech pauses to auto-finalize
-            silenceTimerRef.current = setTimeout(() => {
-              if (!hasProcessedSpeechRef.current && lastRecognizedTextRef.current.trim()) {
-                hasProcessedSpeechRef.current = true;
-                try { recognition.stop(); } catch(e) {}
-                processUserSpeech(lastRecognizedTextRef.current.trim());
-              }
-            }, 1200);
-          }
+          }, 700);
         }
       };
 
       recognition.onerror = (event: any) => {
-        console.warn('[AICoachVoiceModal] STT Error:', event.error);
-        if (event.error !== 'no-speech' && isMountedRef.current) {
+        if (event.error === 'not-allowed') {
+          setHasMicPermission(false);
+          toast.error('Microphone permission blocked. Please enable mic access.');
+        } else if (event.error !== 'no-speech' && event.error !== 'aborted') {
+          console.warn('[AICoachVoiceModal] STT Error:', event.error);
+        }
+        if (event.error !== 'no-speech' && event.error !== 'aborted' && isMountedRef.current && !isProcessingRef.current) {
           setState('idle');
         }
       };
 
       recognition.onend = () => {
         if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-        if (isMountedRef.current) {
-          // If accumulated text hasn't been sent yet, process it now!
-          if (!hasProcessedSpeechRef.current && lastRecognizedTextRef.current.trim()) {
-            hasProcessedSpeechRef.current = true;
-            processUserSpeech(lastRecognizedTextRef.current.trim());
-          } else if (!isSpeakingRef.current && !isMuted) {
-            setTimeout(startListening, 300);
-          }
+        if (isMountedRef.current && !isSpeakingRef.current && !isProcessingRef.current && !isMuted) {
+          setTimeout(startListening, 200);
         }
       };
 
@@ -287,32 +372,30 @@ export default function AICoachVoiceModal({
       console.error('[AICoachVoiceModal] Start listening error:', e);
       setState('idle');
     }
-  }, [isMuted, processUserSpeech]);
+  }, [isMuted, voiceLang, processUserSpeech]);
 
-  // Start voice mode on mount
+  // Request Microphone Permission
+  const requestMicPermission = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(track => track.stop());
+      setHasMicPermission(true);
+      setTimeout(() => {
+        startListening();
+      }, 200);
+    } catch (err) {
+      console.error('[AICoachVoiceModal] Microphone access denied:', err);
+      toast.error('Microphone permission is required to talk with Vee.');
+      setHasMicPermission(false);
+    }
+  };
+
+  // Auto-start listening if permission is already granted on mount
   useEffect(() => {
-    isMountedRef.current = true;
-    const timer = setTimeout(() => {
-      // Speak initial greeting
-      const initialGreeting = `Hello ${userName}! I am your AI Health Coach. I am listening, what would you like to discuss today?`;
-      setAiResponse(initialGreeting);
-      speakText(initialGreeting);
-    }, 500);
-
-    return () => {
-      isMountedRef.current = false;
-      clearTimeout(timer);
-      if (recognitionRef.current) {
-        try { recognitionRef.current.stop(); } catch(e) {}
-      }
-      if (currentAudioRef.current) {
-        currentAudioRef.current.pause();
-      }
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-      }
-    };
-  }, [userName, speakText]);
+    if (hasMicPermission === true) {
+      startListening();
+    }
+  }, [hasMicPermission, startListening]);
 
   const toggleMute = () => {
     if (isMuted) {
@@ -320,10 +403,37 @@ export default function AICoachVoiceModal({
       startListening();
     } else {
       setIsMuted(true);
+      interruptAgent();
       if (recognitionRef.current) {
-        try { recognitionRef.current.stop(); } catch(e) {}
+        try { recognitionRef.current.abort(); } catch (e) {}
       }
       setState('idle');
+    }
+  };
+
+  // Exit voice mode and sync thread
+  const handleClose = () => {
+    interruptAgent();
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch (e) {}
+    }
+    queryClient.invalidateQueries({ queryKey: ['messages', conversationId] });
+    queryClient.invalidateQueries({ queryKey: ['conversations', userId] });
+    onClose();
+  };
+
+  // Compute clean status label
+  const getStatusLabel = () => {
+    switch (state) {
+      case 'listening':
+        return 'Listening...';
+      case 'thinking':
+        return 'Thinking...';
+      case 'speaking':
+        return 'Vee Speaking...';
+      case 'idle':
+      default:
+        return isMuted ? 'Muted' : 'Tap blob to speak';
     }
   };
 
@@ -333,125 +443,143 @@ export default function AICoachVoiceModal({
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        className="fixed inset-0 z-[120] bg-slate-950/95 backdrop-blur-3xl flex flex-col justify-between items-center p-8 select-none text-white overflow-hidden font-display"
+        className="fixed inset-0 z-[120] bg-slate-950/95 backdrop-blur-3xl flex flex-col justify-between items-center p-6 select-none text-white overflow-hidden font-display"
       >
-        {/* Top Header */}
-        <div className="relative z-10 flex items-center justify-between w-full max-w-md pt-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-              <Sparkles size={20} className="animate-pulse" />
+        {/* Sleek Top Header with Explicit Language Selector */}
+        <div className="relative z-10 flex items-center justify-between w-full max-w-md pt-2">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+              <Sparkles size={18} className="animate-pulse" />
             </div>
             <div>
-              <h3 className="font-bold text-base text-slate-100">AI Health Coach</h3>
-              <p className="text-xs text-emerald-400 font-medium">Live Voice Mode ({formatDuration(sessionDuration)})</p>
+              <h3 className="font-bold text-sm text-slate-100">AI Health Coach</h3>
+              <p className="text-[11px] text-emerald-400 font-medium">Voice Mode</p>
             </div>
           </div>
 
+          {/* Explicit Language Selector (Decoupled from IP location) */}
+          <div className="flex items-center gap-1 bg-white/10 p-1 rounded-full border border-white/10 text-xs">
+            <Globe size={13} className="text-slate-400 ml-1.5 mr-0.5" />
+            {(['en-US', 'id-ID', 'es-ES', 'ar-SA'] as const).map(lang => (
+              <button
+                key={lang}
+                onClick={() => {
+                  setVoiceLang(lang);
+                  interruptAgent();
+                  toast.success(`Language set to ${lang.split('-')[0].toUpperCase()}`);
+                }}
+                className={`px-2 py-0.5 rounded-full transition-all text-[11px] font-bold ${
+                  voiceLang === lang
+                    ? 'bg-emerald-500 text-slate-950 shadow-sm'
+                    : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                {lang.split('-')[0].toUpperCase()}
+              </button>
+            ))}
+          </div>
+
           <button
-            onClick={onClose}
-            className="p-2.5 bg-white/10 hover:bg-white/20 rounded-full text-slate-300 transition-all"
+            onClick={handleClose}
+            className="p-2.5 bg-white/10 hover:bg-white/20 active:scale-95 rounded-full text-slate-300 transition-all"
+            title="Close voice mode"
           >
             <X size={20} />
           </button>
         </div>
 
-        {/* Center 3D Health Coach Sphere Avatar */}
-        <div className="relative z-10 flex flex-col items-center justify-center gap-6 w-full max-w-md my-auto text-center px-4">
-          <div className="relative flex items-center justify-center">
-            {/* Ambient Background Aura */}
-            <motion.div
-              animate={{
-                scale: state === 'speaking' ? [1, 1.3, 1] : state === 'researching' ? [1, 1.4, 1] : [1, 1.1, 1],
-                opacity: state === 'speaking' ? [0.4, 0.7, 0.4] : [0.2, 0.5, 0.2]
-              }}
-              transition={{ repeat: Infinity, duration: 2.5, ease: "easeInOut" }}
-              className={`absolute inset-0 rounded-full blur-3xl ${
-                intent === 'factual_research' || state === 'researching'
-                  ? 'bg-cyan-500/35'
-                  : state === 'thinking'
-                  ? 'bg-purple-500/35'
-                  : 'bg-emerald-500/35'
-              }`}
-            />
+        {/* Center Main Stage - 3D Organic Morphing Blob */}
+        {hasMicPermission === false ? (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="relative z-10 flex flex-col items-center justify-center gap-6 w-full max-w-sm my-auto text-center px-6 py-8 rounded-3xl bg-white/5 border border-white/10 backdrop-blur-xl shadow-2xl"
+          >
+            <div className="w-16 h-16 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-lg shadow-emerald-500/20 animate-pulse">
+              <Mic size={32} />
+            </div>
 
-            {/* 3D Sphere Avatar */}
-            <HealthCoachSphere
-              state={state}
-              intent={intent}
-              size={240}
-              className="z-10 shadow-2xl shadow-emerald-950/80"
-            />
-          </div>
+            <div className="space-y-2">
+              <h4 className="text-lg font-bold text-slate-100">Enable Microphone</h4>
+              <p className="text-sm text-slate-300 leading-relaxed">
+                Allow microphone access to talk directly with Vee with instant voice response.
+              </p>
+            </div>
 
-          {/* Active Intent / Research Indicator Badge */}
-          {intent === 'factual_research' || state === 'researching' ? (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 text-xs font-semibold backdrop-blur-md shadow-lg"
+            <button
+              onClick={requestMicPermission}
+              className="w-full py-3.5 px-6 rounded-2xl bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-slate-950 font-bold text-sm shadow-xl shadow-emerald-500/30 transition-all duration-200 flex items-center justify-center gap-2"
             >
-              <Search size={14} className="animate-spin text-cyan-400" />
-              <span>ChatGPT Web Research Active</span>
-            </motion.div>
-          ) : intent === 'nutrition_analysis' ? (
-            <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-xs font-medium">
-              <Sparkles size={13} />
-              <span>Nutritional Analysis</span>
-            </div>
-          ) : intent === 'motivation' ? (
-            <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-purple-500/20 border border-purple-500/30 text-purple-300 text-xs font-medium">
-              <Sparkles size={13} />
-              <span>Mindset & Support</span>
-            </div>
-          ) : null}
+              <ShieldCheck size={18} />
+              <span>Allow Microphone & Start</span>
+            </button>
+          </motion.div>
+        ) : (
+          <div className="relative z-10 flex flex-col items-center justify-center gap-6 w-full max-w-md my-auto text-center px-4">
+            <div className="relative flex items-center justify-center">
+              {/* Ambient Aura Glow */}
+              <motion.div
+                animate={{
+                  scale: state === 'speaking' ? [1, 1.35, 1] : state === 'thinking' ? [1, 1.25, 1] : [1, 1.1, 1],
+                  opacity: state === 'speaking' ? [0.45, 0.75, 0.45] : [0.2, 0.4, 0.2]
+                }}
+                transition={{ repeat: Infinity, duration: 2.2, ease: "easeInOut" }}
+                className={`absolute inset-0 rounded-full blur-3xl ${
+                  state === 'thinking' ? 'bg-purple-500/40' : 'bg-emerald-500/40'
+                }`}
+              />
 
-          {/* Transcript / AI Status Speech Bubble */}
-          <div className="space-y-2 max-w-sm">
-            <p className="text-xs uppercase tracking-widest font-black text-emerald-400/90">
-              {state === 'listening' ? 'User Speaking' : state === 'researching' ? 'Searching Scientific Research...' : state === 'thinking' ? 'AI Coach Reasoning...' : state === 'speaking' ? 'AI Coach Speaking' : 'Tap Mic to Speak'}
-            </p>
-            <p className="text-sm font-medium text-slate-200 min-h-[52px] px-4 py-3 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md shadow-inner leading-relaxed">
-              {state === 'listening' ? (transcript || 'Listening to your voice...') : (aiResponse || 'Ready to chat back and forth!')}
+              {/* 3D Morphing Blob */}
+              <div onClick={interruptAgent} className="cursor-pointer z-10 active:scale-95 transition-transform" title="Tap to interrupt">
+                <HealthCoachSphere
+                  state={state}
+                  size={260}
+                  className="shadow-2xl shadow-emerald-950/80"
+                />
+              </div>
+            </div>
+
+            {/* Minimalist Status Text */}
+            <p className="text-xs uppercase tracking-widest font-black text-emerald-400 transition-all">
+              {getStatusLabel()}
             </p>
           </div>
-        </div>
+        )}
 
-        {/* Bottom Control Dock */}
-        <div className="relative z-10 w-full max-w-sm flex items-center justify-center gap-6 pb-6">
-          {/* Mute Mic Button */}
-          <button
-            onClick={toggleMute}
-            className={`p-4 rounded-full transition-all duration-300 shadow-xl ${
-              isMuted
-                ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
-                : 'bg-white/10 text-white hover:bg-white/20 border border-white/15'
-            }`}
-            title={isMuted ? 'Unmute Mic' : 'Mute Mic'}
-          >
-            {isMuted ? <MicOff size={24} /> : <Mic size={24} />}
-          </button>
+        {/* Minimalist Bottom Control Pill */}
+        <div className="relative z-10 w-full max-w-xs flex items-center justify-center gap-4 pb-4">
+          {hasMicPermission && (
+            <div className="flex items-center gap-4 p-2 px-4 rounded-full bg-white/10 backdrop-blur-xl border border-white/10 shadow-2xl">
+              {/* Mute / Unmute Mic Button */}
+              <button
+                onClick={toggleMute}
+                className={`p-3 rounded-full transition-all duration-200 ${
+                  isMuted
+                    ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                    : 'bg-white/10 text-white hover:bg-white/20'
+                }`}
+                title={isMuted ? 'Unmute Mic' : 'Mute Mic'}
+              >
+                {isMuted ? <MicOff size={20} /> : <Mic size={20} />}
+              </button>
 
-          {/* Mute Audio Output */}
-          <button
-            onClick={() => setIsAudioMuted(!isAudioMuted)}
-            className={`p-4 rounded-full transition-all duration-300 shadow-xl ${
-              isAudioMuted
-                ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                : 'bg-white/10 text-white hover:bg-white/20 border border-white/15'
-            }`}
-            title={isAudioMuted ? 'Unmute AI Voice' : 'Mute AI Voice'}
-          >
-            {isAudioMuted ? <VolumeX size={24} /> : <Volume2 size={24} />}
-          </button>
-
-          {/* End Call Button */}
-          <button
-            onClick={onClose}
-            className="w-16 h-16 bg-rose-600 hover:bg-rose-700 text-white rounded-full flex items-center justify-center shadow-xl shadow-rose-600/40 scale-105 active:scale-95 transition-all duration-200"
-            title="End Voice Conversation"
-          >
-            <PhoneOff size={28} />
-          </button>
+              {/* Mute / Unmute Voice Output */}
+              <button
+                onClick={() => {
+                  if (!isAudioMuted) interruptAgent();
+                  setIsAudioMuted(!isAudioMuted);
+                }}
+                className={`p-3 rounded-full transition-all duration-200 ${
+                  isAudioMuted
+                    ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                    : 'bg-white/10 text-white hover:bg-white/20'
+                }`}
+                title={isAudioMuted ? 'Unmute Voice' : 'Mute Voice'}
+              >
+                {isAudioMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
+              </button>
+            </div>
+          )}
         </div>
       </motion.div>
     </AnimatePresence>

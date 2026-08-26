@@ -8,7 +8,7 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: 'Valid text parameter is required' }, { status: 400 });
         }
 
-        const apiKey = process.env.OPENAI_API_KEY;
+        const apiKey = process.env.OPENAI_API_KEY || process.env.NEXT_PUBLIC_OPENAI_API_KEY;
         if (!apiKey) {
             throw new Error('OpenAI API key missing');
         }
@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
         const clampedSpeed = Math.max(0.5, Math.min(numericSpeed, 2.0));
         const truncatedText = text.slice(0, 4096);
 
-        // Use high-definition TTS model with ultra-natural human voice choices (nova, shimmer, alloy)
+        // Use high-speed natural TTS model with ultra-natural human voice choices (nova, shimmer, alloy)
         const selectedVoice = ['nova', 'shimmer', 'alloy', 'echo', 'fable', 'onyx'].includes(voice) ? voice : 'nova';
         
         const response = await fetch('https://api.openai.com/v1/audio/speech', {
@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                model: 'tts-1-hd',
+                model: 'tts-1',
                 voice: selectedVoice,
                 input: truncatedText,
                 speed: clampedSpeed,

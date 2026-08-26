@@ -24,6 +24,28 @@ import { Sparkles } from 'lucide-react';
 // --- Constants ---
 const COACH_ID = '00000000-0000-0000-0000-000000000001';
 
+const sanitizeMediaUrl = (url: string | null | undefined): string | null => {
+    if (!url || typeof url !== 'string') return null;
+    const trimmed = url.trim();
+    if (!trimmed) return null;
+    if (trimmed.startsWith('blob:')) {
+        if (typeof window !== 'undefined') {
+            try {
+                if (trimmed.includes('netlify.app') && !window.location.hostname.includes('netlify.app')) {
+                    return null;
+                }
+                const parsed = new URL(trimmed);
+                if (parsed.origin !== window.location.origin) {
+                    return null;
+                }
+            } catch {
+                return null;
+            }
+        }
+    }
+    return trimmed;
+};
+
 // --- Sub-components ---
 
 const AudioMessage = ({ src }: { src: string }) => {
@@ -50,24 +72,25 @@ const AudioMessage = ({ src }: { src: string }) => {
     }, [src]);
 
     const performRetry = async (currentAttempt: number) => {
+        // If the URL is a local blob URL that failed, it cannot be recovered via fetch
+        if (src.startsWith('blob:')) {
+            setError(true);
+            return;
+        }
+
         const delay = Math.pow(2, currentAttempt) * 1000;
         setTimeout(async () => {
             try {
                 let blob: Blob;
-                if (src.startsWith('blob:')) {
-                    const res = await fetch(src);
-                    blob = await res.blob();
+                const match = src.match(/object\/public\/([^\/]+)\/(.+)/);
+                if (match) {
+                    const { data, error: downloadErr } = await supabase.storage.from(match[1]).download(match[2]);
+                    if (downloadErr) throw downloadErr;
+                    blob = data!;
                 } else {
-                    const match = src.match(/object\/public\/([^\/]+)\/(.+)/);
-                    if (match) {
-                        const { data, error: downloadErr } = await supabase.storage.from(match[1]).download(match[2]);
-                        if (downloadErr) throw downloadErr;
-                        blob = data!;
-                    } else {
-                        const res = await fetch(src, { mode: 'cors' });
-                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                        blob = await res.blob();
-                    }
+                    const res = await fetch(src, { mode: 'cors' });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    blob = await res.blob();
                 }
                 const objUrl = URL.createObjectURL(blob);
                 setInternalSrc(objUrl);
@@ -356,8 +379,19 @@ export default function ChatConversation() {
                 </div>
                 
                 <div className="flex gap-4 relative z-0">
-                    <div className="w-16 h-16 rounded-2xl overflow-hidden shrink-0 border border-white/10 shadow-lg">
-                        <img src={ctx.productImage} className="w-full h-full object-cover" alt="" />
+                    <div className="w-16 h-16 rounded-2xl overflow-hidden shrink-0 border border-white/10 shadow-lg bg-emerald-500/10 flex items-center justify-center">
+                        {sanitizeMediaUrl(ctx.productImage) ? (
+                            <img 
+                                src={sanitizeMediaUrl(ctx.productImage)!} 
+                                className="w-full h-full object-cover" 
+                                alt="" 
+                                onError={(e) => {
+                                    (e.target as HTMLElement).style.display = 'none';
+                                }}
+                            />
+                        ) : (
+                            <Brain className="text-vic-green" size={24} />
+                        )}
                     </div>
                     <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -546,17 +580,17 @@ export default function ChatConversation() {
 
     const displayAvatar = useMemo(() => {
         if (isAI) return '/app logo.png';
-        if (isSelf) return profile?.avatar_url;
+        if (isSelf) return sanitizeMediaUrl(profile?.avatar_url);
         
         const rawP = isVirtual ? virtualProfile : (otherUserProfile || otherParticipant?.user_profiles);
         const p = Array.isArray(rawP) ? rawP[0] : rawP;
         
-        if (p?.avatar_url) return p.avatar_url;
-        if (conversation?.display_avatar) return conversation.display_avatar;
+        if (p?.avatar_url) return sanitizeMediaUrl(p.avatar_url);
+        if (conversation?.display_avatar) return sanitizeMediaUrl(conversation.display_avatar);
         
         const cachedConvs = queryClient.getQueryData<any[]>(['conversations', user?.id]);
         const currentConv = cachedConvs?.find(c => c.id === localActiveId);
-        if (currentConv?.display_avatar) return currentConv.display_avatar;
+        if (currentConv?.display_avatar) return sanitizeMediaUrl(currentConv.display_avatar);
 
         return null;
     }, [conversation, isAI, isSelf, profile, otherParticipant, otherUserProfile, isVirtual, virtualProfile, queryClient, user?.id, localActiveId]);
@@ -1059,7 +1093,7 @@ export default function ChatConversation() {
 
         // Loop Guard: If we JUST marked this ID as read in this component instance, STOP.
         // Unless it's a forced update (e.g. new message came in)
-        if (!force && lastMarkedId.current === convId) {
+        if (!force && (lastMarkedId.current === convId)) {
             return;
         }
 
@@ -1099,9 +1133,8 @@ export default function ChatConversation() {
 
         try {
             await markAsRead(user.id, realId);
-            // Clear unread count globally too
-            queryClient.invalidateQueries({ queryKey: ['unread-messages-global', user.id] });
-            queryClient.invalidateQueries({ queryKey: ['conversations', user.id] });
+            // Optimistically update conversations cache without triggering full invalidation churn
+            queryClient.setQueryData(['unread-messages-global', user.id], 0);
         } catch (err) {
             console.error('[Chat] Failed to clear unread:', err);
             lastMarkedId.current = null; // Reset guard on failure to allow retry
@@ -1123,21 +1156,16 @@ export default function ChatConversation() {
                 const newMessage = payload.new;
                 if (newMessage.sender_id === COACH_ID) {
                     setIsProcessingVoice(false);
-                    // V18: Don't clear typing on INSERT, wait for UPDATE with content
-                    // setOtherUserTyping(false); 
                 }
 
                 // 1. Update local cache with deduplication
                 queryClient.setQueryData(['messages', localActiveId], (old: any) => {
                     const base = Array.isArray(old) ? old : [];
 
-                    // Already have this real message? (Check by ID)
                     if (base.some((m: any) => m.id === newMessage.id)) {
-                        console.log(`[Chat] Message ${newMessage.id} already in cache, skipping.`);
                         return old;
                     }
 
-                    // DEDUPLICATION: If we have an optimistic message with same content/type, REPLACE it
                     const optIndex = base.findIndex(m =>
                         (m.id?.toString().startsWith('opt-') || m.id?.toString().startsWith('temp-')) &&
                         m.content === newMessage.content &&
@@ -1146,36 +1174,22 @@ export default function ChatConversation() {
                     );
 
                     if (optIndex > -1) {
-                        console.log(`[Chat] Dedup: Replacing optimistic message with real message ${newMessage.id}`);
                         const updated = [...base];
                         updated[optIndex] = newMessage;
                         return updated;
                     }
 
-                    console.log(`[Chat] Appending new message ${newMessage.id} to conversation ${localActiveId}`);
-                    const next = [...base, newMessage].sort((a, b) =>
+                    return [...base, newMessage].sort((a, b) =>
                         new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
                     );
-
-                    return next;
                 });
 
-                // Clear AI typing state if we received an AI message
                 if (newMessage.sender_id === COACH_ID) {
                     setOtherUserTyping(false);
                 }
-
-                // 2. Mark as read if not from us
-                if (newMessage.sender_id !== user?.id && localActiveId) {
-                    markConversationAsReadLocal(localActiveId, true); // TRUE: Force read for new message
-                }
-
-                // --- Sidebar Sync ---
-                queryClient.invalidateQueries({ queryKey: ['conversations', user?.id] });
             } else if (payload.eventType === 'UPDATE') {
                 const updatedMessage = payload.new;
 
-                // If AI message is updating (streaming), ensure typing is false once it has content
                 if (updatedMessage.sender_id === COACH_ID && updatedMessage.content?.length > 0) {
                     setOtherUserTyping(false);
                 }
@@ -1196,14 +1210,17 @@ export default function ChatConversation() {
     useEffect(() => {
         if (!activeId || !user?.id) return;
 
-        // Skip for uninitialized virtual chats until first message
         const isV = localActiveId.startsWith('new-');
         const vTargetId = isV ? localActiveId.replace('new-', '') : null;
 
-        // STABILIZATION GUARD: Don't re-subscribe if already on this channel for this user
         const currentSubKey = `${user.id}:${localActiveId}`;
         if (activeSubscriptionIdRef.current === currentSubKey && activeChannelRef.current) {
             return;
+        }
+
+        if (activeChannelRef.current) {
+            try { supabase.removeChannel(activeChannelRef.current); } catch (e) {}
+            activeChannelRef.current = null;
         }
         
         activeSubscriptionIdRef.current = currentSubKey;
@@ -1211,94 +1228,73 @@ export default function ChatConversation() {
         
         console.log(`[Chat] V12 Subscribing to: ${channelName} for ${localActiveId}`);
 
-        const initChannel = () => {
-            if (activeChannelRef.current) {
-                console.log(`[Chat] V12 Cleaning up stale channel: ${activeChannelRef.current.topic}`);
-                supabase.removeChannel(activeChannelRef.current);
-                activeChannelRef.current = null;
-            }
+        const channel = supabase.channel(channelName)
+            .on('presence', { event: 'sync' }, () => {
+                const state = channel.presenceState();
+                let isTyping = false;
+                let isOnline = false;
+                const targetId = isV ? vTargetId : otherParticipantId;
 
-            const channel = supabase.channel(channelName)
-                .on('presence', { event: 'sync' }, () => {
-                    const state = channel.presenceState();
-                    let isTyping = false;
-                    let isOnline = false;
-                    const targetId = isV ? vTargetId : otherParticipantId;
-
-                    Object.values(state).forEach((presences: any) => {
-                        presences.forEach((p: any) => {
-                            if (p.user_id === targetId) {
-                                isOnline = true;
-                                if (p.typing && (p.conversation_id === localActiveId || isV)) {
-                                    isTyping = true;
-                                }
+                Object.values(state).forEach((presences: any) => {
+                    presences.forEach((p: any) => {
+                        if (p.user_id === targetId) {
+                            isOnline = true;
+                            if (p.typing && (p.conversation_id === localActiveId || isV)) {
+                                isTyping = true;
                             }
-                        });
+                        }
                     });
-
-                    if (!isAI) {
-                        setOtherUserTyping(prev => (prev !== isTyping ? isTyping : prev));
-                    }
-                    setOtherUserOnline(prev => (prev !== isOnline ? isOnline : prev));
-                })
-                .on('postgres_changes', {
-                    event: '*',
-                    schema: 'public',
-                    table: 'messages'
-                    // V13: NO FILTER HERE. We filter manually in the handler to ensure 100% reliability.
-                }, (payload) => {
-                    const incomingConvId = payload.new ? (payload.new as any).conversation_id : (payload.old as any)?.conversation_id;
-                    
-                    // Only process messages for the CURRENT conversation (Case-Insensitive UUID check)
-                    const isMatch = incomingConvId?.toString().toLowerCase() === localActiveId?.toString().toLowerCase();
-
-                    if (isMatch || (isV && incomingConvId)) {
-                        console.log(`[Chat] Real-time event [${payload.eventType}] matching ${localActiveId}. Incoming: ${incomingConvId}`);
-                        onMessageEventRef.current?.(payload);
-                    } else {
-                        console.log(`[Chat] Skipping real-time event [${payload.eventType}] - No match. Target: ${localActiveId}, Received: ${incomingConvId}`);
-                    }
-                })
-                .subscribe(async (status) => {
-                    if (status === 'SUBSCRIBED') {
-                        console.log(`[Chat] V12 channel ${channelName} SUBSCRIBED`);
-                        await channel.track({
-                            user_id: user.id,
-                            conversation_id: localActiveId,
-                            online_at: new Date().toISOString(),
-                            typing: false
-                        });
-                    }
                 });
 
-            activeChannelRef.current = channel;
-        };
+                if (!isAI) {
+                    setOtherUserTyping(prev => (prev !== isTyping ? isTyping : prev));
+                }
+                setOtherUserOnline(prev => (prev !== isOnline ? isOnline : prev));
+            })
+            .on('postgres_changes', {
+                event: '*',
+                schema: 'public',
+                table: 'messages'
+            }, (payload) => {
+                const incomingConvId = payload.new ? (payload.new as any).conversation_id : (payload.old as any)?.conversation_id;
+                const isMatch = incomingConvId?.toString().toLowerCase() === localActiveId?.toString().toLowerCase();
 
-        initChannel();
+                if (isMatch || (isV && incomingConvId)) {
+                    onMessageEventRef.current?.(payload);
+                }
+            })
+            .subscribe(async (status) => {
+                if (status === 'SUBSCRIBED') {
+                    console.log(`[Chat] V12 channel ${channelName} SUBSCRIBED`);
+                    await channel.track({
+                        user_id: user.id,
+                        conversation_id: localActiveId,
+                        online_at: new Date().toISOString(),
+                        typing: false
+                    });
+                }
+            });
 
-        const activeIdCopy = localActiveId;
+        activeChannelRef.current = channel;
+
         return () => {
-            console.log(`[Chat] V12 Hook Cleanup for realtime:${channelName} (ID: ${activeIdCopy})`);
             if (activeChannelRef.current) {
                 supabase.removeChannel(activeChannelRef.current);
                 activeChannelRef.current = null;
             }
             activeSubscriptionIdRef.current = null;
         };
-    }, [activeId, user?.id]); // Dependencies are correct, but ref-guard prevents churn
+    }, [activeId, user?.id]);
 
-    // On mount or switch: clear unread
+    // On mount or switch: clear unread once
     useEffect(() => {
         if (activeId && user?.id && lastMarkedId.current !== activeId) {
-            console.log(`[Chat] Effect: Checking read status for ${activeId}`);
             markConversationAsReadLocal(activeId);
             lastMarkedId.current = activeId;
         }
 
-        // Also clear unread when the window gains focus (e.g. user comes back to the tab)
         const handleFocus = () => {
-            if (activeId && user?.id) {
-                console.log("[Chat] Window focused, refreshing read status");
+            if (activeId && user?.id && lastMarkedId.current !== activeId) {
                 markConversationAsReadLocal(activeId);
             }
         };
@@ -1306,10 +1302,8 @@ export default function ChatConversation() {
         window.addEventListener('focus', handleFocus);
         return () => {
             window.removeEventListener('focus', handleFocus);
-            // Reset lastMarkedId on unmount if we want it to run again on remount
-            // lastMarkedId.current = null; 
         };
-    }, [activeId, user?.id, markConversationAsReadLocal]);
+    }, [activeId, user?.id]);
 
     // --- Call Handlers (Handled by handleStartCall under Actions) ---
 
@@ -1404,11 +1398,40 @@ export default function ChatConversation() {
             return { previousMessages, previousConvs };
         },
         onError: (err, newMsg, context: any) => {
+            setOtherUserTyping(false);
             queryClient.setQueryData(['messages', localActiveId], context?.previousMessages);
             queryClient.setQueryData(['conversations', user?.id], context?.previousConvs);
             toast.error("Message failed to send");
         },
         onSuccess: (data: any, variables: any) => {
+            setOtherUserTyping(false);
+            const assistantReply = data?.assistantReply;
+            const targetConvId = data?.realId ? (typeof data.realId === 'object' ? (data.realId.id || data.realId.conversation_id || data.realId.r_id) : data.realId) : localActiveId;
+
+            if (assistantReply && assistantReply.content) {
+                const assistantMsg = {
+                    id: assistantReply.messageId || `ai-${Date.now()}`,
+                    content: assistantReply.content,
+                    sender_id: COACH_ID,
+                    receiver_id: user?.id,
+                    conversation_id: String(targetConvId),
+                    created_at: new Date().toISOString(),
+                    message_type: 'text',
+                    metadata: {
+                        intent: assistantReply.intent,
+                        format: assistantReply.format
+                    }
+                };
+
+                queryClient.setQueryData(['messages', String(targetConvId)], (old: any) => {
+                    const base = Array.isArray(old) ? old : [];
+                    if (base.some((m: any) => m.id === assistantMsg.id || (m.sender_id === COACH_ID && m.content === assistantMsg.content))) {
+                        return old;
+                    }
+                    return [...base, assistantMsg];
+                });
+            }
+
             if (data?.realId) {
                 const id = typeof data.realId === 'object' ? (data.realId.id || data.realId.conversation_id || data.realId.r_id) : data.realId;
                 
@@ -1430,6 +1453,7 @@ export default function ChatConversation() {
             }
         },
         onSettled: () => {
+            setOtherUserTyping(false);
             queryClient.invalidateQueries({ queryKey: ['messages', localActiveId] });
             queryClient.invalidateQueries({ queryKey: ['conversations', user?.id] });
             queryClient.invalidateQueries({ queryKey: ['contacts', user?.id] });
@@ -1581,7 +1605,8 @@ export default function ChatConversation() {
     const renderMessageContent = (msg: any) => {
         // Handle new JSON metadata vs old raw string metadata
         const metadata = msg.metadata;
-        const mediaUrl = (typeof metadata === 'object' && metadata !== null) ? metadata.url : metadata;
+        const rawMediaUrl = (typeof metadata === 'object' && metadata !== null) ? metadata.url : metadata;
+        const mediaUrl = sanitizeMediaUrl(rawMediaUrl);
 
         const handleLogFood = async (foodData: any) => {
             if (!user?.id) return;
@@ -1603,7 +1628,21 @@ export default function ChatConversation() {
             case 'image':
                 return (
                     <div className="flex flex-col gap-2">
-                        <img src={mediaUrl} alt="Shared" className="max-w-full rounded-lg cursor-pointer" onClick={() => window.open(mediaUrl)} />
+                        {mediaUrl ? (
+                            <img 
+                                src={mediaUrl} 
+                                alt="Shared" 
+                                className="max-w-full rounded-lg cursor-pointer max-h-80 object-cover" 
+                                onClick={() => {
+                                    if (mediaUrl && !mediaUrl.startsWith('blob:')) {
+                                        window.open(mediaUrl, '_blank');
+                                    }
+                                }}
+                                onError={(e) => {
+                                    (e.target as HTMLImageElement).style.display = 'none';
+                                }}
+                            />
+                        ) : null}
                         {/* Check for food analysis results in metadata */}
                         {metadata?.foodAnalysis && (
                             <div className="mt-3 p-4 bg-white/5 dark:bg-black/40 rounded-3xl border border-vic-green/30 backdrop-blur-md shadow-lg">
@@ -1726,12 +1765,15 @@ export default function ChatConversation() {
                         if (parsed.foodAnalysis) {
                             return (
                                 <div className="p-4 bg-white/5 dark:bg-black/40 rounded-3xl border border-vic-green/30 backdrop-blur-md shadow-lg my-2 max-w-[280px] overflow-hidden">
-                                    {parsed.foodAnalysis.image_url && (
+                                    {sanitizeMediaUrl(parsed.foodAnalysis.image_url) && (
                                         <div className="relative h-40 -mx-4 -mt-4 mb-4 overflow-hidden">
                                             <img 
-                                                src={parsed.foodAnalysis.image_url} 
+                                                src={sanitizeMediaUrl(parsed.foodAnalysis.image_url)!} 
                                                 alt={parsed.foodAnalysis.name}
                                                 className="w-full h-full object-cover"
+                                                onError={(e) => {
+                                                    (e.target as HTMLElement).parentElement?.remove();
+                                                }}
                                             />
                                             <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
                                         </div>
@@ -1790,8 +1832,15 @@ export default function ChatConversation() {
                     return (
                         <div className="flex flex-col gap-1">
                             <div className="flex items-center gap-3 p-3 bg-white dark:bg-[#1f2c34] rounded-2xl shadow-sm border border-vic-green/20 min-w-[260px] max-w-[320px]">
-                                {(ctx.productImage || ctx.image) ? (
-                                    <img src={ctx.productImage || ctx.image} alt="Food" className="w-12 h-12 rounded-xl object-cover" />
+                                {sanitizeMediaUrl(ctx.productImage || ctx.image) ? (
+                                    <img 
+                                        src={sanitizeMediaUrl(ctx.productImage || ctx.image)!} 
+                                        alt="Food" 
+                                        className="w-12 h-12 rounded-xl object-cover" 
+                                        onError={(e) => {
+                                            (e.target as HTMLElement).style.display = 'none';
+                                        }}
+                                    />
                                 ) : (
                                     <div className="w-12 h-12 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
                                         <span className="text-[10px] text-slate-400 font-bold uppercase">No Img</span>
@@ -1927,8 +1976,17 @@ export default function ChatConversation() {
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-1">
-                        {!isSelf && !isAI && (
+                    <div className="flex items-center gap-2">
+                        {isAI ? (
+                            <button
+                                onClick={() => setShowAiVoiceModal(true)}
+                                className="px-3 py-1.5 bg-vic-green/15 hover:bg-vic-green/25 text-vic-green rounded-full flex items-center gap-1.5 transition-all text-xs font-bold shadow-sm"
+                                title="Talk to Coach (Live Voice)"
+                            >
+                                <Sparkles size={16} className="animate-pulse" />
+                                <span>Talk to Coach</span>
+                            </button>
+                        ) : !isSelf ? (
                             <>
                                 <button onClick={() => handleStartCall('video')} className="p-2 text-[#54656F] dark:text-[#8696A0] hover:bg-black/5 rounded-full">
                                     <Video size={24} />
@@ -1937,7 +1995,7 @@ export default function ChatConversation() {
                                     <Phone size={24} />
                                 </button>
                             </>
-                        )}
+                        ) : null}
                         <div className="relative">
                             <button onClick={() => setIsMenuOpen(!isMenuOpen)} className="p-2 text-[#54656F] dark:text-[#8696A0] hover:bg-black/5 rounded-full">
                                 <MoreVertical size={24} />
@@ -2504,7 +2562,7 @@ export default function ChatConversation() {
                 {showAiVoiceModal && user && (
                     <AICoachVoiceModal
                         userId={user.id}
-                        userName={profile?.full_name || 'User'}
+                        userName={profile?.full_name || profile?.username || user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split('@')[0] || 'there'}
                         userAvatar={profile?.avatar_url}
                         conversationId={localActiveId}
                         onClose={() => setShowAiVoiceModal(false)}

@@ -56,26 +56,90 @@ export function useDailyCall() {
         };
     }, [callObject, refreshTracks]);
 
+    // Unmount cleanup to prevent leaking Daily call instances across page transitions
+    useEffect(() => {
+        return () => {
+            try {
+                const instance = DailyIframe.getCallInstance();
+                if (instance) {
+                    instance.destroy().catch(() => {});
+                }
+            } catch (_) {}
+        };
+    }, []);
+
     const joinCall = useCallback(async (url: string, isVideo: boolean = false, userName?: string) => {
         if (typeof window === 'undefined') return;
-        try { const existing = DailyIframe.getCallInstance(); if (existing) await existing.destroy(); } catch (_) {}
-        const co = DailyIframe.createCallObject({ audioSource: true, videoSource: true });
+        
+        try {
+            const existing = DailyIframe.getCallInstance();
+            if (existing) {
+                try { await existing.leave(); } catch (_) {}
+                try { await existing.destroy(); } catch (_) {}
+            }
+        } catch (_) {}
+
+        let co: DailyCall | null = null;
+        try {
+            co = DailyIframe.createCallObject({
+                audioSource: true,
+                videoSource: true,
+                dailyConfig: {
+                    experimentalChromeVideoMuteLightOff: true,
+                    useDevicePreference: true,
+                } as any
+            });
+        } catch (createErr) {
+            console.error('[Daily] Failed to create call object:', createErr);
+            setStatus('error');
+            return;
+        }
+
         setCallObject(co);
         setStatus('joining');
-        try {
-            await co.join({ url, startAudioOff: false, startVideoOff: !isVideo, userName: userName || 'Vicalary User' });
-        } catch (err) { console.error('[Daily] Failed to join call room:', err); setStatus('error'); }
 
+        try {
+            await co.join({ 
+                url, 
+                startAudioOff: false, 
+                startVideoOff: !isVideo, 
+                userName: userName || 'Vicalary User' 
+            });
+        } catch (err) {
+            console.error('[Daily] Failed to join call room:', err);
+            setStatus('error');
+            try { await co.destroy(); } catch (_) {}
+            setCallObject(null);
+        }
     }, []);
 
     const leaveCall = useCallback(async () => {
         if (!callObject) {
-            try { const ex = DailyIframe.getCallInstance(); if (ex) await ex.destroy(); } catch (_) {}
-            setStatus('idle'); setParticipants([]); return;
+            try {
+                const ex = DailyIframe.getCallInstance();
+                if (ex) {
+                    try { await ex.leave(); } catch (_) {}
+                    try { await ex.destroy(); } catch (_) {}
+                }
+            } catch (_) {}
+            setStatus('idle');
+            setParticipants([]);
+            return;
         }
         setStatus('leaving');
-        try { await callObject.leave(); await callObject.destroy(); } catch (err) { console.warn('[Daily] Destroy warning:', err); }
-        finally { setCallObject(null); setStatus('idle'); setParticipants([]); setLocalVideoTrack(null); setRemoteVideoTrack(null); setRemoteAudioTrack(null); }
+        try {
+            await callObject.leave();
+            await callObject.destroy();
+        } catch (err) {
+            console.warn('[Daily] Destroy warning:', err);
+        } finally {
+            setCallObject(null);
+            setStatus('idle');
+            setParticipants([]);
+            setLocalVideoTrack(null);
+            setRemoteVideoTrack(null);
+            setRemoteAudioTrack(null);
+        }
     }, [callObject]);
 
     const toggleAudio = useCallback((enabled: boolean) => { if (callObject) callObject.setLocalAudio(enabled); }, [callObject]);

@@ -252,32 +252,54 @@ export const provisionAndSendMessage = async (
         const { getUserLocation } = await import('./location');
         const loc = await getUserLocation();
 
-        const triggerPayload = {
-            type: 'INSERT',
-            table: 'messages',
-            record: {
-                conversation_id: finalId,
-                sender_id: senderId,
-                content: content,
-                message_type: messageType,
-                created_at: new Date().toISOString()
-            },
-            system_context: {
-                current_time: new Date().toISOString(),
-                time_zone: typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC',
-                language: typeof navigator !== 'undefined' ? navigator.language : 'en-US',
-                locationContext: loc
-            }
+        const orchestratorPayload = {
+            conversation_id: String(finalId),
+            user_id: senderId,
+            content: content,
+            media_url: metadata?.url || null,
+            location_context: loc,
+            locale: typeof navigator !== 'undefined' ? navigator.language : 'en'
         };
 
         try {
-            await supabase.functions.invoke('coach-reply', { body: triggerPayload });
-        } catch (err) {
+            const res = await fetch('/api/conversation/process', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(orchestratorPayload)
+            });
+            let assistantReply = null;
+            if (res.ok) {
+                assistantReply = await res.json();
+            }
+            return {
+                id: String(finalId),
+                realId: String(finalId),
+                assistantReply
+            } as any;
+        } catch (e) {
+            console.warn("[API] Conversation orchestrator fallback to coach-reply:", e);
+            const triggerPayload = {
+                type: 'INSERT',
+                table: 'messages',
+                record: {
+                    conversation_id: finalId,
+                    sender_id: senderId,
+                    content: content,
+                    message_type: messageType,
+                    created_at: new Date().toISOString()
+                },
+                system_context: {
+                    current_time: new Date().toISOString(),
+                    time_zone: typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC',
+                    language: typeof navigator !== 'undefined' ? navigator.language : 'en-US',
+                    locationContext: loc
+                }
+            };
             fetch('/api/coach-reply', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(triggerPayload)
-            }).catch(e => console.error("[API] Fallback coach trigger failed:", e));
+            }).catch(err => console.error("[API] Coach trigger fallback failed:", err));
         }
     }
 
@@ -493,25 +515,48 @@ export const sendMessage = async (
     if (isAI) {
         const { getUserLocation } = await import('./location');
         const loc = await getUserLocation();
-        
-        const triggerPayload = {
-            type: 'INSERT',
-            table: 'messages',
-            record: data,
-            system_context: {
-                current_time: now,
-                time_zone: typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC',
-                language: typeof navigator !== 'undefined' ? navigator.language : 'en-US',
-                locationContext: loc
-            }
+
+        const orchestratorPayload = {
+            conversation_id: conversationId,
+            user_id: userId,
+            content: content,
+            media_url: metadata?.url || null,
+            location_context: loc,
+            locale: typeof navigator !== 'undefined' ? navigator.language : 'en'
         };
 
-        supabase.functions.invoke('coach-reply', { body: triggerPayload })
-            .catch(() => fetch('/api/coach-reply', {
+        try {
+            const res = await fetch('/api/conversation/process', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(orchestratorPayload)
+            });
+            if (res.ok) {
+                const orchestratorResult = await res.json();
+                return {
+                    ...data,
+                    assistantReply: orchestratorResult
+                };
+            }
+        } catch (e) {
+            console.warn("[API] Conversation orchestrator fallback to coach-reply:", e);
+            const triggerPayload = {
+                type: 'INSERT',
+                table: 'messages',
+                record: data,
+                system_context: {
+                    current_time: now,
+                    time_zone: typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC',
+                    language: typeof navigator !== 'undefined' ? navigator.language : 'en-US',
+                    locationContext: loc
+                }
+            };
+            fetch('/api/coach-reply', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(triggerPayload)
-            }));
+            }).catch(err => console.error("[API] Coach sendMessage trigger failed:", err));
+        }
     }
 
     return data

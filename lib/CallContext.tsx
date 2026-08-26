@@ -189,9 +189,10 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         } catch (err: any) {
             console.error('[CallContext] Failed to start call:', err);
             toast.error(err.message || "Failed to start call");
+            await leaveCall();
             setCallSession(null);
         }
-    }, [user, joinCall]);
+    }, [user, joinCall, leaveCall]);
 
     // 3. Accept Call Action (Callee side)
     const handleAccept = useCallback(async () => {
@@ -206,8 +207,11 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         } catch (err) {
             console.error('[CallContext] Failed to accept call:', err);
             toast.error("Failed to connect call");
+            await leaveCall();
+            setCallSession(prev => prev ? { ...prev, status: 'ended' } : null);
+            setTimeout(() => setCallSession(null), 800);
         }
-    }, [callSession, joinCall, user]);
+    }, [callSession, joinCall, leaveCall, user]);
 
     // 4. Decline Call Action (Callee side)
     const handleDecline = useCallback(async () => {

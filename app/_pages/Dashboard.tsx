@@ -206,42 +206,59 @@ export default function Dashboard() {
   };
 
   const switchCamera = async () => {
-    const newMode = facingMode === "user" ? "environment" : "user";
-    setFacingMode(newMode);
-
-    // Stop current stream
-    if (cameraStreamRef.current) {
-      cameraStreamRef.current.getTracks().forEach(track => track.stop());
-    }
-
-    // Start new stream
     try {
-      const stream = await requestCameraAccess({
-        video: {
-          facingMode: newMode,
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-          frameRate: { ideal: 60 },
-          advanced: [
-            { exposureMode: 'continuous' } as any,
-            { whiteBalanceMode: 'continuous' } as any,
-            { focusMode: 'continuous' } as any,
-            { brightness: 100 } as any,
-            { contrast: 100 } as any
-          ]
+      // Enumerate all video input devices (works on both desktop and mobile)
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(d => d.kind === 'videoinput');
+
+      if (videoDevices.length <= 1) {
+        // Single camera: toggle facingMode as mobile fallback
+        const newMode = facingMode === "user" ? "environment" : "user";
+        setFacingMode(newMode);
+        if (cameraStreamRef.current) {
+          cameraStreamRef.current.getTracks().forEach(track => track.stop());
         }
-      });
-      if (cameraVideoRef.current) {
-        cameraVideoRef.current.srcObject = stream;
-        cameraStreamRef.current = stream;
         try {
-          await cameraVideoRef.current.play();
-        } catch (e) {
-          console.error("Video auto-play failed:", e);
+          const stream = await requestCameraAccess({ video: { facingMode: newMode } });
+          if (cameraVideoRef.current) {
+            cameraVideoRef.current.srcObject = stream;
+            cameraStreamRef.current = stream;
+            await cameraVideoRef.current.play().catch(() => {});
+          }
+        } catch (err) {
+          console.error("Failed to switch camera:", err);
         }
+        return;
+      }
+
+      // Multi-camera: cycle to the next device by deviceId
+      const currentTrack = cameraStreamRef.current?.getVideoTracks()[0];
+      const currentDeviceId = currentTrack?.getSettings().deviceId;
+      const currentIndex = videoDevices.findIndex(d => d.deviceId === currentDeviceId);
+      const nextIndex = (currentIndex + 1) % videoDevices.length;
+      const nextDevice = videoDevices[nextIndex];
+
+      const label = nextDevice.label.toLowerCase();
+      const newMode = label.includes('front') || label.includes('user') ? 'user' : 'environment';
+      setFacingMode(newMode);
+
+      if (cameraStreamRef.current) {
+        cameraStreamRef.current.getTracks().forEach(track => track.stop());
+      }
+      try {
+        const stream = await requestCameraAccess({
+          video: { deviceId: { exact: nextDevice.deviceId } }
+        });
+        if (cameraVideoRef.current) {
+          cameraVideoRef.current.srcObject = stream;
+          cameraStreamRef.current = stream;
+          await cameraVideoRef.current.play().catch(() => {});
+        }
+      } catch (err) {
+        console.error("Failed to switch camera:", err);
       }
     } catch (err) {
-      console.error("Failed to switch camera:", err);
+      console.error("switchCamera enumeration failed:", err);
     }
   };
 
