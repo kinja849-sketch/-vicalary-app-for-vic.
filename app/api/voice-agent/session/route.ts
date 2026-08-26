@@ -15,6 +15,9 @@ export async function POST(req: NextRequest) {
     const {
       mode = 'cooking_guide',
       language = 'en',
+      recipe_context,
+      pantry_context,
+      extra_context,
     } = body;
     const user_id = authUser.id;
 
@@ -30,7 +33,58 @@ export async function POST(req: NextRequest) {
 
     const callId = `va_${mode}_${user_id}_${Date.now()}`;
 
-    // 1. Create a Daily.co Room dynamically
+    // 1. Fetch live user data and context from Supabase
+    let userName = 'there';
+    let dynamicContext: Record<string, any> = {};
+
+    try {
+      const { supabaseAdmin } = await import('@/lib/supabase-admin');
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+
+      const [profileRes, onboardingRes, nutritionRes] = await Promise.all([
+        supabaseAdmin.from('user_profiles').select('full_name, username').eq('id', user_id).maybeSingle(),
+        supabaseAdmin.from('onboarding_responses').select('*').eq('user_id', user_id).maybeSingle(),
+        supabaseAdmin.from('food_analysis_history')
+          .select('calories, protein, carbs, fat, analyzed_at')
+          .eq('user_id', user_id)
+          .gte('analyzed_at', todayStart.toISOString())
+          .limit(20)
+      ]);
+
+      const profile = profileRes.data;
+      const onboarding = onboardingRes.data || {};
+      const todayLogs = nutritionRes.data || [];
+
+      userName = profile?.full_name || profile?.username || 'there';
+
+      const caloriesToday = todayLogs.reduce((sum: number, item: any) => sum + (item.calories || 0), 0);
+      const calorieGoal = (onboarding as any).daily_calorie_goal || 2000;
+      const caloriesRemaining = Math.max(0, calorieGoal - caloriesToday);
+
+      if (mode === 'health_coach') {
+        dynamicContext = {
+          goal: (onboarding as any).goal || 'General Health & Vitality',
+          daily_calorie_goal: calorieGoal,
+          calories_today: caloriesToday,
+          calories_remaining: caloriesRemaining,
+          dietary_lifestyle: (onboarding as any).dietary_lifestyle?.join(', ') || 'None',
+          recent_notes: extra_context || 'Live check-in',
+        };
+      } else if (mode === 'cooking_guide') {
+        dynamicContext = {
+          current_meal: recipe_context?.name || recipe_context?.title || extra_context || 'Custom Recipe Session',
+          recipe_name: recipe_context?.name || recipe_context?.title,
+          dietary_lifestyle: (onboarding as any).dietary_lifestyle?.join(', ') || 'None',
+          available_ingredients: pantry_context || recipe_context?.ingredients || 'As requested by user',
+          skill_level: recipe_context?.difficulty || 'Home cook',
+        };
+      }
+    } catch (dbErr) {
+      console.warn('[Voice Agent API] Failed to fetch dynamic context from DB:', dbErr);
+    }
+
+    // 2. Create a Daily.co Room dynamically
     const roomRes = await fetch('https://api.daily.co/v1/rooms', {
       method: 'POST',
       headers: {
@@ -58,7 +112,8 @@ export async function POST(req: NextRequest) {
     const roomUrl = roomData.url;
     const roomName = roomData.name;
 
-    // 2. Create a Daily Meeting Token for the bot (owner)
+    // 3. Create a Daily Meeting Token for the bot (owner)
+    const botName = mode === 'cooking_guide' ? 'Chef Vee' : 'Vee';
     const tokenRes = await fetch('https://api.daily.co/v1/meeting-tokens', {
       method: 'POST',
       headers: {
@@ -69,7 +124,7 @@ export async function POST(req: NextRequest) {
         properties: {
           room_name: roomName,
           is_owner: true,
-          user_name: mode === 'cooking_guide' ? 'Chef Avatar' : 'Health Coach'
+          user_name: botName
         }
       })
     });
@@ -86,7 +141,7 @@ export async function POST(req: NextRequest) {
     const tokenData = await tokenRes.json();
     const botToken = tokenData.token;
 
-    // 3. Notify Python Voice Agent Service to start & join the session
+    // 4. Notify Python Voice Agent Service to start & join the session with live dynamic context
     try {
       const response = await fetch(`${voiceAgentUrl}/start-session`, {
         method: 'POST',
@@ -98,6 +153,8 @@ export async function POST(req: NextRequest) {
           mode,
           language,
           user_id,
+          user_name: userName,
+          dynamic_context: dynamicContext,
         }),
       });
 
@@ -115,6 +172,7 @@ export async function POST(req: NextRequest) {
       callId,
       mode,
       language,
+      userName,
     });
   } catch (err: any) {
     console.error('[Voice Agent API Error]:', err);

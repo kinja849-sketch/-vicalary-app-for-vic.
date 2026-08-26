@@ -65,11 +65,33 @@ const countryToLangMap: Record<string, string[]> = {
 };
 
 function extractMediaUrl(record: any): string | null {
-  const meta = record.metadata
+  const meta = record?.metadata
   if (!meta) return null
-  if (typeof meta === 'object') return meta.url || meta.publicUrl || null
-  if (typeof meta === 'string' && meta.startsWith('http')) return meta
-  return null
+  let url = ''
+  if (typeof meta === 'object') url = meta.url || meta.publicUrl || ''
+  if (typeof meta === 'string' && meta.startsWith('http')) url = meta
+  if (!url) return null
+
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null
+    // Guard against SSRF to internal/cloud metadata networks
+    const hostname = parsed.hostname.toLowerCase()
+    if (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '0.0.0.0' ||
+      hostname === '169.254.169.254' ||
+      hostname.startsWith('10.') ||
+      hostname.startsWith('192.168.') ||
+      hostname.startsWith('172.16.')
+    ) {
+      return null
+    }
+    return parsed.toString()
+  } catch {
+    return null
+  }
 }
 
 async function getGeoInfo(supabase: any, clientIp: string) {
@@ -110,15 +132,9 @@ async function getGeoInfo(supabase: any, clientIp: string) {
 export async function POST(req: NextRequest) {
   try {
     const payload = await req.json()
-    const { record, type, table, system_context } = payload
+    const { record, type, table, system_context, action } = payload
 
-    console.log(`[Coach-Reply] Incoming request: ${type} on ${table}. Sender: ${record?.sender_id}`)
-    if (type !== 'INSERT' || table !== 'messages' || record?.sender_id === COACH_ID) {
-      console.log(`[Coach-Reply] Ignoring message. Type: ${type}, Table: ${table}, Sender: ${record?.sender_id}`)
-      return NextResponse.json({ message: 'Ignored' })
-    }
-
-    const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY || process.env.OPENAI_API_KEY
+    const apiKey = process.env.OPENAI_API_KEY || process.env.NEXT_PUBLIC_OPENAI_API_KEY
     if (!apiKey || apiKey.startsWith('your_') || apiKey.startsWith('sk-your')) {
       console.error('[Coach-Reply] Critical Error: OPENAI_API_KEY is missing or is a placeholder. Check .env.local');
       throw new Error('AI Provider API key not set or is a placeholder')
@@ -126,6 +142,76 @@ export async function POST(req: NextRequest) {
 
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
     const supabase = supabaseAdmin
+
+    // --- IDEMPOTENT WELCOME GENERATOR FOR EMPTY THREADS ---
+    if (action === 'welcome' || type === 'WELCOME') {
+      const conversationId = payload.conversation_id || record?.conversation_id;
+      const userId = payload.user_id || payload.userId || record?.sender_id;
+
+      if (!conversationId || !userId) {
+        return NextResponse.json({ error: true, message: 'Missing conversationId or userId for welcome action' }, { status: 400 });
+      }
+
+      // Check if thread already has ANY messages
+      const { count } = await supabase
+        .from('messages')
+        .select('*', { count: 'exact', head: true })
+        .eq('conversation_id', conversationId);
+
+      if (count && count > 0) {
+        return NextResponse.json({ success: true, message: 'Thread already initialized. Skipped.', skipped: true });
+      }
+
+      const { data: profile } = await supabase.from('user_profiles').select('*').eq('id', userId).maybeSingle();
+      const userName = payload.user_name || profile?.full_name || profile?.username || 'there';
+
+      const welcomePrompt = `You are Vee, ${userName}'s personal Health Coach inside VICALARY.
+This is a brand new, empty conversation and ${userName} has just opened the coach chat.
+Generate a single, warm, friendly 1-2 sentence welcome greeting that introduces yourself as Vee, their supportive health coach, and asks what nutrition, workout, or wellness habit they'd like to work on today.
+DO NOT use markdown symbols, bullet points, or robotic slogans. Keep it natural, human, and inviting.`;
+
+      const aiRes = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: process.env.NEXT_PUBLIC_OPENAI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o',
+          messages: [{ role: 'system', content: welcomePrompt }],
+          temperature: 0.7,
+          max_tokens: 150,
+        }),
+      });
+
+      if (!aiRes.ok) throw new Error(`OpenAI welcome error: ${await aiRes.text()}`);
+      const aiData = await aiRes.json();
+      const welcomeText = aiData.choices[0]?.message?.content?.trim() || `Hi ${userName}! I'm Vee, your personal health coach. What nutrition or wellness goal would you like to focus on today?`;
+
+      // Save the generated welcome message to Supabase
+      const { data: newMsg, error: insertErr } = await supabase.from('messages').insert({
+        conversation_id: conversationId,
+        sender_id: COACH_ID,
+        content: welcomeText,
+        message_type: 'text',
+        is_read: false,
+      }).select().single();
+
+      if (insertErr || !newMsg) throw new Error(`Failed to save welcome message: ${insertErr?.message}`);
+
+      await supabase.from('conversations').update({
+        last_message_at: new Date().toISOString(),
+        last_message_content: welcomeText.substring(0, 200),
+        last_message_type: 'text',
+        last_message_sender_id: COACH_ID,
+      } as any).eq('id', conversationId);
+
+      return NextResponse.json({ success: true, message_id: newMsg.id, replyText: welcomeText, intent: 'greeting' });
+    }
+
+    console.log(`[Coach-Reply] Incoming request: ${type} on ${table}. Sender: ${record?.sender_id}`)
+    if (type !== 'INSERT' || table !== 'messages' || record?.sender_id === COACH_ID) {
+      console.log(`[Coach-Reply] Ignoring message. Type: ${type}, Table: ${table}, Sender: ${record?.sender_id}`)
+      return NextResponse.json({ message: 'Ignored' })
+    }
+
     const conversationId = record.conversation_id
 
     const loc = system_context?.locationContext;
@@ -151,7 +237,7 @@ export async function POST(req: NextRequest) {
         geoInfo = await getGeoInfo(supabase, clientIp)
     }
 
-    // V17: Use the sender_id from the record directly to avoid race conditions with participant fetching
+    // Use the sender_id from the record directly to avoid race conditions
     const userId = record.sender_id
     console.log(`[Coach-Reply] Using Sender ID from record: ${userId} for Conv: ${conversationId}`)
     
@@ -217,32 +303,38 @@ export async function POST(req: NextRequest) {
     else if (/weight|track|progress|lose|gain|muscle|macro|calorie/i.test(userContentLower)) detectedIntent = 'nutrition_analysis';
     else if (/feel|tired|exhausted|sad|happy|stuck|hard|struggles|motivation/i.test(userContentLower)) detectedIntent = 'motivation';
 
-    // Execute Deep Web Research in parallel
+    // Execute Deep Web Research when scientific evidence or public facts are requested
     let liveResearchData = '';
-    if (userPromptText.trim().length > 2) {
-      console.log(`[Coach-Reply] Executing WebResearchService for voice/chat query: "${userPromptText}"`);
+    if (userPromptText.trim().length > 2 && isResearchQuery) {
+      console.log(`[Coach-Reply] Executing WebResearchService for query: "${userPromptText}"`);
       liveResearchData = await WebResearchService.searchDeepWeb(userPromptText);
     }
 
-    const systemPrompt = `You are Vicalary Health Intelligence, a deeply articulate, highly intelligent, and warm AI Health Coach for ${userName}. You sound like a world-class human nutritionist, medical researcher, and empathetic coach.
+    const systemPrompt = `You are Vee, ${userName}'s personal Health Coach inside VICALARY — warm, clear, human, non-robotic, supportive, and practical. You behave like a trusted conversational partner (ChatGPT-style health coach) who genuinely listens, understands, and responds directly.
 
-CRITICAL DIRECT-ANSWER COMPREHENSION DIRECTIVE:
-1. YOUR VERY FIRST SENTENCE MUST DIRECTLY AND ACCURATELY ANSWER THE USER'S EXACT QUESTION.
-2. ABSOLUTELY NO GENERIC INTROS OR BOILERPLATE GREETINGS (Do NOT say "Hello", "I am Vicalary", "I hear you asking about", or "That is a great question"). Jump directly into the exact answer!
-3. INTEGRATE DEEP WEB RESEARCH: Synthesize scientific facts, nutritional values, or web evidence directly into your explanation.
-4. NATURAL SPOKEN CADENCE: Speak in 2 to 3 fluid, warm, articulate sentences max so the conversation feels snappy, intelligent, and interactive.
-5. NO MARKDOWN SYMBOLS OR BULLET POINTS (*, #, -, _). Write strictly in natural, flowing human sentences.
+CORE TOPICS & DOMAINS:
+- Habits, nutrition, daily activity, sleep, stress, hydration, and sustainable routines.
 
-LIVE REAL-TIME INTERNET RESEARCH FINDINGS:
-${liveResearchData ? liveResearchData : 'No external web search data needed for this casual prompt.'}
+NON-CLINICAL SAFETY DIRECTIVE:
+- Do not claim to diagnose, prescribe, or replace a clinician. When medical judgment or clinical symptoms arise, say so briefly in one empathetic sentence and continue offering safe, supportive lifestyle guidance.
 
-CONTEXTUAL PROFILE & PROGRESS:
-- Current Time/Date: ${currentTime}
-- User Location: ${geoInfo.city}, ${geoInfo.country_name}
-- Today's Consumption: ${totalCaloriesToday} kcal | Remaining: ${caloriesRemaining} kcal (Goal: ${calorieGoal} kcal)
-- Health Goal: ${(onboarding as any).goal || 'General Wellness'}
+CONVERSATION MECHANICS & ANTI-BOILERPLATE RULES:
+1. DIRECT ANSWER & RELEVANCE: Answer ${userName}'s exact latest statement or question immediately. Never say "Great question!", "Certainly!", "I hear you asking about", or repeat canned intro formulas.
+2. MULTI-TURN MEMORY: Seamlessly build on the prior conversation thread without repeating introductions or re-explaining previously discussed concepts.
+3. CONVERSATIONAL TONE & BREVITY: Write as if speaking naturally — use contractions, smooth rhythm, and warmth. Avoid markdown formatting (*, #, -, _) or long bulleted essay dumps unless specifically asked. Keep responses between 2–4 natural flowing sentences.
+4. CLARIFY WHEN VAGUE: If ${userName}'s request is ambiguous, ask a short, helpful clarifying question instead of guessing or lecturing.
+5. NO REPETITION: Never repeat the same opening sentence or recycled paragraph across turns.
+6. SYNTHESIZE FACTS: If scientific/web research is provided below, synthesize it naturally into your advice — never dump raw search data.
 
-Directly state your articulate, research-backed human answer now.`
+LIVE RESEARCH FINDINGS:
+${liveResearchData ? liveResearchData : 'None needed for this conversational turn.'}
+
+USER PROFILE & METRICS:
+- User Name: ${userName}
+- Current Time: ${currentTime}
+- Location: ${geoInfo.city}, ${geoInfo.country_name}
+- Today's Nutrition: ${totalCaloriesToday} kcal logged (Remaining: ${caloriesRemaining} kcal / Goal: ${calorieGoal} kcal)
+- Health Goal: ${(onboarding as any).goal || 'General Wellness'}`;
 
     const msgType = record.message_type
     // Support image URL from metadata even for text messages (common for context handoff)
@@ -443,6 +535,6 @@ Directly state your articulate, research-backed human answer now.`
       error: true,
       message: err.message,
       actionable_feedback: 'The AI Coach is momentarily overwhelmed. Re-sending your message might help.',
-    })
+    }, { status: 500 })
   }
 }

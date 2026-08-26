@@ -70,7 +70,7 @@ ${JSON.stringify(meals, null, 2)}
 
 Provide a deeply analytical, 3-paragraph summary of their day. Point out missing macros, praise good choices, and give actionable advice for tomorrow.`;
 
-    const openAiKey = Deno.env.get('NEXT_PUBLIC_OPENAI_API_KEY') || Deno.env.get('OPENAI_API_KEY');
+    const openAiKey = Deno.env.get('OPENAI_API_KEY');
     
     if (!openAiKey) {
         throw new Error("Missing OpenAI API Key in edge function environment");

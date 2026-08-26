@@ -22,6 +22,7 @@ async function runSQL() {
     console.log("SQL executed successfully!");
   } catch (err) {
     console.error("SQL Error:", err);
+    process.exitCode = 1;
   } finally {
     await client.end();
   }

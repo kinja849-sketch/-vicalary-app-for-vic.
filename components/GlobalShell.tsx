@@ -23,16 +23,19 @@ export function GlobalShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!user?.id) return;
 
+    let debounceTimer: any = null;
     const channel = subscribeToUserConversations(user.id, () => {
-      const key1 = ['conversations', user.id];
-      const key2 = ['unread-messages-global', user.id];
-
-      console.log("[App] Global chat update, invalidating:", key1, key2);
-      queryClient.invalidateQueries({ queryKey: key1 });
-      queryClient.invalidateQueries({ queryKey: key2 });
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        const key1 = ['conversations', user.id];
+        const key2 = ['unread-messages-global', user.id];
+        queryClient.invalidateQueries({ queryKey: key1 });
+        queryClient.invalidateQueries({ queryKey: key2 });
+      }, 500);
     });
 
     return () => {
+      clearTimeout(debounceTimer);
       unsubscribeFromMessages(channel);
     };
   }, [user?.id, queryClient]);

@@ -9,6 +9,7 @@ import { useTranslation } from "@/lib/api/translation";
 import FoodCarousel from "@/components/FoodCarousel";
 import { FavoriteButton } from "@/components/FavoriteButton";
 import { getFavoriteRecipes } from "@/lib/api/recipes";
+import { getFoodImageUrl } from "@/lib/services/FoodImageService";
 
 const CATEGORIES = [
     { id: 'breakfast', label: 'Breakfast', fallbackIcon: Coffee, animUrl: '/oat.gif' },
@@ -28,18 +29,18 @@ export default function Cookbook() {
     const { t } = useTranslation();
 
     const { data: cookbookData } = useQuery({
-        queryKey: ['cookbook-suggestions-v2', user?.id],
-        queryFn: () => getCookbookSuggestions(user!.id),
-        enabled: !!user?.id,
+        queryKey: ['cookbook-suggestions-v2', user?.id || 'default_user'],
+        queryFn: () => getCookbookSuggestions(user?.id || 'default_user'),
+        enabled: true,
         staleTime: 1000 * 60 * 60, // 1 hour
         refetchOnWindowFocus: false,
         retry: 1
     });
 
     const { data: suggestions } = useQuery({
-        queryKey: ['suggestions-v2', user?.id],
-        queryFn: () => getDailyMealSuggestions(user!.id),
-        enabled: !!user?.id,
+        queryKey: ['suggestions-v2', user?.id || 'default_user'],
+        queryFn: () => getDailyMealSuggestions(user?.id || 'default_user'),
+        enabled: true,
         staleTime: 1000 * 60 * 60, // 1 hour
         refetchOnWindowFocus: false,
         retry: 1
@@ -219,19 +220,18 @@ export default function Cookbook() {
 
 function CookbookCard({ item }: { item: any }) {
     const { t } = useTranslation();
-    if (!item) return null;
     const id = item.internal_id || item.id;
     const title = item.title || item.name || t('untitled_recipe');
-    const image = item.image_url || item.image;
-    const calories = item.total_calories || item.calories;
-    const time = item.prep_time_minutes || item.prep_time || "20";
+    const image = item.image_url || item.image || getFoodImageUrl(title, item.cuisine, item.meal_type);
+    const calories = item.total_calories || item.calories || 350;
+    const time = item.readyInMinutes || (item.prep_time_minutes ? Number(item.prep_time_minutes) + Number(item.cook_time_minutes || 0) : 20);
 
     return (
         <div className="relative group w-full h-64 rounded-[32px] overflow-hidden shadow-md hover:shadow-2xl transition-all duration-500">
             <Link href={`/recipe/${id}`} className="block w-full h-full">
                 <img 
                     src={image} 
-                    onError={(e) => { e.currentTarget.src = 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&q=80&w=300'; }}
+                    onError={(e) => { e.currentTarget.src = getFoodImageUrl(title, item.cuisine, item.meal_type); }}
                     alt={title} 
                     className="absolute inset-0 w-full h-full object-cover object-center transition-transform duration-700 group-hover:scale-110" 
                 />

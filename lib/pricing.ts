@@ -53,17 +53,22 @@ export async function calculateEconomicPrice(supabase: any, geoInfo: any, produc
 
         // 4. Calculate Economic Index-Adjusted Price
         // Formula: Base Price * (User CPI / Ref CPI) * Exchange Rate
-        const cpiRatio = userCpi / refCpi;
+        const cpiRatio = userCpi / (refCpi || 1);
         const adjustedBasePrice = basePrice * cpiRatio;
-        const finalPrice = (adjustedBasePrice * exchangeRate).toFixed(0); // Round to nearest whole number for typical local currencies
+        const finalPrice = adjustedBasePrice * exchangeRate;
         
-        // Format with separators
-        const formattedFinal = Number(finalPrice).toLocaleString('en-US');
-        
-        return `${geoInfo.currency_symbol}${formattedFinal}`;
+        try {
+            return new Intl.NumberFormat(geoInfo.locale || 'en-US', {
+                style: 'currency',
+                currency: geoInfo.currency_code || 'USD',
+                maximumFractionDigits: 2
+            }).format(finalPrice);
+        } catch {
+            return `${geoInfo.currency_symbol || '$'}${finalPrice.toFixed(2)}`;
+        }
 
     } catch(e) {
         console.error("Economic Pricing Engine Error:", e);
-        return `${geoInfo.currency_symbol}0.00`; // Fallback
+        return null;
     }
 }

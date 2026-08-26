@@ -3,12 +3,13 @@ import { NextRequest, NextResponse } from 'next/server'
 export async function POST(req: NextRequest) {
   try {
     const { type, diet, number = 10, query } = await req.json()
+    const limit = Math.min(Math.max(Number(number) || 10, 1), 50)
 
     let url: string;
     let isCocktail = false;
 
     if (query && query.trim().length > 0) {
-      url = `https://www.themealdb.com/api/json/v1/1/search.php?s=${encodeURIComponent(query)}`
+      url = `https://www.themealdb.com/api/json/v1/1/search.php?s=${encodeURIComponent(query.trim())}`
     } else {
       let category = 'Chicken'
       if (type === 'breakfast') category = 'Breakfast'
@@ -37,21 +38,31 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ results: [], totalResults: 0 })
     }
 
-    let items = isCocktail ? data.drinks : data.meals;
-    // Shuffle array
-    items = items.sort(() => 0.5 - Math.random());
+    const items = [...(isCocktail ? data.drinks : data.meals)];
+    // Fisher-Yates shuffle
+    for (let i = items.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [items[i], items[j]] = [items[j], items[i]];
+    }
 
-    const results = items.slice(0, number).map((m: any) => ({
-      id: isCocktail ? m.idDrink : m.idMeal,
-      title: isCocktail ? m.strDrink : m.strMeal,
-      image: isCocktail ? m.strDrinkThumb : m.strMealThumb,
-      readyInMinutes: isCocktail ? 5 : 30,
-      calories: Math.floor(Math.random() * (400 - 150 + 1)) + 150,
-    }))
+    const results = items.slice(0, limit).map((m: any) => {
+      const rawId = isCocktail ? m.idDrink : m.idMeal;
+      // Deterministic calorie estimate based on item ID hash
+      const numId = parseInt(rawId, 10) || 52772;
+      const estimatedCals = isCocktail ? 120 + (numId % 80) : 320 + (numId % 280);
+
+      return {
+        id: rawId,
+        title: isCocktail ? m.strDrink : m.strMeal,
+        image: isCocktail ? m.strDrinkThumb : m.strMealThumb,
+        readyInMinutes: isCocktail ? 5 : 30,
+        calories: estimatedCals,
+      }
+    });
 
     return NextResponse.json({ results, totalResults: results.length })
   } catch (error: any) {
-    console.error('search-recipes error:', error)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    console.error('search-recipes error:', error?.message)
+    return NextResponse.json({ error: 'Failed to search recipes' }, { status: 500 })
   }
 }

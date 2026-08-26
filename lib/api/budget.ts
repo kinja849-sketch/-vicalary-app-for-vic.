@@ -6,10 +6,14 @@ import { supabase } from '../supabase'
 
 export const createBudget = async (userId: string, totalBudget: number, startDate: string, endDate: string, currencyCode: string = 'USD', currencySymbol: string = '$') => {
     // Deactivate existing budgets
-    await supabase
+    const { error: deactError } = await supabase
         .from('user_budgets')
         .update({ is_active: false })
         .eq('user_id', userId)
+
+    if (deactError) {
+        console.warn("[Budget API] Warning deactivating previous budgets:", deactError.message);
+    }
 
     const { data, error } = await (supabase
         .from('user_budgets') as any)

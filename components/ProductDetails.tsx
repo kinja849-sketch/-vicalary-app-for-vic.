@@ -390,15 +390,15 @@ export function ProductDetails({
                             <div className="grid grid-cols-3 gap-3 mt-4">
                                 <div className="bg-white/5 rounded-2xl py-3 px-2 border border-white/5">
                                     <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Protein</div>
-                                    <div className="text-sm font-black text-white">{~~(protein || 0)}g</div>
+                                    <div className="text-sm font-black text-white">{Math.round(Number(protein || 0))}g</div>
                                 </div>
                                 <div className="bg-white/5 rounded-2xl py-3 px-2 border border-white/5">
                                     <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Carbs</div>
-                                    <div className="text-sm font-black text-white">{~~(carbs || 0)}g</div>
+                                    <div className="text-sm font-black text-white">{Math.round(Number(carbs || 0))}g</div>
                                 </div>
                                 <div className="bg-white/5 rounded-2xl py-3 px-2 border border-white/5">
                                     <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Fat</div>
-                                    <div className="text-sm font-black text-white">{~~(fat || 0)}g</div>
+                                    <div className="text-sm font-black text-white">{Math.round(Number(fat || 0))}g</div>
                                 </div>
                             </div>
                             <div className="flex justify-center flex-wrap gap-2 mt-4">

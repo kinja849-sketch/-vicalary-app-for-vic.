@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link"
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { Camera as CameraIcon, RotateCw, Check, X, Info, Zap, Scale, HeartPulse, Activity, AlertCircle, ShoppingCart, Globe, FlaskConical, MessageSquare, Pill, TriangleAlert, Dna } from "lucide-react";
+import { Camera as CameraIcon, RotateCw, Check, X, Info, Zap, Scale, HeartPulse, Activity, AlertCircle, ShoppingCart, Globe, FlaskConical, MessageSquare, Pill, TriangleAlert, Dna, SwitchCamera } from "lucide-react";
 import { analyzeFoodImage, scanProduct, saveFoodAnalysis } from "@/lib/api/food";
 import { useAnalysisStore } from "@/store/analysisStore";
 import { supabase } from "@/lib/supabase";
@@ -22,6 +22,7 @@ export default function Camera() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [scanMode, setScanMode] = useState<ScanMode>("FOOD");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<any>(null);
@@ -29,6 +30,8 @@ export default function Camera() {
   const [userId, setUserId] = useState<string | null>(null);
   const [isScanningBarcode, setIsScanningBarcode] = useState(false);
   const barcodeIntervalRef = useRef<number | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
 
   useEffect(() => {
     const getSession = async () => {
@@ -36,19 +39,25 @@ export default function Camera() {
       setUserId(data.session?.user?.id || null);
     };
     getSession();
-    startCamera();
+    startCamera('environment');
     return () => {
       stopCamera();
       if (barcodeIntervalRef.current) clearInterval(barcodeIntervalRef.current);
     };
   }, []);
 
-  const startCamera = async () => {
+  const startCamera = async (facing: 'environment' | 'user' = 'environment', deviceId?: string) => {
     try {
+      // Build constraints: prefer deviceId (desktop) over facingMode (mobile)
+      const videoConstraint: MediaTrackConstraints = deviceId
+        ? { deviceId: { exact: deviceId } }
+        : { facingMode: facing };
+
       const mediaStream = await requestCameraAccess({
-        video: { facingMode: "environment" },
+        video: videoConstraint,
         audio: false,
       });
+      streamRef.current = mediaStream;
       setStream(mediaStream);
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
@@ -60,11 +69,48 @@ export default function Camera() {
   };
 
   const stopCamera = () => {
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
-      setStream(null);
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    setStream(null);
+  };
+
+  const switchCamera = async () => {
+    try {
+      // Enumerate all video input devices
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(d => d.kind === 'videoinput');
+
+      if (videoDevices.length <= 1) {
+        // Only one camera — just toggle facingMode (mobile fallback)
+        const newFacing = facingMode === 'environment' ? 'user' : 'environment';
+        setFacingMode(newFacing);
+        stopCamera();
+        await startCamera(newFacing);
+        return;
+      }
+
+      // Find the current device in use
+      const currentTrack = streamRef.current?.getVideoTracks()[0];
+      const currentDeviceId = currentTrack?.getSettings().deviceId;
+      const currentIndex = videoDevices.findIndex(d => d.deviceId === currentDeviceId);
+      const nextIndex = (currentIndex + 1) % videoDevices.length;
+      const nextDevice = videoDevices[nextIndex];
+
+      // Update facingMode label (best-effort from device label)
+      const label = nextDevice.label.toLowerCase();
+      const nextFacing = label.includes('front') || label.includes('user') ? 'user' : 'environment';
+      setFacingMode(nextFacing);
+
+      stopCamera();
+      await startCamera(nextFacing, nextDevice.deviceId);
+    } catch (err) {
+      console.error("switchCamera failed:", err);
     }
   };
+
+
 
   // Continuous Barcode Scanning Logic
   useEffect(() => {
@@ -189,7 +235,7 @@ export default function Camera() {
     setAnalysisResult(null);
     setCapturedImage(null);
     setIsAnalyzing(false);
-    startCamera();
+    startCamera(facingMode);
   };
 
   return (
@@ -265,7 +311,7 @@ export default function Camera() {
               </div>
             )}
 
-            <div className="absolute bottom-12 left-1/2 -translate-x-1/2 flex items-center gap-8">
+            <div className="absolute bottom-12 left-1/2 -translate-x-1/2 flex items-center gap-6">
               <Link href="/dashboard" className="p-4 bg-white/10 backdrop-blur-xl rounded-full border border-white/20 hover:bg-white/20 transition-all">
                 <X className="w-6 h-6" />
               </Link>
@@ -279,8 +325,13 @@ export default function Camera() {
                 </button>
               )}
 
-              <button onClick={handleRetry} className="p-4 bg-white/10 backdrop-blur-xl rounded-full border border-white/20 hover:bg-white/20 transition-all">
-                <RotateCw className="w-6 h-6" />
+              {/* Camera facing switch — always visible while camera is live */}
+              <button
+                onClick={switchCamera}
+                aria-label={facingMode === 'environment' ? 'Switch to front camera' : 'Switch to back camera'}
+                className="p-4 bg-white/10 backdrop-blur-xl rounded-full border border-white/20 hover:bg-white/20 transition-all active:scale-90"
+              >
+                <SwitchCamera className="w-6 h-6" />
               </button>
             </div>
           </motion.div>

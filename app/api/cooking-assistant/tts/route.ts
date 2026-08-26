@@ -4,16 +4,20 @@ export async function POST(req: NextRequest) {
     try {
         const { text, voice = 'nova', speed = 1.0 } = await req.json();
 
-        if (!text) {
-            return NextResponse.json({ error: 'Missing text parameter' }, { status: 400 });
+        if (!text || typeof text !== 'string') {
+            return NextResponse.json({ error: 'Valid text parameter is required' }, { status: 400 });
         }
 
-        const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+        const apiKey = process.env.OPENAI_API_KEY || process.env.NEXT_PUBLIC_OPENAI_API_KEY;
         if (!apiKey) {
             throw new Error('OpenAI API key missing');
         }
 
-        // Use high-definition TTS model with ultra-natural human voice choices (nova, shimmer, alloy)
+        const numericSpeed = typeof speed === 'number' && !isNaN(speed) ? speed : 1.0;
+        const clampedSpeed = Math.max(0.5, Math.min(numericSpeed, 2.0));
+        const truncatedText = text.slice(0, 4096);
+
+        // Use high-speed natural TTS model with ultra-natural human voice choices (nova, shimmer, alloy)
         const selectedVoice = ['nova', 'shimmer', 'alloy', 'echo', 'fable', 'onyx'].includes(voice) ? voice : 'nova';
         
         const response = await fetch('https://api.openai.com/v1/audio/speech', {
@@ -23,15 +27,17 @@ export async function POST(req: NextRequest) {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                model: 'tts-1-hd',
+                model: 'tts-1',
                 voice: selectedVoice,
-                input: text,
-                speed: Math.max(0.7, Math.min(speed, 1.25)),
+                input: truncatedText,
+                speed: clampedSpeed,
             }),
         });
 
         if (!response.ok) {
-            throw new Error(`TTS API error: ${await response.text()}`);
+            const errorText = await response.text();
+            console.error('[TTS API Error]:', errorText);
+            throw new Error('TTS conversion failed');
         }
 
         // Return the audio stream directly to the client
@@ -45,7 +51,7 @@ export async function POST(req: NextRequest) {
             },
         });
     } catch (error: any) {
-        console.error('[TTS Error]:', error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
+        console.error('[TTS Error]:', error?.message);
+        return NextResponse.json({ error: 'Failed to synthesize speech' }, { status: 500 });
     }
 }

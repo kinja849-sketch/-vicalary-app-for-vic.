@@ -11,26 +11,32 @@ interface CameraCaptureProps {
 export default function CameraCapture({ onCapture, onClose }: CameraCaptureProps) {
     const videoRef = useRef<HTMLVideoElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const [stream, setStream] = useState<MediaStream | null>(null);
+    const streamRef = useRef<MediaStream | null>(null);
     const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment');
     const [captured, setCaptured] = useState(false);
+
+    const stopStream = () => {
+        if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
+            streamRef.current = null;
+        }
+    };
 
     useEffect(() => {
         startCamera();
         return () => {
-            if (stream) {
-                stream.getTracks().forEach(track => track.stop());
-            }
+            stopStream();
         };
     }, [facingMode]);
 
     const startCamera = async () => {
+        stopStream();
         try {
             const mediaStream = await navigator.mediaDevices.getUserMedia({
                 video: { facingMode },
                 audio: false
             });
-            setStream(mediaStream);
+            streamRef.current = mediaStream;
             if (videoRef.current) {
                 videoRef.current.srcObject = mediaStream;
             }
@@ -50,9 +56,7 @@ export default function CameraCapture({ onCapture, onClose }: CameraCaptureProps
             if (ctx) {
                 ctx.drawImage(video, 0, 0);
                 setCaptured(true);
-                if (stream) {
-                    stream.getTracks().forEach(track => track.stop());
-                }
+                stopStream();
             }
         }
     };
@@ -78,12 +82,13 @@ export default function CameraCapture({ onCapture, onClose }: CameraCaptureProps
         <div className="fixed inset-0 z-50 bg-black flex flex-col">
             {/* Header */}
             <div className="flex items-center justify-between p-4 bg-black/50 backdrop-blur-sm">
-                <button onClick={onClose} className="text-white p-2">
+                <button onClick={onClose} aria-label="Close camera" className="text-white p-2">
                     <X className="text-3xl" size={30} />
                 </button>
                 {!captured && (
                     <button
                         onClick={() => setFacingMode(prev => prev === 'user' ? 'environment' : 'user')}
+                        aria-label="Switch camera"
                         className="text-white p-2"
                     >
                         <SwitchCamera size={30} />
@@ -96,6 +101,7 @@ export default function CameraCapture({ onCapture, onClose }: CameraCaptureProps
                 <video
                     ref={videoRef}
                     autoPlay
+                    muted
                     playsInline
                     className={`max-w-full max-h-full ${captured ? 'hidden' : 'block'}`}
                 />
@@ -110,18 +116,21 @@ export default function CameraCapture({ onCapture, onClose }: CameraCaptureProps
                 {!captured ? (
                     <button
                         onClick={capturePhoto}
+                        aria-label="Capture photo"
                         className="size-16 rounded-full bg-white border-4 border-gray-300 hover:scale-110 transition-transform active:scale-95"
                     />
                 ) : (
                     <>
                         <button
                             onClick={retake}
+                            aria-label="Retake photo"
                             className="px-6 py-3 bg-gray-600 text-white rounded-full font-bold hover:bg-gray-700 transition-colors"
                         >
                             Retake
                         </button>
                         <button
                             onClick={sendPhoto}
+                            aria-label="Send photo"
                             className="px-6 py-3 bg-vic-green text-slate-900 rounded-full font-bold hover:bg-vic-green/90 transition-colors flex items-center gap-2"
                         >
                             <Send size={18} />

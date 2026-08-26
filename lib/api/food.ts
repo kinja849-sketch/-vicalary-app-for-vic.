@@ -125,19 +125,24 @@ export const analyzeFoodImage = async (userId: string, file: File, options?: any
 }
 
 const productCache = new Map<string, { data: any, timestamp: number }>();
-const CACHE_TTL_MS = 1000 * 60 * 5; // Reduced to 5 minutes so users see fresh AI logic sooner
+const CACHE_TTL_MS = 1000 * 60 * 5;
 
 export const scanProduct = async (userId: string, barcode: string, options?: any) => {
+    const loc = await getUserLocation();
+    const cacheKey = `${barcode}_${loc?.country_code || 'DEF'}`;
+
     // If forcing a reload, skip the cache
     if (!options?.forceReload) {
-        const cached = productCache.get(barcode);
-        if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-            console.log(`[Cache Hit] Returning cached data for barcode: ${barcode}`);
-            return cached.data;
+        const cached = productCache.get(cacheKey);
+        if (cached) {
+            if (Date.now() - cached.timestamp < CACHE_TTL_MS) {
+                console.log(`[Cache Hit] Returning cached data for barcode: ${barcode}`);
+                return cached.data;
+            } else {
+                productCache.delete(cacheKey);
+            }
         }
     }
-
-    const loc = await getUserLocation();
 
     const res = await fetch('/api/analyze-product-barcode', {
         method: 'POST',
@@ -154,7 +159,7 @@ export const scanProduct = async (userId: string, barcode: string, options?: any
     logInfo(userId, 'barcode_scan_success', { barcode, productName: data.name });
 
     // Save to cache
-    productCache.set(barcode, { data, timestamp: Date.now() });
+    productCache.set(cacheKey, { data, timestamp: Date.now() });
 
     return data
 }
@@ -218,7 +223,13 @@ export const saveFoodAnalysis = async (userId: string, analysis: any) => {
         .select();
 
     if (historyError) {
-        if (historyError.code === '404' || historyError.message?.includes('not found')) {
+        if (
+            historyError.code === '404' || 
+            historyError.code === '42P01' || 
+            historyError.code === 'PGRST205' || 
+            historyError.message?.includes('not found') ||
+            historyError.message?.includes('does not exist')
+        ) {
             console.error("Critical: food_analysis_history table is missing. Please run migrations.");
             throw new Error("Data storage service is temporarily unavailable. Our team has been notified.");
         }

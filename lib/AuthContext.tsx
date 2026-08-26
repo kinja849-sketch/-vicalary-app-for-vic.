@@ -1,5 +1,5 @@
 "use client"
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { supabase } from './supabase';
 import type { User, Session } from '@supabase/supabase-js';
 import { detectLocation, getPrimaryLanguage } from './api/location';
@@ -23,6 +23,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [session, setSession] = useState<Session | null>(null);
     const [profile, setProfile] = useState<any | null>(null);
     const [loading, setLoading] = useState(true);
+    const locationConfiguredUserRef = useRef<string | null>(null);
 
     // Initialize the Daily Spiritual Scheduler globally
     useSpiritualScheduler(user?.id ?? null);
@@ -88,6 +89,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
 
         const handleLocationConfig = async (uid: string) => {
+            if (locationConfiguredUserRef.current === uid) return;
+            locationConfiguredUserRef.current = uid;
+
             try {
                 const settings = await getUserSettings(uid);
                 // If language is already manually set or settings exist with values, we might skip
@@ -110,6 +114,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 }
             } catch (err) {
                 console.error("[Auth] Location config failed:", err);
+                locationConfiguredUserRef.current = null;
             }
         };
 

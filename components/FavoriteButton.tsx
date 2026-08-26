@@ -28,13 +28,15 @@ export function FavoriteButton({ recipeId, className = "" }: { recipeId: string 
 
     return (
         <button 
+            disabled={mutation.isPending}
+            aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
             onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 if (!user) return toast.error("Please log in to favorite recipes");
                 mutation.mutate();
             }}
-            className={`z-10 size-10 rounded-full bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center transition-all active:scale-90 ${className}`}
+            className={`z-10 size-10 rounded-full bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center transition-all active:scale-90 disabled:opacity-50 ${className}`}
         >
             <Heart 
                 size={20} 

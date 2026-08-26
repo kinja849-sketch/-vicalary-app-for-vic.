@@ -65,6 +65,7 @@ module.exports = {
         "vic-soft-gray": "#F0F0F0",
         "accent-purple": "#6A4DFD",
         "accent-purple-light": "#7A5AF8",
+        "background-light": "#ffffff",
       },
       fontFamily: {
         display: ["Epilogue", "Inter", "sans-serif"],

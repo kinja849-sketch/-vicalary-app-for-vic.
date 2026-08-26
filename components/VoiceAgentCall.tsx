@@ -9,6 +9,8 @@ interface VoiceAgentCallProps {
   mode: 'cooking_guide' | 'health_coach';
   language?: string;
   userId?: string;
+  recipeContext?: any;
+  extraContext?: string;
   onClose: () => void;
 }
 
@@ -86,6 +88,8 @@ export default function VoiceAgentCall({
   mode,
   language = 'en',
   userId = 'user-guest',
+  recipeContext,
+  extraContext,
   onClose,
 }: VoiceAgentCallProps) {
   const { joinCall, leaveCall, toggleAudio, status } = useDailyCall();
@@ -131,6 +135,8 @@ export default function VoiceAgentCall({
             user_id: userId,
             mode,
             language,
+            recipe_context: recipeContext,
+            extra_context: extraContext,
           }),
         });
 
@@ -163,7 +169,7 @@ export default function VoiceAgentCall({
     return () => {
       isMounted = false;
     };
-  }, [mode, language, userId, joinCall]);
+  }, [mode, language, userId, recipeContext, extraContext, joinCall]);
 
   if (error) {
     return (

@@ -14,8 +14,13 @@ interface QRScannerProps {
 export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzing }: QRScannerProps) {
     const scannerRef = useRef<Html5Qrcode | null>(null);
     const hasScannedRef = useRef(false);
+    const isAnalyzingRef = useRef(isAnalyzing);
     const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
     const [status, setStatus] = useState<'scanning' | 'detected'>('scanning');
+
+    useEffect(() => {
+        isAnalyzingRef.current = isAnalyzing;
+    }, [isAnalyzing]);
 
     useEffect(() => {
         const scannerId = "reader";
@@ -49,21 +54,18 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
                     { facingMode: facingMode },
                     config as any,
                     (decodedText) => {
-                        if (hasScannedRef.current || isAnalyzing) return;
+                        if (hasScannedRef.current || isAnalyzingRef.current) return;
                         hasScannedRef.current = true;
                         setStatus('detected');
-                        html5QrCode.stop().catch(console.error);
+                        html5QrCode.stop().catch(() => {});
                         
                         // Tiny delay for visual feedback before firing API
                         setTimeout(() => onScan(decodedText), 150);
                     },
-                    (errorMessage) => {
-                        // Suppress continuous fail errors
-                    }
+                    () => {}
                 );
             } catch (err: any) {
                 console.error("Camera startup error:", err);
-                // toast.error("Could not access camera. Please check permissions.");
             }
         };
 
@@ -71,9 +73,12 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
 
         return () => {
             if (html5QrCode.isScanning) {
-                html5QrCode.stop().catch(console.error);
+                html5QrCode.stop().catch(() => {}).finally(() => {
+                    try { html5QrCode.clear(); } catch {}
+                });
+            } else {
+                try { html5QrCode.clear(); } catch {}
             }
-            html5QrCode.clear();
         };
     }, [facingMode]);
 
@@ -88,7 +93,7 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
     };
 
     const handleManualCapture = () => {
-        if (!onManualCapture || isAnalyzing) return;
+        if (!onManualCapture || isAnalyzingRef.current) return;
         
         const video = document.querySelector('#reader video') as HTMLVideoElement;
         if (!video) {
@@ -105,7 +110,7 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
             canvas.toBlob((blob) => {
                 if (blob) {
                     if (scannerRef.current?.isScanning) {
-                        scannerRef.current.stop().catch(console.error);
+                        scannerRef.current.stop().catch(() => {});
                     }
                     onManualCapture(blob);
                 }
@@ -120,10 +125,11 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
                 <button
                     onClick={() => { 
                         if (scannerRef.current?.isScanning) {
-                            scannerRef.current.stop().catch(console.error);
+                            scannerRef.current.stop().catch(() => {});
                         }
                         onClose(); 
                     }}
+                    aria-label="Close scanner"
                     className="size-11 rounded-full bg-black/50 backdrop-blur-md text-white flex items-center justify-center border border-white/10"
                 >
                     <X className="w-6 h-6" />
@@ -131,6 +137,7 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
 
                 <button
                     onClick={toggleCamera}
+                    aria-label="Switch camera direction"
                     className="size-11 rounded-full bg-black/50 backdrop-blur-md text-white flex items-center justify-center border border-white/10"
                 >
                     <RefreshCw className="w-6 h-6" />
@@ -141,7 +148,7 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
             <div id="reader" className="w-full h-full max-h-screen relative overflow-hidden bg-black" style={{ height: '100dvh' }}>
             </div>
 
-            {/* Status indicator ?" bottom of screen */}
+            {/* Status indicator ?” bottom of screen */}
             <div className="absolute bottom-0 inset-x-0 pb-12 flex flex-col items-center gap-6 z-20">
                 {isAnalyzing ? (
                     <div className="flex flex-col items-center gap-4 bg-black/60 p-6 rounded-3xl backdrop-blur-md border border-white/10">
@@ -154,6 +161,7 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
                     <div className="flex flex-col items-center gap-6">
                         <button 
                             onClick={handleManualCapture}
+                            aria-label="Capture barcode photo"
                             className="w-20 h-20 rounded-full border-4 border-white flex items-center justify-center bg-transparent active:scale-95 transition-all shadow-2xl z-50"
                         >
                             <div className="w-16 h-16 rounded-full bg-white opacity-80 hover:opacity-100 transition-opacity shadow-inner" />
