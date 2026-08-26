@@ -14,11 +14,33 @@ serve(async (req) => {
   }
 
   try {
+    const authHeader = req.headers.get('Authorization')
+    if (!authHeader) {
+      return new Response(JSON.stringify({ error: 'Missing Authorization header' }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      })
+    }
+
+    const supabaseAuth = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+      { global: { headers: { Authorization: authHeader } } }
+    )
+
+    const { data: { user }, error: authErr } = await supabaseAuth.auth.getUser()
+    if (authErr || !user) {
+      return new Response(JSON.stringify({ error: 'Unauthorized user token' }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      })
+    }
+
+    const uid = user.id
     const payload = await req.json()
-    const { conversation_id, user_id, message, content, location_context } = payload
+    const { conversation_id, message, content } = payload
     const userText = content || message || ''
     const convId = conversation_id
-    const uid = user_id
 
     if (!convId || !userText) {
       return new Response(JSON.stringify({ error: 'Missing required parameters' }), {
@@ -31,6 +53,21 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     )
+
+    // Verify conversation access
+    const { data: participant, error: partErr } = await supabaseAdmin
+      .from('conversation_participants')
+      .select('id')
+      .eq('conversation_id', convId)
+      .eq('user_id', uid)
+      .maybeSingle()
+
+    if (partErr || !participant) {
+      return new Response(JSON.stringify({ error: 'Forbidden: Access denied to this conversation' }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      })
+    }
 
     const apiKey = Deno.env.get('OPENAI_API_KEY')
     if (!apiKey) throw new Error('Missing OPENAI_API_KEY')
@@ -57,15 +94,17 @@ CONVERSATION RULES:
 4. If asked about brands or locations without data, answer honestly that verification is unavailable.
 `
 
+    const validHistory = history.filter((m: any) => m && typeof m.content === 'string' && m.content.trim().length > 0)
+
     const messages = [
       { role: 'system', content: systemPrompt },
-      ...history.map((m: any) => ({
+      ...validHistory.map((m: any) => ({
         role: m.sender_id === COACH_ID ? 'assistant' : 'user',
         content: m.content
       }))
     ]
 
-    if (history.length === 0 || history[history.length - 1].content !== userText) {
+    if (validHistory.length === 0 || validHistory[validHistory.length - 1].content !== userText) {
       messages.push({ role: 'user', content: userText })
     }
 
@@ -108,7 +147,13 @@ CONVERSATION RULES:
       .select('id')
       .single()
 
-    if (insertErr) console.error('Error saving assistant message:', insertErr)
+    if (insertErr) {
+      console.error('Error saving assistant message:', insertErr)
+      return new Response(
+        JSON.stringify({ error: 'Failed to insert assistant message', details: insertErr.message }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      )
+    }
 
     // Update conversation record
     await supabaseAdmin
@@ -129,9 +174,10 @@ CONVERSATION RULES:
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     )
-  } catch (err) {
-    console.error('Process conversation error:', err)
-    return new Response(JSON.stringify({ error: err.message }), {
+  } catch (err: unknown) {
+    const errorMessage = err instanceof Error ? err.message : String(err)
+    console.error('Process conversation error:', errorMessage)
+    return new Response(JSON.stringify({ error: errorMessage }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" }
     })

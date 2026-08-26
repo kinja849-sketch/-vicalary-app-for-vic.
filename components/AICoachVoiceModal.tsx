@@ -1,10 +1,11 @@
-﻿"use client";
+"use client";
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, MicOff, Sparkles, Volume2, VolumeX, X, ShieldCheck, Globe } from 'lucide-react';
+import { Mic, MicOff, Volume2, VolumeX, X, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from '@/lib/api/translation';
 import { supabase } from '@/lib/supabase';
 import HealthCoachSphere from '@/components/avatar/HealthCoachSphere';
 
@@ -16,6 +17,8 @@ interface AICoachVoiceModalProps {
   onClose: () => void;
 }
 
+import { normalizeSpokenInput } from '@/lib/services/ai/SpeechNormalizer';
+
 type ConversationState = 'idle' | 'listening' | 'thinking' | 'speaking';
 
 export default function AICoachVoiceModal({
@@ -25,13 +28,16 @@ export default function AICoachVoiceModal({
   onClose,
 }: AICoachVoiceModalProps) {
   const queryClient = useQueryClient();
+
   const resolvedUserName = (!userName || userName === 'User' || userName === 'there') ? 'Vic' : userName;
 
   const [hasMicPermission, setHasMicPermission] = useState<boolean | null>(null);
   const [state, setState] = useState<ConversationState>('idle');
   const [isMuted, setIsMuted] = useState(false);
   const [isAudioMuted, setIsAudioMuted] = useState(false);
+  // Default explicitly to 'en-US' (independent of IP geographic location)
   const [voiceLang, setVoiceLang] = useState<'en-US' | 'id-ID' | 'es-ES' | 'ar-SA' | 'fr-FR'>('en-US');
+  const [liveInterim, setLiveInterim] = useState<string>('');
 
   const recognitionRef = useRef<any>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -247,17 +253,40 @@ export default function AICoachVoiceModal({
         if (locCache) userLocation = JSON.parse(locCache).data;
       } catch (e) {}
 
-      // 2. Call unified conversation orchestrator with live dialog context and explicit language
+      // 2. Obtain active Supabase session for authenticated API communication
+      const { data: sessionData } = await supabase.auth.getSession();
+      const session = sessionData?.session;
+
+      console.log('[VOICE AUTH]', {
+        authenticated: Boolean(session?.user),
+        hasSession: Boolean(session),
+        hasAccessToken: Boolean(session?.access_token),
+        userId: session?.user?.id || userId || 'none',
+      });
+
+      if (!session?.access_token) {
+        throw new Error('User is not authenticated');
+      }
+
+      const reqStartTime = performance.now();
+      console.log('[VOICE] Speech ended. Dispatched to /api/conversation/process...');
+
+      // 3. Call unified conversation orchestrator with live streaming
       const coachRes = await fetch('/api/conversation/process', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
+          'Authorization': `Bearer ${session.access_token}`
+        },
         body: JSON.stringify({
           conversation_id: conversationId,
-          user_id: userId,
+          user_id: session.user.id,
           content: cleanedText,
           location_context: userLocation,
           locale: voiceLang.split('-')[0],
           voice_mode: true,
+          stream: true,
           session_id: sessionIdRef.current,
           turn_id: currentTurn,
           session_turns: sessionTurnsRef.current.slice(-6)
@@ -266,8 +295,58 @@ export default function AICoachVoiceModal({
 
       if (!coachRes.ok) throw new Error('AI Coach process conversation failed');
 
-      const data = await coachRes.json();
-      let replyText = data.content || data.replyText || data.message || `I hear you, ${resolvedUserName}. How can I best guide your health goals today?`;
+      let replyText = '';
+      let hasStartedAudio = false;
+
+      if (coachRes.body && coachRes.headers.get('content-type')?.includes('text/event-stream')) {
+        const reader = coachRes.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed.startsWith('data: ')) {
+              try {
+                const event = JSON.parse(trimmed.slice(6));
+                if (event.type === 'first_audio' && event.audioBase64 && !hasStartedAudio) {
+                  hasStartedAudio = true;
+                  const timeToAudio = Math.round(performance.now() - reqStartTime);
+                  console.log(`[VOICE] Time-to-first-audio: ${timeToAudio}ms ⚡ (Blob speaking now!)`, event.metrics);
+                  if (isMountedRef.current && !isAudioMuted) {
+                    playDirectAudio(event.audioBase64).catch(err => console.error('[AICoachVoiceModal] Audio play error:', err));
+                  }
+                } else if (event.type === 'done') {
+                  replyText = event.fullText;
+                  const serverDuration = Math.round(performance.now() - reqStartTime);
+                  console.log(`[VOICE] Complete turn finished in ${serverDuration}ms:`, event.metrics);
+                }
+              } catch (e) {}
+            }
+          }
+        }
+      } else {
+        // Fallback for standard JSON response
+        const data = await coachRes.json();
+        replyText = data.content || data.replyText || data.message || `I hear you, ${resolvedUserName}. How can I best guide your health goals today?`;
+        if (data.audioBase64 && isMountedRef.current && !isAudioMuted) {
+          const timeToAudio = Math.round(performance.now() - reqStartTime);
+          console.log(`[VOICE] Time-to-first-audio: ${timeToAudio}ms ⚡ (Blob speaking)`, data.metrics);
+          await playDirectAudio(data.audioBase64);
+          hasStartedAudio = true;
+        }
+      }
+
+      if (!replyText) {
+        replyText = `I hear you, ${resolvedUserName}. How can I best guide your health goals today?`;
+      }
 
       // Clean spoken text: strip asterisks, bullets, markdown headers
       replyText = replyText.replace(/[*#_~`>]/g, '').trim();
@@ -278,10 +357,7 @@ export default function AICoachVoiceModal({
         created_at: new Date().toISOString(),
       });
 
-      // If server returned audio directly, play it instantly without secondary network hop!
-      if (data.audioBase64 && isMountedRef.current && !isAudioMuted) {
-        await playDirectAudio(data.audioBase64);
-      } else {
+      if (!hasStartedAudio) {
         await speakText(replyText);
       }
 
@@ -328,22 +404,41 @@ export default function AICoachVoiceModal({
       recognition.onresult = (event: any) => {
         if (isSpeakingRef.current || isProcessingRef.current) return;
 
-        let accumulatedText = '';
-        for (let i = 0; i < event.results.length; ++i) {
-          accumulatedText += event.results[i][0].transcript;
+        let interimText = '';
+        let finalText = '';
+        let confidenceScore = 0.95;
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const res = event.results[i];
+          const part = res[0]?.transcript || '';
+          if (res[0]?.confidence) {
+            confidenceScore = res[0].confidence;
+          }
+          if (res.isFinal) {
+            finalText += part;
+          } else {
+            interimText += part;
+          }
         }
 
-        const trimmed = accumulatedText.trim();
-        if (isMountedRef.current && trimmed && trimmed.length >= 2) {
+        const currentText = (finalText || interimText).trim();
+        if (currentText) {
+          setLiveInterim(currentText);
+          console.log(`[VOICE turn_${turnIdRef.current}] Lang: ${voiceLang} | Live: "${currentText}" (${Math.round(confidenceScore * 100)}%)`);
+        }
+
+        if (isMountedRef.current && currentText.length >= 2) {
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 
-          // 700ms natural breathing silence detection
+          // 850ms natural breathing cadence VAD silence detection
           silenceTimerRef.current = setTimeout(() => {
             if (!isProcessingRef.current && !isSpeakingRef.current && isMountedRef.current) {
               try { recognition.abort(); } catch (e) {}
-              processUserSpeech(trimmed);
+              const normalized = normalizeSpokenInput(currentText);
+              console.log(`[VOICE turn_${turnIdRef.current}] Finalized: "${normalized}" (${voiceLang})`);
+              processUserSpeech(normalized);
             }
-          }, 700);
+          }, 850);
         }
       };
 
@@ -374,10 +469,17 @@ export default function AICoachVoiceModal({
     }
   }, [isMuted, voiceLang, processUserSpeech]);
 
-  // Request Microphone Permission
+  // Request Microphone Permission with echo cancellation and noise suppression
   const requestMicPermission = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1
+        }
+      });
       stream.getTracks().forEach(track => track.stop());
       setHasMicPermission(true);
       setTimeout(() => {
@@ -445,44 +547,40 @@ export default function AICoachVoiceModal({
         exit={{ opacity: 0 }}
         className="fixed inset-0 z-[120] bg-slate-950/95 backdrop-blur-3xl flex flex-col justify-between items-center p-6 select-none text-white overflow-hidden font-display"
       >
-        {/* Sleek Top Header with Explicit Language Selector */}
-        <div className="relative z-10 flex items-center justify-between w-full max-w-md pt-2">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-              <Sparkles size={18} className="animate-pulse" />
-            </div>
-            <div>
-              <h3 className="font-bold text-sm text-slate-100">AI Health Coach</h3>
-              <p className="text-[11px] text-emerald-400 font-medium">Voice Mode</p>
-            </div>
-          </div>
-
-          {/* Explicit Language Selector (Decoupled from IP location) */}
-          <div className="flex items-center gap-1 bg-white/10 p-1 rounded-full border border-white/10 text-xs">
-            <Globe size={13} className="text-slate-400 ml-1.5 mr-0.5" />
-            {(['en-US', 'id-ID', 'es-ES', 'ar-SA'] as const).map(lang => (
-              <button
-                key={lang}
-                onClick={() => {
-                  setVoiceLang(lang);
-                  interruptAgent();
-                  toast.success(`Language set to ${lang.split('-')[0].toUpperCase()}`);
+        {/* Clean Top Header with Language Selector */}
+        <div className="relative z-10 flex items-center justify-between w-full max-w-md pt-2 px-1">
+          <div className="flex items-center gap-2">
+            <h3 className="font-bold text-base text-slate-100">Health Coach</h3>
+            
+            {/* Language Selector Badge */}
+            <div className="flex items-center bg-white/10 rounded-full px-2 py-0.5 text-xs font-semibold border border-white/10">
+              <select
+                value={voiceLang}
+                onChange={(e) => {
+                  const newLang = e.target.value as any;
+                  setVoiceLang(newLang);
+                  if (recognitionRef.current) {
+                    try { recognitionRef.current.abort(); } catch (err) {}
+                  }
+                  setTimeout(startListening, 150);
                 }}
-                className={`px-2 py-0.5 rounded-full transition-all text-[11px] font-bold ${
-                  voiceLang === lang
-                    ? 'bg-emerald-500 text-slate-950 shadow-sm'
-                    : 'text-slate-300 hover:text-white'
-                }`}
+                className="bg-transparent text-emerald-400 outline-none cursor-pointer py-0.5 pr-1 font-mono text-[11px]"
+                title="Select Speech Recognition Language"
               >
-                {lang.split('-')[0].toUpperCase()}
-              </button>
-            ))}
+                <option value="en-US" className="bg-slate-900 text-white">🇺🇸 English (en-US)</option>
+                <option value="id-ID" className="bg-slate-900 text-white">🇮🇩 Indonesian (id-ID)</option>
+                <option value="es-ES" className="bg-slate-900 text-white">🇪🇸 Spanish (es-ES)</option>
+                <option value="ar-SA" className="bg-slate-900 text-white">🇸🇦 Arabic (ar-SA)</option>
+                <option value="fr-FR" className="bg-slate-900 text-white">🇫🇷 French (fr-FR)</option>
+              </select>
+            </div>
           </div>
 
           <button
             onClick={handleClose}
-            className="p-2.5 bg-white/10 hover:bg-white/20 active:scale-95 rounded-full text-slate-300 transition-all"
+            className="p-2 bg-white/10 hover:bg-white/20 active:scale-95 rounded-full text-slate-300 hover:text-white transition-all"
             title="Close voice mode"
+            aria-label="Close voice mode"
           >
             <X size={20} />
           </button>
@@ -515,7 +613,7 @@ export default function AICoachVoiceModal({
             </button>
           </motion.div>
         ) : (
-          <div className="relative z-10 flex flex-col items-center justify-center gap-6 w-full max-w-md my-auto text-center px-4">
+          <div className="relative z-10 flex flex-col items-center justify-center gap-4 w-full max-w-md my-auto text-center px-4">
             <div className="relative flex items-center justify-center">
               {/* Ambient Aura Glow */}
               <motion.div
@@ -533,7 +631,7 @@ export default function AICoachVoiceModal({
               <div onClick={interruptAgent} className="cursor-pointer z-10 active:scale-95 transition-transform" title="Tap to interrupt">
                 <HealthCoachSphere
                   state={state}
-                  size={260}
+                  size={240}
                   className="shadow-2xl shadow-emerald-950/80"
                 />
               </div>
@@ -543,6 +641,18 @@ export default function AICoachVoiceModal({
             <p className="text-xs uppercase tracking-widest font-black text-emerald-400 transition-all">
               {getStatusLabel()}
             </p>
+
+            {/* Live Interim Transcript Feedback */}
+            {liveInterim && (
+              <motion.div
+                initial={{ opacity: 0, y: 5 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="max-w-xs px-4 py-2 rounded-2xl bg-white/10 backdrop-blur-md border border-white/10 text-xs text-slate-200 shadow-lg text-center"
+              >
+                <span className="text-slate-400 mr-1.5 font-medium">Heard:</span>
+                <span className="italic font-semibold text-white">"{liveInterim}"</span>
+              </motion.div>
+            )}
           </div>
         )}
 

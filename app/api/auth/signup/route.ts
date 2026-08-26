@@ -87,7 +87,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ 
       success: true,
-      message: 'Cleanup finished, user created, and verification email sent.' 
+      message: 'User created and verification email sent successfully.' 
     });
   } catch (error: any) {
     console.error('API Error:', error);

@@ -27,9 +27,9 @@ export const useCoachInjectionStore = create<CoachInjectionStore>((set) => ({
     latestAnalysis: null,
     setLatestAnalysis: (analysis: Partial<AnalysisContext> & { name?: string; description?: string }) => set({
         latestAnalysis: {
+            ...analysis,
             productName: analysis.productName || analysis.name || 'Analyzed Item',
             description: analysis.description || '',
-            ...analysis,
             timestamp: Date.now()
         }
     }),

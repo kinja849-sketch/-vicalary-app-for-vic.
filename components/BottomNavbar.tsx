@@ -70,8 +70,8 @@ export const BottomNavbar: React.FC = () => {
     ];
 
     return (
-        <nav className="fixed bottom-0 left-0 right-0 z-[999] bg-white/95 dark:bg-[#0d1418]/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 safe-area-bottom shadow-[0_-4px_16px_rgba(0,0,0,0.08)] select-none">
-            <div className="flex justify-around items-center h-16 max-w-md mx-auto relative px-2">
+        <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[480px] z-[999] bg-white/95 dark:bg-[#0d1418]/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 safe-area-bottom shadow-[0_-4px_16px_rgba(0,0,0,0.08)] select-none">
+            <div className="flex items-center justify-around h-16 w-full px-1">
                 {navItems.map((item) => {
                     const isActive = pathname === item.path;
                     return (
@@ -79,20 +79,20 @@ export const BottomNavbar: React.FC = () => {
                             key={item.path}
                             href={item.path}
                             className={`
-                                flex flex-col items-center justify-center w-full h-full gap-1 transition-all duration-200 relative touch-manipulation cursor-pointer active:scale-95
+                                flex-1 flex flex-col items-center justify-center h-full py-1 gap-1 transition-colors duration-150 relative touch-manipulation cursor-pointer select-none min-w-0
                                 ${isActive ? 'text-vic-green font-bold' : 'text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300'}
                             `}
                         >
-                            <div className="relative pointer-events-none">
-                                <item.icon className={`transition-all duration-200 ${isActive ? 'scale-110' : 'scale-100'}`} size={24} />
+                            <div className="w-6 h-6 flex items-center justify-center relative shrink-0 pointer-events-none">
+                                <item.icon size={22} className="shrink-0" />
                                 {/* Red Dot Badge */}
                                 {!!item.badge && item.badge > 0 && (
-                                    <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold text-white shadow-sm ring-2 ring-white dark:ring-[#0d1418] pointer-events-none">
+                                    <span className="absolute -top-1 -right-2 flex h-4 min-w-[16px] px-1 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold text-white shadow-sm ring-2 ring-white dark:ring-[#0d1418] pointer-events-none">
                                         {item.badge > 9 ? '9+' : item.badge}
                                     </span>
                                 )}
                             </div>
-                            <span className="text-[10px] font-bold uppercase tracking-wider pointer-events-none">
+                            <span className="text-[10px] font-bold uppercase tracking-tight text-center truncate max-w-full px-1 whitespace-nowrap leading-none pointer-events-none">
                                 {item.label}
                             </span>
 

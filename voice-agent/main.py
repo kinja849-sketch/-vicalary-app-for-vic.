@@ -216,28 +216,16 @@ async def run_agent_session(room_url: str, token: str, instructions: str, call_i
             )
         )
 
-        # 2. Define OpenAI Realtime LLM Service with Server-Side VAD Turn Detection (~100ms interruptibility)
-        llm_settings_kwargs: Dict[str, Any] = {
-            "system_instruction": instructions,
-        }
-
-        # Configure server-side VAD turn detection for fast natural interruptibility
+        # 2. Define OpenAI Realtime LLM Service
         try:
-            llm_settings = OpenAIRealtimeLLMService.Settings(
-                **llm_settings_kwargs
-            )
-        except Exception:
-            llm_settings = None
-
-        if llm_settings:
-            llm = OpenAIRealtimeLLMService(
-                api_key=OPENAI_API_KEY,
-                settings=llm_settings
-            )
-        else:
             llm = OpenAIRealtimeLLMService(
                 api_key=OPENAI_API_KEY,
                 system_instruction=instructions
+            )
+        except TypeError as e:
+            logger.warning(f"Constructing OpenAIRealtimeLLMService with fallback: {e}")
+            llm = OpenAIRealtimeLLMService(
+                api_key=OPENAI_API_KEY
             )
 
         # 3. Define context and aggregators

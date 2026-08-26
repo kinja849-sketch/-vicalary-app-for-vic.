@@ -262,15 +262,20 @@ export const provisionAndSendMessage = async (
         };
 
         try {
+            const { data: sessionData } = await supabase.auth.getSession();
+            const token = sessionData?.session?.access_token;
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            if (token) headers['Authorization'] = `Bearer ${token}`;
+
             const res = await fetch('/api/conversation/process', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers,
                 body: JSON.stringify(orchestratorPayload)
             });
-            let assistantReply = null;
-            if (res.ok) {
-                assistantReply = await res.json();
+            if (!res.ok) {
+                throw new Error(`Conversation orchestrator failed with status ${res.status}`);
             }
+            const assistantReply = await res.json();
             return {
                 id: String(finalId),
                 realId: String(finalId),
@@ -526,18 +531,24 @@ export const sendMessage = async (
         };
 
         try {
+            const { data: sessionData } = await supabase.auth.getSession();
+            const token = sessionData?.session?.access_token;
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            if (token) headers['Authorization'] = `Bearer ${token}`;
+
             const res = await fetch('/api/conversation/process', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers,
                 body: JSON.stringify(orchestratorPayload)
             });
-            if (res.ok) {
-                const orchestratorResult = await res.json();
-                return {
-                    ...data,
-                    assistantReply: orchestratorResult
-                };
+            if (!res.ok) {
+                throw new Error(`Conversation orchestrator failed with status ${res.status}`);
             }
+            const orchestratorResult = await res.json();
+            return {
+                ...data,
+                assistantReply: orchestratorResult
+            };
         } catch (e) {
             console.warn("[API] Conversation orchestrator fallback to coach-reply:", e);
             const triggerPayload = {

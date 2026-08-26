@@ -1,7 +1,8 @@
-﻿export interface ToolExecutionResult {
+export interface ToolExecutionResult {
   toolName: 'web_search' | 'location_places' | 'nutrition_facts';
   success: boolean;
   data: string;
+  source?: string;
 }
 
 export interface ToolRoutingContext {
@@ -16,13 +17,76 @@ export interface ToolRoutingContext {
 }
 
 /**
- * Fast Web Search Tool using DuckDuckGo Instant Answers & Lite HTML scraping
+ * Tavily AI Search Tool (LLM-optimized search engine)
  */
-export async function executeWebSearch(query: string): Promise<ToolExecutionResult> {
+async function executeTavilySearch(query: string, apiKey: string): Promise<ToolExecutionResult> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3500); // 3.5s max
+
+    const response = await fetch('https://api.tavily.com/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        api_key: apiKey,
+        query: query.slice(0, 200),
+        search_depth: 'basic',
+        include_answer: true,
+        max_results: 3,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Tavily API responded with ${response.status}: ${errText}`);
+    }
+
+    const data = await response.json();
+    let facts = '';
+
+    if (data.answer) {
+      facts = `Direct Answer: ${data.answer}`;
+    }
+
+    if (data.results && Array.isArray(data.results) && data.results.length > 0) {
+      const snippets = data.results
+        .slice(0, 3)
+        .map((r: any) => `[${r.title || 'Source'}]: ${r.content || ''}`)
+        .join('\n');
+      facts = facts ? `${facts}\n\nTop Results:\n${snippets}` : snippets;
+    }
+
+    if (!facts) {
+      return {
+        toolName: 'web_search',
+        success: false,
+        data: '',
+        source: 'tavily',
+      };
+    }
+
+    return {
+      toolName: 'web_search',
+      success: true,
+      data: facts.slice(0, 1000),
+      source: 'tavily',
+    };
+  } catch (err: any) {
+    console.warn('[ToolRouter] Tavily search error, falling back:', err?.message);
+    throw err;
+  }
+}
+
+/**
+ * Fallback Web Search Tool using DuckDuckGo Instant Answers
+ */
+async function executeDuckDuckGoSearch(query: string): Promise<ToolExecutionResult> {
   try {
     const cleanQuery = encodeURIComponent(query.slice(0, 150));
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2500); // 2.5s strict timeout
+    const timeoutId = setTimeout(() => controller.abort(), 2500);
 
     const res = await fetch(`https://api.duckduckgo.com/?q=${cleanQuery}&format=json&no_html=1&skip_disambig=1`, {
       signal: controller.signal,
@@ -30,7 +94,7 @@ export async function executeWebSearch(query: string): Promise<ToolExecutionResu
     });
     clearTimeout(timeoutId);
 
-    if (!res.ok) throw new Error(`Search request failed with status ${res.status}`);
+    if (!res.ok) throw new Error(`DuckDuckGo request failed with status ${res.status}`);
 
     const data = await res.json();
     let snippet = '';
@@ -46,23 +110,47 @@ export async function executeWebSearch(query: string): Promise<ToolExecutionResu
     }
 
     if (!snippet) {
-      // Fallback to minimal search summary
-      snippet = `Current live web lookup for "${query}" completed. Ground response in contemporary verified facts.`;
+      return {
+        toolName: 'web_search',
+        success: false,
+        data: '',
+        source: 'duckduckgo',
+      };
     }
 
     return {
       toolName: 'web_search',
       success: true,
-      data: snippet.slice(0, 500)
+      data: snippet.slice(0, 600),
+      source: 'duckduckgo',
     };
   } catch (error: any) {
-    console.warn('[ToolRouter] Web search tool failed or timed out:', error?.message);
+    console.warn('[ToolRouter] DuckDuckGo fallback search failed:', error?.message);
     return {
       toolName: 'web_search',
       success: false,
-      data: `Web search unavailable for "${query}". Respond based on verified general knowledge.`
+      data: '',
+      source: 'fallback',
     };
   }
+}
+
+/**
+ * Unified Web Search Tool (Prioritizes Tavily AI, falls back to DuckDuckGo)
+ */
+export async function executeWebSearch(query: string): Promise<ToolExecutionResult> {
+  const tavilyKey = process.env.TAVILY_API_KEY || process.env.NEXT_PUBLIC_TAVILY_API_KEY;
+
+  if (tavilyKey && !tavilyKey.includes('placeholder')) {
+    try {
+      return await executeTavilySearch(query, tavilyKey);
+    } catch {
+      // Gracefully fall back to DuckDuckGo if Tavily encounters network issue
+      return await executeDuckDuckGoSearch(query);
+    }
+  }
+
+  return await executeDuckDuckGoSearch(query);
 }
 
 /**
@@ -72,13 +160,23 @@ export async function executeLocationPlaces(
   locationContext: ToolRoutingContext['locationContext'],
   query: string
 ): Promise<ToolExecutionResult> {
-  const city = locationContext?.city || 'local area';
-  const country = locationContext?.country || '';
+  const city = locationContext?.city;
+  const country = locationContext?.country;
+
+  if (!city && !country) {
+    return {
+      toolName: 'location_places',
+      success: false,
+      data: ''
+    };
+  }
+
+  const locStr = city ? `${city}${country ? `, ${country}` : ''}` : country;
 
   return {
     toolName: 'location_places',
     success: true,
-    data: `User verified location: ${city}${country ? `, ${country}` : ''}. User is asking about nearby places or local context for: "${query}". Provide practical, geographically accurate recommendations for ${city}.`
+    data: `User location context: ${locStr}. Query: "${query}". Provide practical, geographically accurate recommendations for ${locStr}.`
   };
 }
 
@@ -90,11 +188,11 @@ export async function routeAndExecuteTools(context: ToolRoutingContext): Promise
   const lowerMsg = userMessage.toLowerCase();
   const results: ToolExecutionResult[] = [];
 
-  // Detect current events / live web search intent
-  const isCurrentEventOrNews = /(news|today|yesterday|gaza|israel|ukraine|current event|stock price|latest on|what happened in|election|breaking)/i.test(lowerMsg);
+  // Detect current events, research, live facts, or world news intent
+  const isCurrentEventOrNews = /(news|today|yesterday|recently|recent|happening|happened|current|latest|gaza|israel|ukraine|indonesia|event|stock price|election|breaking|president|minister|research|study|studies|weather|who is|who won|update|trends|what is going on|situation in)/i.test(lowerMsg);
   
   // Detect location / nearby places intent
-  const isLocationPlacesQuery = /(nearest|near me|nearby|where can i find|supermarket|grocery store|gym|pharmacy|halal food|restaurant near)/i.test(lowerMsg);
+  const isLocationPlacesQuery = /(nearest|near me|nearby|where can i find|supermarket|grocery store|gym|pharmacy|halal food|restaurant near|where am i|my current location|my location|what city|what country|where do i live|where am i located)/i.test(lowerMsg);
 
   const promises: Promise<ToolExecutionResult>[] = [];
 
