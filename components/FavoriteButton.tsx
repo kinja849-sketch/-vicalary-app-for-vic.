@@ -15,7 +15,11 @@ export function FavoriteButton({ recipeId, className = "" }: { recipeId: string 
         enabled: !!user?.id
     });
 
-    const isFavorite = favorites?.some((f: any) => String(f.recipe_id) === String(recipeId));
+    const isFavorite = favorites?.some((f: any) => 
+        String(f.recipe_id) === String(recipeId) || 
+        String(f.recipes?.external_id) === String(recipeId) ||
+        String(f.recipes?.id) === String(recipeId)
+    );
 
     const mutation = useMutation({
         mutationFn: () => toggleFavoriteRecipe(user!.id, String(recipeId)),

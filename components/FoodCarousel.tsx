@@ -7,6 +7,7 @@ import { toggleFavoriteRecipe, getFavoriteRecipes } from "@/lib/api/recipes";
 import { toast } from "sonner";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { FavoriteButton } from "./FavoriteButton";
+import { MealImage } from "./MealImage";
 import { getFoodImageUrl } from "@/lib/services/FoodImageService";
 
 
@@ -38,10 +39,12 @@ export default function FoodCarousel({
     categoryTitle
 }: FoodCarouselProps & { strictMode?: boolean }) {
     // Process meals: ensure exactly 12 items and map unified schema to legacy props
-    const processMeals = (meals: any[]) => (meals || []).slice(0, 12).map(m => {
-        const mappedName = m.title || m.name || '';
-        const mappedImage = (m.image_url || m.image || "").trim() || "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=1000&auto=format&fit=crop";
-        const mappedCalories = m.total_calories || m.calories || 0;
+    const processMeals = (meals: any[], cat: string = 'lunch') => (meals || []).slice(0, 12).map(m => {
+        const mappedName = m.title || m.name || 'Healthy Meal';
+        const mappedCuisine = m.cuisine || m.cuisine_type || 'Indonesian';
+        const mappedCategory = m.meal_type || cat;
+        const mappedImage = (m.image_url || m.image || "").trim() || getFoodImageUrl(mappedName, mappedCuisine, mappedCategory);
+        const mappedCalories = m.total_calories || m.calories || 350;
         const mappedId = m.id || m.external_id || '';
         
         return {
@@ -49,18 +52,18 @@ export default function FoodCarousel({
             id: mappedId,
             name: mappedName,
             image: mappedImage,
+            image_url: mappedImage,
             calories: mappedCalories
         };
     });
 
     const isSingleMode = !!singleCategoryMeals;
 
-
     // Combine all meals into a single array of 36 cards
     const allMeals = [
-        ...processMeals(breakfastMeals),
-        ...processMeals(lunchMeals),
-        ...processMeals(dinnerMeals)
+        ...processMeals(breakfastMeals, 'breakfast'),
+        ...processMeals(lunchMeals, 'lunch'),
+        ...processMeals(dinnerMeals, 'dinner')
     ];
 
     // Use a local state for the active tab, initialized with initialMealType
@@ -75,46 +78,46 @@ export default function FoodCarousel({
 
     const DEFAULT_MEALS = {
         breakfast: [
-            { id: 'fb1', name: 'Bubur Oatmeal Ayam Suwir Kuning', calories: 360, image: 'https://images.unsplash.com/photo-1517673400267-0251440c45dc?q=80&w=800&auto=format&fit=crop', subtitle: '360 kcal' },
-            { id: 'fb2', name: 'Omelet Tahu Bayam Bumbu Bawang', calories: 310, image: 'https://images.unsplash.com/photo-1510693206972-df098062cb71?q=80&w=800&auto=format&fit=crop', subtitle: '310 kcal' },
-            { id: 'fb3', name: 'Nasi Merah Telur Ceplok & Lalapan', calories: 380, image: 'https://images.unsplash.com/photo-1525351484163-7529414344d8?q=80&w=800&auto=format&fit=crop', subtitle: '380 kcal' },
-            { id: 'fb4', name: 'Roti Gandum Alpukat Telur Rebus', calories: 340, image: 'https://images.unsplash.com/photo-1525351484163-7529414344d8?q=80&w=800&auto=format&fit=crop', subtitle: '340 kcal' },
-            { id: 'fb5', name: 'Smoothie Bowl Pisang Buah Naga', calories: 290, image: 'https://images.unsplash.com/photo-1551024709-8f23befc6f87?q=80&w=800&auto=format&fit=crop', subtitle: '290 kcal' },
-            { id: 'fb6', name: 'Scrambled Eggs Jamur Tiram & Tomat', calories: 270, image: 'https://images.unsplash.com/photo-1510693206972-df098062cb71?q=80&w=800&auto=format&fit=crop', subtitle: '270 kcal' },
-            { id: 'fb7', name: 'Bubur Manado Sehat Tanpa Santan', calories: 320, image: 'https://images.unsplash.com/photo-1517673400267-0251440c45dc?q=80&w=800&auto=format&fit=crop', subtitle: '320 kcal' },
-            { id: 'fb8', name: 'Pancake Oatmeal Pisang Kayu Manis', calories: 330, image: 'https://images.unsplash.com/photo-1517673400267-0251440c45dc?q=80&w=800&auto=format&fit=crop', subtitle: '330 kcal' },
-            { id: 'fb9', name: 'Sandwich Dada Ayam Panggang Gandum', calories: 390, image: 'https://images.unsplash.com/photo-1525351484163-7529414344d8?q=80&w=800&auto=format&fit=crop', subtitle: '390 kcal' },
-            { id: 'fb10', name: 'Bihun Kuah Sayur Dada Ayam', calories: 350, image: 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624?q=80&w=800&auto=format&fit=crop', subtitle: '350 kcal' },
-            { id: 'fb11', name: 'Greek Yogurt Parfait Buah Segar', calories: 260, image: 'https://images.unsplash.com/photo-1488477181946-6428a0291777?q=80&w=800&auto=format&fit=crop', subtitle: '260 kcal' },
-            { id: 'fb12', name: 'Pepes Tahu Jamur Kukus Gurih', calories: 220, image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop', subtitle: '220 kcal' }
+            { id: 'fb1', name: 'Bubur Oatmeal Ayam Suwir Kuning', calories: 360, image: getFoodImageUrl('Bubur Oatmeal Ayam Suwir Kuning', 'Indonesian', 'breakfast'), subtitle: '360 kcal' },
+            { id: 'fb2', name: 'Omelet Tahu Bayam Bumbu Bawang', calories: 310, image: getFoodImageUrl('Omelet Tahu Bayam Bumbu Bawang', 'Asian', 'breakfast'), subtitle: '310 kcal' },
+            { id: 'fb3', name: 'Nasi Merah Telur Ceplok & Lalapan', calories: 380, image: getFoodImageUrl('Nasi Merah Telur Ceplok & Lalapan', 'Indonesian', 'breakfast'), subtitle: '380 kcal' },
+            { id: 'fb4', name: 'Roti Gandum Alpukat Telur Rebus', calories: 340, image: getFoodImageUrl('Roti Gandum Alpukat Telur Rebus', 'Western', 'breakfast'), subtitle: '340 kcal' },
+            { id: 'fb5', name: 'Smoothie Bowl Pisang Buah Naga Chia', calories: 290, image: getFoodImageUrl('Smoothie Bowl Pisang Buah Naga Chia', 'Healthy', 'breakfast'), subtitle: '290 kcal' },
+            { id: 'fb6', name: 'Scrambled Eggs Jamur Tiram & Tomat', calories: 270, image: getFoodImageUrl('Scrambled Eggs Jamur Tiram & Tomat', 'Western', 'breakfast'), subtitle: '270 kcal' },
+            { id: 'fb7', name: 'Bubur Manado Sehat Tanpa Santan', calories: 320, image: getFoodImageUrl('Bubur Manado Sehat Tanpa Santan', 'Indonesian', 'breakfast'), subtitle: '320 kcal' },
+            { id: 'fb8', name: 'Pancake Oatmeal Pisang Kayu Manis', calories: 330, image: getFoodImageUrl('Pancake Oatmeal Pisang Kayu Manis', 'Healthy', 'breakfast'), subtitle: '330 kcal' },
+            { id: 'fb9', name: 'Sandwich Dada Ayam Panggang Gandum', calories: 390, image: getFoodImageUrl('Sandwich Dada Ayam Panggang Gandum', 'Western', 'breakfast'), subtitle: '390 kcal' },
+            { id: 'fb10', name: 'Bihun Kuah Sayur Dada Ayam', calories: 350, image: getFoodImageUrl('Bihun Kuah Sayur Dada Ayam', 'Asian', 'breakfast'), subtitle: '350 kcal' },
+            { id: 'fb11', name: 'Greek Yogurt Parfait Buah Segar', calories: 260, image: getFoodImageUrl('Greek Yogurt Parfait Buah Segar', 'Healthy', 'breakfast'), subtitle: '260 kcal' },
+            { id: 'fb12', name: 'Pepes Tahu Jamur Kukus Gurih', calories: 220, image: getFoodImageUrl('Pepes Tahu Jamur Kukus Gurih', 'Indonesian', 'breakfast'), subtitle: '220 kcal' }
         ],
         lunch: [
-            { id: 'fl1', name: 'Nasi Merah Ayam Bakar Bumbu Rujak', calories: 520, image: 'https://images.unsplash.com/photo-1598515214211-89d3c73ae83b?q=80&w=800&auto=format&fit=crop', subtitle: '520 kcal' },
-            { id: 'fl2', name: 'Sate Dada Ayam Panggang Bumbu Kacang', calories: 450, image: 'https://images.unsplash.com/photo-1555939594-58d7cb561ad1?q=80&w=800&auto=format&fit=crop', subtitle: '450 kcal' },
-            { id: 'fl3', name: 'Capcay Goreng Seafood & Tahu', calories: 380, image: 'https://images.unsplash.com/photo-1512058564366-18510be2db19?q=80&w=800&auto=format&fit=crop', subtitle: '380 kcal' },
-            { id: 'fl4', name: 'Gado-Gado Siram Bumbu Kacang Sehat', calories: 410, image: 'https://images.unsplash.com/photo-1540420773420-3366772f4999?q=80&w=800&auto=format&fit=crop', subtitle: '410 kcal' },
-            { id: 'fl5', name: 'Ayam Teriyaki Wijen Nasi Coklat', calories: 490, image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop', subtitle: '490 kcal' },
-            { id: 'fl6', name: 'Tumis Tempe Tahu Buncis Saus Tiram', calories: 370, image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop', subtitle: '370 kcal' },
-            { id: 'fl7', name: 'Pepes Ikan Nila Kemangi Bumbu Kuning', calories: 420, image: 'https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?q=80&w=800&auto=format&fit=crop', subtitle: '420 kcal' },
-            { id: 'fl8', name: 'Soto Ayam Bening Segar Jeruk Nipis', calories: 410, image: 'https://images.unsplash.com/photo-1572449043416-55f4685c9bb7?q=80&w=800&auto=format&fit=crop', subtitle: '410 kcal' },
-            { id: 'fl9', name: 'Tumis Kangkung Terasi Bawang Putih', calories: 180, image: 'https://images.unsplash.com/photo-1576045057995-568f588f82fb?q=80&w=800&auto=format&fit=crop', subtitle: '180 kcal' },
-            { id: 'fl10', name: 'Ikan Tongkol Balado Rendah Minyak', calories: 430, image: 'https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?q=80&w=800&auto=format&fit=crop', subtitle: '430 kcal' },
-            { id: 'fl11', name: 'Daging Sapi Cah Brokoli Saus Tiram', calories: 480, image: 'https://images.unsplash.com/photo-1544025162-d76694265947?q=80&w=800&auto=format&fit=crop', subtitle: '480 kcal' },
-            { id: 'fl12', name: 'Sup Jagung Telur Dada Ayam', calories: 340, image: 'https://images.unsplash.com/photo-1547592166-23ac45744acd?q=80&w=800&auto=format&fit=crop', subtitle: '340 kcal' }
+            { id: 'fl1', name: 'Nasi Merah Ayam Bakar Bumbu Rujak', calories: 520, image: getFoodImageUrl('Nasi Merah Ayam Bakar Bumbu Rujak', 'Indonesian', 'lunch'), subtitle: '520 kcal' },
+            { id: 'fl2', name: 'Sate Dada Ayam Panggang Bumbu Kacang', calories: 450, image: getFoodImageUrl('Sate Dada Ayam Panggang Bumbu Kacang', 'Indonesian', 'lunch'), subtitle: '450 kcal' },
+            { id: 'fl3', name: 'Capcay Goreng Seafood & Tahu', calories: 380, image: getFoodImageUrl('Capcay Goreng Seafood & Tahu', 'Asian', 'lunch'), subtitle: '380 kcal' },
+            { id: 'fl4', name: 'Gado-Gado Siram Bumbu Kacang Sehat', calories: 410, image: getFoodImageUrl('Gado-Gado Siram Bumbu Kacang Sehat', 'Indonesian', 'lunch'), subtitle: '410 kcal' },
+            { id: 'fl5', name: 'Ayam Teriyaki Wijen Nasi Coklat', calories: 490, image: getFoodImageUrl('Ayam Teriyaki Wijen Nasi Coklat', 'Asian', 'lunch'), subtitle: '490 kcal' },
+            { id: 'fl6', name: 'Tumis Tempe Tahu Buncis Saus Tiram', calories: 370, image: getFoodImageUrl('Tumis Tempe Tahu Buncis Saus Tiram', 'Indonesian', 'lunch'), subtitle: '370 kcal' },
+            { id: 'fl7', name: 'Pepes Ikan Nila Kemangi Bumbu Kuning', calories: 420, image: getFoodImageUrl('Pepes Ikan Nila Kemangi Bumbu Kuning', 'Indonesian', 'lunch'), subtitle: '420 kcal' },
+            { id: 'fl8', name: 'Soto Ayam Bening Segar Jeruk Nipis', calories: 410, image: getFoodImageUrl('Soto Ayam Bening Segar Jeruk Nipis', 'Indonesian', 'lunch'), subtitle: '410 kcal' },
+            { id: 'fl9', name: 'Tumis Kangkung Terasi Bawang Putih', calories: 180, image: getFoodImageUrl('Tumis Kangkung Terasi Bawang Putih', 'Indonesian', 'lunch'), subtitle: '180 kcal' },
+            { id: 'fl10', name: 'Ikan Tongkol Balado Rendah Minyak', calories: 430, image: getFoodImageUrl('Ikan Tongkol Balado Rendah Minyak', 'Indonesian', 'lunch'), subtitle: '430 kcal' },
+            { id: 'fl11', name: 'Daging Sapi Cah Brokoli Saus Tiram', calories: 480, image: getFoodImageUrl('Daging Sapi Cah Brokoli Saus Tiram', 'Asian', 'lunch'), subtitle: '480 kcal' },
+            { id: 'fl12', name: 'Sup Jagung Telur Dada Ayam', calories: 340, image: getFoodImageUrl('Sup Jagung Telur Dada Ayam', 'Asian', 'lunch'), subtitle: '340 kcal' }
         ],
         dinner: [
-            { id: 'fd1', name: 'Sup Ikan Kakap Kuah Bening Asam Segar', calories: 340, image: 'https://images.unsplash.com/photo-1547592166-23ac45744acd?q=80&w=800&auto=format&fit=crop', subtitle: '340 kcal' },
-            { id: 'fd2', name: 'Dada Ayam Panggang Bumbu Rosemary Lemon', calories: 380, image: 'https://images.unsplash.com/photo-1598515214211-89d3c73ae83b?q=80&w=800&auto=format&fit=crop', subtitle: '380 kcal' },
-            { id: 'fd3', name: 'Tumis Brokoli Kangkung Bawang Putih & Tahu', calories: 290, image: 'https://images.unsplash.com/photo-1512058564366-18510be2db19?q=80&w=800&auto=format&fit=crop', subtitle: '290 kcal' },
-            { id: 'fd4', name: 'Ikan Nila Bakar Madu Pedas Ringan', calories: 390, image: 'https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?q=80&w=800&auto=format&fit=crop', subtitle: '390 kcal' },
-            { id: 'fd5', name: 'Sup Ayam Jamur Sayuran Bening', calories: 310, image: 'https://images.unsplash.com/photo-1572449043416-55f4685c9bb7?q=80&w=800&auto=format&fit=crop', subtitle: '310 kcal' },
-            { id: 'fd6', name: 'Tumis Tauge Tahu Tempe Daun Bawang', calories: 240, image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop', subtitle: '240 kcal' },
-            { id: 'fd7', name: 'Steak Tempe Saus Lada Hitam', calories: 350, image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop', subtitle: '350 kcal' },
-            { id: 'fd8', name: 'Salad Dada Ayam Panggang Saus Wijen', calories: 360, image: 'https://images.unsplash.com/photo-1540420773420-3366772f4999?q=80&w=800&auto=format&fit=crop', subtitle: '360 kcal' },
-            { id: 'fd9', name: 'Udang Tumis Bawang Putih Daun Ketumbar', calories: 320, image: 'https://images.unsplash.com/photo-1565680018434-b513d5e5fd47?q=80&w=800&auto=format&fit=crop', subtitle: '320 kcal' },
-            { id: 'fd10', name: 'Sup Tomat Telur Serabut Lembut', calories: 220, image: 'https://images.unsplash.com/photo-1547592166-23ac45744acd?q=80&w=800&auto=format&fit=crop', subtitle: '220 kcal' },
-            { id: 'fd11', name: 'Ayam Suwir Kukus Sambal Matah', calories: 370, image: 'https://images.unsplash.com/photo-1598515214211-89d3c73ae83b?q=80&w=800&auto=format&fit=crop', subtitle: '370 kcal' },
-            { id: 'fd12', name: 'Sayur Bening Bayam Jagung Manis', calories: 160, image: 'https://images.unsplash.com/photo-1576045057995-568f588f82fb?q=80&w=800&auto=format&fit=crop', subtitle: '160 kcal' }
+            { id: 'fd1', name: 'Sup Ikan Kakap Kuah Bening Asam Segar', calories: 340, image: getFoodImageUrl('Sup Ikan Kakap Kuah Bening Asam Segar', 'Indonesian', 'dinner'), subtitle: '340 kcal' },
+            { id: 'fd2', name: 'Dada Ayam Panggang Bumbu Rosemary Lemon', calories: 380, image: getFoodImageUrl('Dada Ayam Panggang Bumbu Rosemary Lemon', 'Western', 'dinner'), subtitle: '380 kcal' },
+            { id: 'fd3', name: 'Tumis Brokoli Kangkung Bawang Putih & Tahu', calories: 290, image: getFoodImageUrl('Tumis Brokoli Kangkung Bawang Putih & Tahu', 'Asian', 'dinner'), subtitle: '290 kcal' },
+            { id: 'fd4', name: 'Ikan Nila Bakar Madu Pedas Ringan', calories: 390, image: getFoodImageUrl('Ikan Nila Bakar Madu Pedas Ringan', 'Indonesian', 'dinner'), subtitle: '390 kcal' },
+            { id: 'fd5', name: 'Sup Ayam Jamur Sayuran Bening', calories: 310, image: getFoodImageUrl('Sup Ayam Jamur Sayuran Bening', 'Indonesian', 'dinner'), subtitle: '310 kcal' },
+            { id: 'fd6', name: 'Tumis Tauge Tahu Tempe Daun Bawang', calories: 240, image: getFoodImageUrl('Tumis Tauge Tahu Tempe Daun Bawang', 'Indonesian', 'dinner'), subtitle: '240 kcal' },
+            { id: 'fd7', name: 'Steak Tempe Saus Lada Hitam', calories: 350, image: getFoodImageUrl('Steak Tempe Saus Lada Hitam', 'Fusion', 'dinner'), subtitle: '350 kcal' },
+            { id: 'fd8', name: 'Salad Dada Ayam Panggang Saus Wijen', calories: 360, image: getFoodImageUrl('Salad Dada Ayam Panggang Saus Wijen', 'Healthy', 'dinner'), subtitle: '360 kcal' },
+            { id: 'fd9', name: 'Udang Tumis Bawang Putih Daun Ketumbar', calories: 320, image: getFoodImageUrl('Udang Tumis Bawang Putih Daun Ketumbar', 'Asian', 'dinner'), subtitle: '320 kcal' },
+            { id: 'fd10', name: 'Sup Tomat Telur Serabut Lembut', calories: 220, image: getFoodImageUrl('Sup Tomat Telur Serabut Lembut', 'Asian', 'dinner'), subtitle: '220 kcal' },
+            { id: 'fd11', name: 'Ayam Suwir Kukus Sambal Matah Rendah Minyak', calories: 370, image: getFoodImageUrl('Ayam Suwir Kukus Sambal Matah Rendah Minyak', 'Indonesian', 'dinner'), subtitle: '370 kcal' },
+            { id: 'fd12', name: 'Sayur Bening Bayam Jagung Manis', calories: 160, image: getFoodImageUrl('Sayur Bening Bayam Jagung Manis', 'Indonesian', 'dinner'), subtitle: '160 kcal' }
         ]
     };
 
@@ -229,15 +232,12 @@ export default function FoodCarousel({
 
                             <div className="deck">
                                 {visibleCards.map(({ meal, position }) => (
-                                    <div key={`${meal.id}-${position}`} className={`product-card card-pos-${position}`}>
+                                    <div key={meal.id} className={`product-card card-pos-${position}`}>
                                         <div className="product-media">
-                                            <img
-                                                src={meal.image || getFoodImageUrl(meal.name, meal.cuisine, selectedTab)}
+                                            <MealImage
+                                                src={meal.image_url || meal.image}
                                                 alt={meal.name}
-                                                onError={(e) => {
-                                                    const target = e.target as HTMLImageElement;
-                                                    target.src = getFoodImageUrl(meal.name, meal.cuisine, selectedTab);
-                                                }}
+                                                className="w-full h-full object-cover"
                                             />
                                             {/* Gradient Overlay for Text Readability */}
                                             <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent pointer-events-none" />

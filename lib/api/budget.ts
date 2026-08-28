@@ -1,101 +1,60 @@
 import { supabase } from '../supabase'
 
 // ============================================================================
-// BUDGET MANAGEMENT
+// BUDGET MANAGEMENT (V2 ARCHITECTURE)
 // ============================================================================
 
-export const createBudget = async (userId: string, totalBudget: number, startDate: string, endDate: string, currencyCode: string = 'USD', currencySymbol: string = '$') => {
-    // Deactivate existing budgets
-    const { error: deactError } = await supabase
-        .from('user_budgets')
-        .update({ is_active: false })
-        .eq('user_id', userId)
-
-    if (deactError) {
-        console.warn("[Budget API] Warning deactivating previous budgets:", deactError.message);
+export const getBudgetStatus = async (userId: string) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    
+    // In V2 Architecture, the backend's deterministic BudgetEngine is responsible for
+    // returning the daily budget status, fetching from user_budget_profiles and financial_transactions.
+    const res = await fetch('/api/budget/daily', {
+        method: 'GET',
+        headers: {
+            'Authorization': session ? `Bearer ${session.access_token}` : ''
+        }
+    });
+    
+    if (!res.ok) {
+        throw new Error('Failed to fetch budget status from BudgetEngine');
     }
-
-    const { data, error } = await (supabase
-        .from('user_budgets') as any)
-        .insert({
-            user_id: userId,
-            total_budget: totalBudget,
-            remaining_budget: totalBudget,
-            current_balance: totalBudget,
-            period_start: startDate,
-            period_end: endDate,
-            currency: currencyCode,
-            currency_symbol: currencySymbol,
-            is_active: true,
-        } as any)
-        .select()
-        .single()
-
-    if (error) throw error
-
-    // Call AI Budget Engine orchestrator to generate intelligent goals and analysis
-    try {
-        await fetch('/api/banking/ai-budget', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                userId,
-                total_budget: totalBudget,
-                period_end: endDate
-            })
-        });
-    } catch (aiErr) {
-        console.error("AI Budget Engine failed to run, but basic budget was created:", aiErr);
+    
+    const data = await res.json();
+    if (data.needs_setup) {
+        return null;
     }
-
-    return data
-}
-
-export const getActiveBudget = async (userId: string) => {
-    const { data, error } = await supabase
-        .from('user_budgets')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('is_active', true)
-        .limit(1)
-
-    if (error) throw error
-    return data && data.length > 0 ? data[0] : null
-}
-
-export const getBudgetTransactions = async (budgetId: string) => {
-    const { data, error } = await supabase
-        .from('budget_transactions')
-        .select(`
-      *,
-      food_analysis_history (
-        *,
-        food_items (*)
-      )
-    `)
-        .eq('budget_id', budgetId)
-        .order('transaction_date', { ascending: false })
-
-    if (error) throw error
-    return data
+    return data.summary;
 }
 
 export const getBudgetHistory = async (userId: string) => {
+    await supabase.auth.getSession();
     const { data, error } = await supabase
-        .from('user_budgets')
+        .from('daily_budget_status')
         .select('*')
         .eq('user_id', userId)
-        .order('created_at', { ascending: false })
+        .order('date', { ascending: false })
+        .limit(30);
 
-    if (error) throw error
-    return data
+    if (error) throw error;
+    return data;
 }
-export const deleteBudget = async (budgetId: string) => {
-    const { error } = await supabase
-        .from('user_budgets')
-        .delete()
-        .eq('id', budgetId)
 
-    if (error) throw error
-    return true
+// Replaces the old createBudget form. The UI shouldn't use this directly,
+// but it's here in case the user wants to update their profile goal.
+export const updateBudgetProfile = async (userId: string, monthlyBudget: number, currency: string = 'USD') => {
+    await supabase.auth.getSession();
+    const { data, error } = await supabase
+        .from('user_budget_profiles')
+        .upsert({
+            user_id: userId,
+            monthly_budget: monthlyBudget,
+            currency: currency,
+            updated_at: new Date().toISOString()
+        }, { onConflict: 'user_id' })
+        .select()
+        .single();
+
+    if (error) throw error;
+    return data;
 }

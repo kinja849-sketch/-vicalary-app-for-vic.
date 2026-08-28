@@ -71,14 +71,31 @@ export const createNotification = async (
 // ============================================================================
 
 export const getUserSettings = async (userId: string) => {
-    const { data, error } = await supabase
-        .from('user_settings')
-        .select('*')
-        .eq('user_id', userId)
-        .maybeSingle()
+    if (!userId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
+        return null;
+    }
 
-    if (error && error.code !== 'PGRST116') throw error
-    return data
+    try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        if (!sessionData?.session) {
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('user_settings')
+            .select('*')
+            .eq('user_id', userId)
+            .maybeSingle();
+
+        if (error && error.code !== 'PGRST116') {
+            console.warn("[Settings] Error fetching user_settings:", error);
+            return null;
+        }
+        return data;
+    } catch (err) {
+        console.warn("[Settings] Could not query user_settings:", err);
+        return null;
+    }
 }
 
 export const updateSettings = async (userId: string, settings: Partial<{

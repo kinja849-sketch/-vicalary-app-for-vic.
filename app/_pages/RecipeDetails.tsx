@@ -12,6 +12,7 @@ import { getRecipeDetails } from "@/lib/api/recipes";
 import { useTranslation } from "@/lib/api/translation";
 import { toast } from "sonner";
 import { FavoriteButton } from "@/components/FavoriteButton";
+import { MealImage } from "@/components/MealImage";
 import ChefAvatar from "@/components/guide/ChefAvatar";
 import { getFoodImageUrl } from "@/lib/services/FoodImageService";
 
@@ -352,33 +353,10 @@ export default function RecipeDetails() {
         if (stepImages[idx]) return;
         setIsImageLoading(true);
         try {
-            // Use open source image fetching (loremflickr) based on step ingredients or title to show real process photos!
-            let searchKeyword = recipe.title || 'cooking';
-            if (sessionData && sessionData.steps) {
-                const currentStep = idx === -1 ? sessionData.overview : sessionData.steps[idx];
-                if (currentStep?.ingredients_used?.length > 0) {
-                    searchKeyword = currentStep.ingredients_used.slice(0, 2).join(',');
-                } else if (currentStep?.instruction) {
-                    // Extract action verbs for process images (e.g. "mix,bake")
-                    searchKeyword = currentStep.instruction.split(' ').slice(0, 3).join(',');
-                }
-            }
-            
-            // Clean keyword for LoremFlickr (must be comma separated, no spaces or weird characters)
-            const cleanKeyword = searchKeyword.replace(/[^a-zA-Z]/g, ',').replace(/,+/g, ',').toLowerCase();
-            const dynamicUrl = `https://loremflickr.com/1024/768/${cleanKeyword},food,cooking/all`;
-            
-            // To ensure 100% stability without overwhelming AI, we load the image object directly
-            const img = new Image();
-            img.onload = () => {
-                setStepImages(prev => ({ ...prev, [idx]: dynamicUrl }));
-                setIsImageLoading(false);
-            };
-            img.onerror = () => {
-                if (recipe?.image_url) setStepImages(prev => ({ ...prev, [idx]: recipe.image_url }));
-                setIsImageLoading(false);
-            };
-            img.src = dynamicUrl;
+            // Strictly bind step visuals to verified dish photography from canonical recipe
+            const verifiedUrl = recipe?.image_url || getFoodImageUrl(recipe?.title, recipe?.cuisine_type, recipe?.meal_type);
+            setStepImages(prev => ({ ...prev, [idx]: verifiedUrl }));
+            setIsImageLoading(false);
         } catch(e) {
             console.error("Image fetch failed", e);
             if (recipe?.image_url) {
@@ -588,13 +566,10 @@ export default function RecipeDetails() {
             <div className={`flex flex-col h-full overflow-hidden ${isVoiceMode ? 'hidden' : 'block'}`}>
                 {/* Immersive Header */}
                 <div className="relative h-80 shrink-0 bg-slate-800">
-                    <img 
-                        src={recipe.image_url || getFoodImageUrl(recipe.title, recipe.cuisine_type, recipe.meal_type)} 
+                    <MealImage 
+                        src={recipe.image_url} 
                         alt={recipe.title || 'Recipe'} 
                         className="w-full h-full object-cover"
-                        onError={(e) => {
-                            (e.currentTarget as HTMLImageElement).src = getFoodImageUrl(recipe.title, recipe.cuisine_type, recipe.meal_type);
-                        }}
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/20" />
                     
@@ -651,7 +626,7 @@ export default function RecipeDetails() {
                         </div>
                     </div>
 
-                    <div className="flex gap-4 mb-8">
+                    <div className="flex gap-4 mb-6">
                         <div className="flex-1 bg-white dark:bg-[#1f2c34] p-4 rounded-3xl shadow-sm flex items-center gap-4">
                             <div className="size-12 bg-slate-100 dark:bg-white/5 rounded-2xl flex items-center justify-center text-slate-500">
                                 <Timer size={24} />
@@ -675,6 +650,21 @@ export default function RecipeDetails() {
                             </div>
                         </div>
                     </div>
+
+                    {/* Clinical Justification / Why This Meal Card */}
+                    {(recipe.clinical_justification || recipe.description) && (
+                        <div className="mb-8 p-5 bg-gradient-to-br from-emerald-500/10 via-vic-green/5 to-transparent border border-vic-green/30 rounded-3xl shadow-sm">
+                            <div className="flex items-center gap-2 mb-2">
+                                <div className="size-2 rounded-full bg-vic-green animate-pulse" />
+                                <h4 className="text-xs font-black uppercase tracking-wider text-vic-green">
+                                    {t('why_this_meal') || 'Why We Chose This For You'}
+                                </h4>
+                            </div>
+                            <p className="text-sm text-slate-700 dark:text-slate-300 font-medium leading-relaxed">
+                                {recipe.clinical_justification || recipe.description}
+                            </p>
+                        </div>
+                    )}
 
                     {/* Voice Guidance Toggle */}
                     <button 
@@ -769,8 +759,12 @@ export default function RecipeDetails() {
                                         <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-vic-green"></div>
                                         <span className="text-xs font-bold uppercase tracking-widest text-vic-green animate-pulse">Visualizing...</span>
                                     </div>
-                                ) : stepImages[currentStepIdx] ? (
-                                    <img src={stepImages[currentStepIdx]} alt="Step visual" className="w-full h-full object-cover animate-in fade-in duration-700" />
+                                ) : (stepImages[currentStepIdx] || recipe.image_url) ? (
+                                    <MealImage 
+                                        src={stepImages[currentStepIdx] || recipe.image_url} 
+                                        alt={recipe.title || "Step visual"} 
+                                        className="w-full h-full object-cover animate-in fade-in duration-700" 
+                                    />
                                 ) : (
                                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-[#d4f8d9] to-[#f0f9f0] dark:from-[#1a2e21] dark:to-[#0A1014]">
                                         <ChefAvatar

@@ -225,15 +225,35 @@ export const saveFoodAnalysis = async (userId: string, analysis: any) => {
     if (historyError) {
         if (
             historyError.code === '404' || 
-            historyError.code === '42P01' || 
-            historyError.code === 'PGRST205' || 
-            historyError.message?.includes('not found') ||
+            historyError.message?.includes('not found') || 
             historyError.message?.includes('does not exist')
         ) {
-            console.error("Critical: food_analysis_history table is missing. Please run migrations.");
-            throw new Error("Data storage service is temporarily unavailable. Our team has been notified.");
+            console.warn("food_analysis_history table not found, skipping save.", historyError.message);
+        } else {
+            console.error("Error saving food analysis history:", historyError);
+            throw historyError;
         }
-        throw historyError;
+    }
+
+    // 3. PHASE 8: Standardized PurchaseEvent (Record Expense)
+    const price = Number(analysis.price || analysis.estimated_price || 0);
+    if (price > 0) {
+        try {
+            await supabase.from('financial_transactions').insert({
+                user_id: userId,
+                transaction_date: new Date().toISOString(),
+                amount: price,
+                currency: 'IDR', // Or derive from geo
+                category: 'Food & Dining',
+                description: `Purchase: ${analysis.name}`,
+                reconciliation_status: 'pending',
+                provider: 'scanner',
+                provider_category: 'barcode_scan'
+            });
+            console.log("Recorded scanner expense:", price);
+        } catch (txErr) {
+            console.error("Failed to record scanner expense:", txErr);
+        }
     }
 
     // Mark as saved locally to prevent double logging

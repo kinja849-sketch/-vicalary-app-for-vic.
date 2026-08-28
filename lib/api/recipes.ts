@@ -181,49 +181,121 @@ export const searchRecipes = async (searchTerm: string) => {
 // ============================================================================
 
 export const toggleFavoriteRecipe = async (userId: string, recipeId: string | number, recipeData?: any) => {
-    let finalUuid = String(recipeId);
+    let finalUuid = String(recipeId || '').trim();
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-    // If it's a numeric Spoonacular ID, resolve to UUID first
-    const isNumericId = !isNaN(Number(recipeId)) && !String(recipeId).includes('-');
-    if (isNumericId) {
-        const map = await ensureRecipesUuids([recipeData || { id: recipeId, title: 'Recipe' }]);
-        const mapped = map[String(recipeId)];
-        if (mapped) {
-            finalUuid = mapped;
-        } else {
-            console.error(`[Recipes] Could not resolve Spoonacular ID ${recipeId} to UUID`);
-            throw new Error("Invalid recipe reference");
+    // 1. If not a direct UUID, resolve from database tables using external_id
+    if (!uuidRegex.test(finalUuid)) {
+        // A. If numeric Spoonacular ID
+        const isNumericId = !isNaN(Number(recipeId)) && !String(recipeId).includes('-');
+        if (isNumericId) {
+            const map = await ensureRecipesUuids([recipeData || { id: recipeId, title: 'Recipe' }]);
+            const mapped = map[String(recipeId)];
+            if (mapped && uuidRegex.test(mapped)) {
+                finalUuid = mapped;
+            }
+        }
+
+        // B. Check recipes table by external_id (strictly external_id to prevent Postgres UUID syntax errors)
+        if (!uuidRegex.test(finalUuid)) {
+            try {
+                const { data: matched } = await (supabase.from('recipes') as any)
+                    .select('id')
+                    .eq('external_id', finalUuid)
+                    .maybeSingle();
+
+                if (matched?.id && uuidRegex.test(matched.id)) {
+                    finalUuid = matched.id;
+                }
+            } catch (dbErr) {
+                console.warn('[Recipes] Error looking up recipe by external_id:', dbErr);
+            }
+        }
+
+        // C. Check cached_recipes table and auto-persist to recipes table
+        if (!uuidRegex.test(finalUuid)) {
+            try {
+                const { data: cached } = await (supabase as any)
+                    .from('cached_recipes')
+                    .select('*')
+                    .eq('id', finalUuid)
+                    .maybeSingle();
+
+                if (cached) {
+                    const { data: inserted } = await (supabase.from('recipes') as any)
+                        .upsert({
+                            external_id: String(cached.id),
+                            title: cached.title || recipeData?.title || 'Recipe',
+                            image_url: cached.image_url || recipeData?.image || '',
+                            ingredients: cached.ingredients || recipeData?.ingredients || [],
+                            instructions: cached.instructions_steps || recipeData?.instructions || [],
+                            total_calories: cached.nutrition?.calories || recipeData?.calories || 350,
+                            protein_g: cached.nutrition?.protein || recipeData?.protein || 0,
+                            carbs_g: cached.nutrition?.carbs || recipeData?.carbs || 0,
+                            fat_g: cached.nutrition?.fat || recipeData?.fat || 0,
+                            cuisine_type: cached.cuisine_region || 'Indonesian',
+                            provider: 'ai-chef'
+                        }, { onConflict: 'external_id' })
+                        .select('id')
+                        .maybeSingle();
+
+                    if (inserted?.id && uuidRegex.test(inserted.id)) {
+                        finalUuid = inserted.id;
+                    }
+                }
+            } catch (cacheErr) {
+                console.warn('[Recipes] Error auto-persisting cached recipe to recipes:', cacheErr);
+            }
+        }
+
+        // D. Fallback: Create canonical recipe entry if still unresolved
+        if (!uuidRegex.test(finalUuid)) {
+            try {
+                const { data: created } = await (supabase.from('recipes') as any)
+                    .upsert({
+                        external_id: finalUuid,
+                        title: recipeData?.title || recipeData?.name || 'Healthy Meal',
+                        image_url: recipeData?.image || recipeData?.image_url || '',
+                        total_calories: recipeData?.calories || recipeData?.total_calories || 350,
+                        provider: 'ai-chef'
+                    }, { onConflict: 'external_id' })
+                    .select('id')
+                    .maybeSingle();
+
+                if (created?.id && uuidRegex.test(created.id)) {
+                    finalUuid = created.id;
+                }
+            } catch (createErr) {
+                console.warn('[Recipes] Error creating stub recipe for favorite:', createErr);
+            }
         }
     }
 
-    // FINAL GUARD: Ensure finalUuid is a valid UUID format
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    // FINAL CHECK: If still not a UUID after resolution, log informative warning
     if (!uuidRegex.test(finalUuid)) {
         console.error(`[Recipes] Invalid UUID for favorite: ${finalUuid}`);
         throw new Error("Invalid recipe reference format");
     }
 
-    const { data: existing } = await supabase
-        .from('user_recipe_interactions')
+    const { data: existing } = await (supabase.from('user_recipe_interactions') as any)
         .select('*')
         .eq('user_id', userId)
         .eq('recipe_id', finalUuid)
         .eq('interaction_type', 'favorited')
-        .maybeSingle()
+        .maybeSingle();
 
     if (existing) {
-        await supabase.from('user_recipe_interactions').delete().eq('id', existing.id)
-        return { favorited: false }
+        await (supabase.from('user_recipe_interactions') as any).delete().eq('id', existing.id);
+        return { favorited: false };
     } else {
-        const { error } = await supabase
-            .from('user_recipe_interactions')
+        const { error } = await (supabase.from('user_recipe_interactions') as any)
             .insert({
                 user_id: userId,
                 recipe_id: finalUuid,
                 interaction_type: 'favorited',
-            })
+            });
         if (error) throw error;
-        return { favorited: true }
+        return { favorited: true };
     }
 }
 
@@ -352,8 +424,11 @@ export const getDailyMealSuggestions = async (userId?: string, forceRefresh = fa
     let userTz = typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'Asia/Jakarta';
     if (isUuid) {
         try {
-            const { data: settings } = await (supabase as any).from('user_settings').select('timezone').eq('user_id', userId).maybeSingle();
-            if (settings?.timezone) userTz = settings.timezone;
+            const { data: sessionData } = await supabase.auth.getSession();
+            if (sessionData?.session) {
+                const { data: settings } = await (supabase as any).from('user_settings').select('timezone').eq('user_id', userId).maybeSingle();
+                if (settings?.timezone) userTz = settings.timezone;
+            }
         } catch (tzErr) {
             console.warn("[Recipes] Could not fetch user timezone:", tzErr);
         }
@@ -371,7 +446,7 @@ export const getDailyMealSuggestions = async (userId?: string, forceRefresh = fa
 
     const today = now.toISOString().split('T')[0];
     
-    // 3. Check if an active AI-generated plan exists for today
+    // 3. Check if an active AI-generated plan exists for today in user_daily_meal_plans
     if (isUuid && !forceRefresh) {
         try {
             const { data: existingPlan, error: existingError } = await (supabase as any)
@@ -379,27 +454,36 @@ export const getDailyMealSuggestions = async (userId?: string, forceRefresh = fa
                 .select('*')
                 .eq('user_id', userId)
                 .eq('plan_date', today)
+                .order('updated_at', { ascending: false })
+                .limit(1)
                 .maybeSingle();
 
-            if (existingError && existingError.code !== 'PGRST116') {
-                console.error("[Recipes] Error fetching daily plan:", existingError);
+            if (existingError) {
+                if (existingError.code !== 'PGRST116') {
+                    console.error("[Recipes] Database error fetching daily plan:", JSON.stringify(existingError, null, 2));
+                    throw existingError;
+                }
             }
 
-            const isLegacyPlaceholder = existingPlan?.breakfast?.[0]?.id === 'b1' || existingPlan?.lunch?.[0]?.id === 'l1';
+            const rawPlan = existingPlan;
+            const isLegacyPlaceholder = rawPlan?.breakfast?.[0]?.id === 'b1' || rawPlan?.lunch?.[0]?.id === 'l1';
+            const breakfastImgs = (rawPlan?.breakfast || []).map((m: any) => m.image_url || m.image).filter(Boolean);
+            const hasDuplicateImgs = breakfastImgs.length > 1 && new Set(breakfastImgs).size < breakfastImgs.length;
+            const hasTwelveBreakfast = Array.isArray(rawPlan?.breakfast) && rawPlan.breakfast.length === 12;
 
-            if (existingPlan && Array.isArray(existingPlan.breakfast) && existingPlan.breakfast.length > 0 && !isLegacyPlaceholder) {
+            if (rawPlan && hasTwelveBreakfast && !isLegacyPlaceholder && !hasDuplicateImgs) {
                 return {
-                    breakfast: existingPlan.breakfast || [],
-                    lunch: existingPlan.lunch || [],
-                    dinner: existingPlan.dinner || [],
-                    snacks: existingPlan.snacks || [],
-                    drinks: existingPlan.drinks || [],
-                    desserts: existingPlan.desserts || [],
+                    breakfast: rawPlan.breakfast || [],
+                    lunch: rawPlan.lunch || [],
+                    dinner: rawPlan.dinner || [],
+                    snacks: rawPlan.snacks || [],
+                    drinks: rawPlan.drinks || [],
+                    desserts: rawPlan.desserts || [],
                     currentSession
                 };
             }
-        } catch (fetchErr) {
-            console.warn("[Recipes] Could not query user_daily_meal_plans:", fetchErr);
+        } catch (fetchErr: any) {
+            console.warn("[Recipes] Error querying user_daily_meal_plans:", fetchErr?.message || fetchErr);
         }
     }
 
@@ -426,20 +510,27 @@ export const getDailyMealSuggestions = async (userId?: string, forceRefresh = fa
             dinner: data.dinner || [],
             snacks: data.snacks || [],
             drinks: data.drinks || [],
-            desserts: data.desserts || []
+            desserts: data.desserts || [],
+            updated_at: new Date().toISOString()
         };
 
         // Insert / update in DB if valid user
         if (isUuid) {
             try {
-                await (supabase as any).from('user_daily_meal_plans').upsert([planToInsert], { onConflict: 'user_id,plan_date' });
+                const { error: upsertError } = await (supabase as any)
+                    .from('user_daily_meal_plans')
+                    .upsert([planToInsert], { onConflict: 'user_id,plan_date' });
+
+                if (upsertError) {
+                    console.error("[Recipes] Error saving daily plan:", JSON.stringify(upsertError, null, 2));
+                }
             } catch (dbErr) {
                 console.warn("[Recipes] Could not upsert daily plan:", dbErr);
             }
         }
 
         return {
-            ...planToInsert,
+            ...data,
             currentSession
         };
     } catch (err) {
@@ -449,6 +540,28 @@ export const getDailyMealSuggestions = async (userId?: string, forceRefresh = fa
         };
     }
 }
+
+export const logMealAsEaten = async (userId: string, mealData: { id: string; title: string; category?: string; calories: number; protein?: number; carbs?: number; fat?: number }) => {
+    if (!userId) return;
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        
+        // 1. Record EATEN status in daily_meal_served
+        await (supabase as any).from('daily_meal_served').insert({
+            user_id: userId,
+            meal_id: mealData.id,
+            meal_title: mealData.title,
+            category: mealData.category || 'meal',
+            status: 'EATEN',
+            shown_date: new Date().toISOString()
+        });
+
+        // 2. Increment recipes cooked count
+        await updateDailyRecipeCount(userId);
+    } catch (err) {
+        console.warn('[Recipes] Could not record meal eaten event:', err);
+    }
+};
 
 const updateDailyRecipeCount = async (userId: string) => {
     const today = new Date().toISOString().split('T')[0]

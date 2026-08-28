@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerSupabaseClient } from '@/lib/supabase-server'
+import { createAdminSupabaseClient } from '@/lib/supabase-server'
 
 interface NormalizedRecipe {
   id: string
@@ -71,15 +71,24 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Recipe ID is required' }, { status: 400 })
     }
 
-    const supabase = createServerSupabaseClient()
+    const supabase = createAdminSupabaseClient()
     const cleanId = rawId.replace(/^(themealdb_|cocktail_|spoonacular_)/i, '')
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawId)
 
     // 1. Check cached_recipes table
-    const { data: cached } = await supabase
-      .from('cached_recipes')
-      .select('*')
-      .or(`id.eq.${rawId},id.eq.${cleanId}`)
-      .maybeSingle()
+    let cached: any = null
+    try {
+      let cachedQuery = supabase.from('cached_recipes').select('*')
+      if (isUuid) {
+        cachedQuery = cachedQuery.eq('id', rawId)
+      } else {
+        cachedQuery = cachedQuery.or(`id.eq.${rawId},id.eq.${cleanId}`)
+      }
+      const { data } = await cachedQuery.maybeSingle()
+      cached = data
+    } catch (e) {
+      console.warn('[recipe-details] cached_recipes query skipped:', e)
+    }
 
     if (cached) {
       const mapped: NormalizedRecipe = {
@@ -103,7 +112,6 @@ export async function POST(req: NextRequest) {
     }
 
     // 2. Check recipes table (UUID, external_id, or spoonacular_id)
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawId)
     let recipeQuery = supabase.from('recipes').select('*')
     if (isUuid) {
       recipeQuery = recipeQuery.eq('id', rawId)
@@ -143,9 +151,9 @@ export async function POST(req: NextRequest) {
     try {
       const { data: dailyPlans } = await (supabase as any)
         .from('user_daily_meal_plans')
-        .select('breakfast, lunch, dinner, snacks, drinks, desserts')
-        .order('plan_date', { ascending: false })
-        .limit(5)
+        .select('id, user_id, plan_date, breakfast, lunch, dinner, snacks, drinks, desserts, updated_at')
+        .order('updated_at', { ascending: false })
+        .limit(10)
 
       if (dailyPlans && Array.isArray(dailyPlans)) {
         for (const dp of dailyPlans) {
@@ -157,24 +165,29 @@ export async function POST(req: NextRequest) {
             ...(Array.isArray(dp.drinks) ? dp.drinks : []),
             ...(Array.isArray(dp.desserts) ? dp.desserts : [])
           ]
-          const match = allMeals.find((m: any) => m.id === rawId || m.id === cleanId || m.external_id === rawId)
+          const match = allMeals.find((m: any) => 
+            m.id === rawId || 
+            m.id === cleanId || 
+            m.external_id === rawId ||
+            (m.title && cleanId.length > 3 && m.title.toLowerCase().includes(cleanId.toLowerCase()))
+          )
           if (match) {
             const mapped: NormalizedRecipe = {
               id: match.id || rawId,
               title: match.title || match.name || 'Delicious Recipe',
-              image_url: match.image || match.image_url || '',
-              cuisine_type: match.cuisine || 'Indonesian',
-              dietary_tags: ['AI Tailored'],
+              image_url: match.image_url || match.image || '',
+              cuisine_type: match.cuisine || match.cuisine_region || 'Indonesian',
+              dietary_tags: match.dietary_tags || ['Chef Selected'],
               ingredients: parseIngredients(match.ingredients),
-              instructions: parseInstructions(match.instructions),
-              prep_time_minutes: match.prep_time_minutes || 10,
+              instructions: parseInstructions(match.instructions || match.instructions_steps),
+              prep_time_minutes: match.prep_time_minutes || match.preparation_time || 10,
               cook_time_minutes: match.cook_time_minutes || 15,
               total_calories: match.total_calories || match.calories || 350,
               protein_g: Number(match.protein_g || match.protein || 0),
               carbs_g: Number(match.carbs_g || match.carbs || 0),
               fat_g: Number(match.fat_g || match.fat || 0),
               servings: 2,
-              description: ''
+              description: match.clinical_justification || ''
             }
             return NextResponse.json(mapped)
           }
@@ -326,91 +339,9 @@ export async function POST(req: NextRequest) {
       console.warn('[recipe-details] TheCocktailDB fallback fetch failed:', drinkErr)
     }
 
-    // 5. Final Fallback: AI Recipe Synthesizer for arbitrary dish names / IDs
-    const apiKey = process.env.OPENAI_API_KEY || process.env.NEXT_PUBLIC_OPENAI_API_KEY;
-    if (apiKey && cleanId.length > 2 && isNaN(Number(cleanId))) {
-      try {
-        const dishPrompt = cleanId.replace(/[-_]/g, ' ');
-        const aiRes = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-          body: JSON.stringify({
-            model: 'gpt-4o',
-            messages: [
-              {
-                role: 'system',
-                content: `You are an expert culinary chef. Generate a complete authentic recipe for "${dishPrompt}". Return strict JSON with:
-{
-  "title": "string",
-  "cuisine_type": "string",
-  "prep_time_minutes": number,
-  "cook_time_minutes": number,
-  "total_calories": number,
-  "protein_g": number,
-  "carbs_g": number,
-  "fat_g": number,
-  "ingredients": [{"item": "string", "amount": "string", "unit": "string"}],
-  "instructions": ["step 1...", "step 2..."]
-}`
-              },
-              { role: 'user', content: `Generate recipe for: ${dishPrompt}` }
-            ],
-            response_format: { type: 'json_object' }
-          })
-        });
-
-        if (aiRes.ok) {
-          const aiJson = await aiRes.json();
-          const parsed = JSON.parse(aiJson.choices[0].message.content);
-          const foodImg = `https://source.unsplash.com/800x600/?${encodeURIComponent(parsed.title || dishPrompt)},food`;
-
-          const synthesized: NormalizedRecipe = {
-            id: rawId,
-            title: parsed.title || dishPrompt,
-            image_url: foodImg,
-            cuisine_type: parsed.cuisine_type || 'International',
-            dietary_tags: ['Chef Curated'],
-            ingredients: parseIngredients(parsed.ingredients),
-            instructions: parseInstructions(parsed.instructions),
-            prep_time_minutes: parsed.prep_time_minutes || 10,
-            cook_time_minutes: parsed.cook_time_minutes || 15,
-            total_calories: parsed.total_calories || 400,
-            protein_g: parsed.protein_g || 25,
-            carbs_g: parsed.carbs_g || 40,
-            fat_g: parsed.fat_g || 12,
-            servings: 2
-          };
-
-          await supabase.from('cached_recipes').upsert({
-            id: rawId,
-            title: synthesized.title,
-            image_url: synthesized.image_url,
-            ingredients: synthesized.ingredients,
-            instructions_steps: synthesized.instructions,
-            nutrition: {
-              calories: synthesized.total_calories,
-              protein: synthesized.protein_g,
-              carbs: synthesized.carbs_g,
-              fat: synthesized.fat_g
-            },
-            cuisine_region: synthesized.cuisine_type,
-            preparation_time: synthesized.prep_time_minutes,
-            cook_time_minutes: synthesized.cook_time_minutes,
-            meal_type: 'Main',
-            provider: 'ai-chef'
-          }, { onConflict: 'id' });
-
-          return NextResponse.json(synthesized);
-        }
-      } catch (synthErr) {
-        console.warn('[recipe-details] AI synthesis fallback failed:', synthErr);
-      }
-    }
-
     return NextResponse.json({ error: 'Recipe not found' }, { status: 404 })
   } catch (error: any) {
     console.error('recipe-details error:', error)
     return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 })
   }
 }
-

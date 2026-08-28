@@ -1,18 +1,41 @@
 import { NextResponse } from 'next/server';
-import { createServerSupabaseClient, createAdminSupabaseClient } from '@/lib/supabase-server';
+import { createServerClient } from '@supabase/ssr';
+import { cookies } from 'next/headers';
+import { createAdminSupabaseClient, getAuthenticatedUser, createServerSupabaseClient } from '@/lib/supabase-server';
 
-
-
-
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
     try {
+        let user = await getAuthenticatedUser(request);
+        
+        if (!user) {
+            const cookieStore = await cookies();
+            const authClient = createServerClient(
+                process.env.NEXT_PUBLIC_SUPABASE_URL!,
+                process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+                {
+                    cookies: {
+                        getAll() { return cookieStore.getAll(); },
+                        setAll() {}
+                    }
+                }
+            );
+            const { data } = await authClient.auth.getUser();
+            user = data?.user;
+        }
+
+        if (!user) {
+            return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+        }
+
         const { searchParams } = new URL(request.url);
-        const country = (searchParams.get('country') || 'US').toUpperCase();
+        const country = (searchParams.get('country') || 'UNKNOWN').toUpperCase();
+        if (country === 'UNKNOWN') return NextResponse.json({ success: true, source: 'none', banks: [] });
         
-        const supabase = createServerSupabaseClient();
+        const supabase = createServerSupabaseClient(request);
         
-        // 1. Check Backend Cache (Supabase `institution_cache`)
+        // 1. Check Backend Cache (Supabase institution_cache)
         const { data: cachedBanks, error: cacheError } = await supabase
             .from('institution_cache')
             .select('*')
@@ -29,7 +52,10 @@ export async function GET(request: Request) {
             
             // Check if they are using the old ui-avatars. If so, invalidate the cache and force a new fetch.
             const hasAvatar = banks.some(b => b.logo && b.logo.includes('ui-avatars.com'));
-            if (!hasAvatar) {
+            // Also invalidate old hardcoded IDs (bca, mandiri, etc.) regardless of provider
+            const hasHardcodedIds = banks.some(b => ['bca', 'mandiri', 'bni', 'bri', 'cimb'].includes(b.id?.toLowerCase()));
+
+            if (!hasAvatar && !hasHardcodedIds) {
                 return NextResponse.json({ success: true, source: 'cache', banks });
             }
         }
@@ -39,7 +65,7 @@ export async function GET(request: Request) {
         
         if (['US', 'CA'].includes(country)) {
             // PLAID API
-            const plaidEnv = process.env.PLAID_ENV || 'production';
+            const plaidEnv = process.env.PLAID_ENV || 'sandbox';
             const plaidUrl = plaidEnv === 'production' 
                 ? 'https://production.plaid.com/institutions/get'
                 : plaidEnv === 'development'
@@ -71,26 +97,27 @@ export async function GET(request: Request) {
                 }));
             } else {
                 console.error("Plaid API Error:", plaidData);
-                throw new Error("Failed to fetch Plaid institutions");
+                // Return fallback empty if API fails instead of 500 crashing
+                rawBanks = [];
             }
             
-        } else if (country === 'ID') {
-            // BRANKAS API
-            rawBanks = [
-                { institution_id: 'bca', name: 'BCA', logo_url: '/custom-logos/bank-central-asia-(bca)-logo.svg', provider: 'brankas', country_code: 'ID' },
-                { institution_id: 'mandiri', name: 'Mandiri', logo_url: '/custom-logos/bank-mandiri-logo.png', provider: 'brankas', country_code: 'ID' },
-                { institution_id: 'bni', name: 'BNI', logo_url: '/custom-logos/bank-negara-indonesia-(bni)-logo.png', provider: 'brankas', country_code: 'ID' },
-                { institution_id: 'cimb', name: 'CIMB', logo_url: '/custom-logos/bank-cimb-niaga-logo.svg', provider: 'brankas', country_code: 'ID' },
-                { institution_id: 'bri', name: 'BRI', logo_url: '/custom-logos/bank-rakyat-indonesia-(bri)-logo.svg', provider: 'brankas', country_code: 'ID' },
-                { institution_id: 'danamon', name: 'Danamon', logo_url: '/custom-logos/bank-danamon-logo.svg', provider: 'brankas', country_code: 'ID' },
-                { institution_id: 'permata', name: 'Permata', logo_url: '/custom-logos/bank-permata-logo.png', provider: 'brankas', country_code: 'ID' },
-                { institution_id: 'bsi', name: 'BSI', logo_url: '/custom-logos/bank-bsi-logo.svg', provider: 'brankas', country_code: 'ID' },
-                { institution_id: 'maybank', name: 'Maybank', logo_url: '/custom-logos/maybank-logo.png', provider: 'brankas', country_code: 'ID' },
-                { institution_id: 'panin', name: 'Panin', logo_url: '/api/banking/logo?domain=panin.co.id', provider: 'brankas', country_code: 'ID' },
-                { institution_id: 'ocbc', name: 'OCBC', logo_url: '/api/banking/logo?domain=ocbc.id', provider: 'brankas', country_code: 'ID' },
-                { institution_id: 'mega', name: 'Mega', logo_url: '/api/banking/logo?domain=bankmega.com', provider: 'brankas', country_code: 'ID' },
-                { institution_id: 'btn', name: 'BTN', logo_url: '/api/banking/logo?domain=btn.co.id', provider: 'brankas', country_code: 'ID' }
-            ];
+        } else if (country === 'ID' || country === 'PH' || country === 'TH' || country === 'VN' || country === 'SG' || country === 'MY') {
+            // FINVERSE API Live
+            try {
+                const { FinverseProvider } = await import('@/lib/financial/providers/FinverseProvider');
+                const finverse = new FinverseProvider();
+                const institutions = await finverse.getInstitutions(country);
+                rawBanks = institutions.map(inst => ({
+                    institution_id: inst.institution_id,
+                    name: inst.name,
+                    logo_url: inst.logo_url || `/custom-logos/${inst.name.replace(/\s+/g, '-').toLowerCase()}-logo.png`,
+                    provider: 'finverse',
+                    country_code: country
+                }));
+            } catch (err) {
+                console.error("Finverse API Institutions Error:", err);
+                rawBanks = [];
+            }
         }
         
         if (rawBanks.length === 0) {
@@ -98,14 +125,12 @@ export async function GET(request: Request) {
         }
         
         // 3. Populate Cache
-        // Only attempt to upsert if we have a valid UUID as `id` (which we don't for these external IDs),
-        // so for now we skip caching for ID if it breaks, or we insert without `id` and let DB generate it.
         const adminSupabase = createAdminSupabaseClient();
         
         // Let's clear the old corrupted ui-avatar records
         await adminSupabase.from('institution_cache').delete().eq('country_code', country);
         
-        // Insert new records without explicit `id` (so Postgres generates UUID)
+        // Insert new records without explicit id (so Postgres generates UUID)
         adminSupabase.from('institution_cache').insert(rawBanks)
             .then(({ error }) => {
                 if (error) console.error("Cache Insert Error:", error);
@@ -125,3 +150,4 @@ export async function GET(request: Request) {
         return NextResponse.json({ success: false, error: err.message }, { status: 500 });
     }
 }
+

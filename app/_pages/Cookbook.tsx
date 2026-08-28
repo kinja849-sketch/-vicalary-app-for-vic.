@@ -8,6 +8,7 @@ import { searchRecipes, getDailyMealSuggestions, getCookbookSuggestions } from "
 import { useTranslation } from "@/lib/api/translation";
 import FoodCarousel from "@/components/FoodCarousel";
 import { FavoriteButton } from "@/components/FavoriteButton";
+import { MealImage } from "@/components/MealImage";
 import { getFavoriteRecipes } from "@/lib/api/recipes";
 import { getFoodImageUrl } from "@/lib/services/FoodImageService";
 
@@ -28,19 +29,12 @@ export default function Cookbook() {
     const [currentSession, setCurrentSession] = useState<'breakfast' | 'lunch' | 'dinner'>('breakfast');
     const { t } = useTranslation();
 
-    const { data: cookbookData } = useQuery({
-        queryKey: ['cookbook-suggestions-v2', user?.id || 'default_user'],
-        queryFn: () => getCookbookSuggestions(user?.id || 'default_user'),
-        enabled: true,
-        staleTime: 1000 * 60 * 60, // 1 hour
-        refetchOnWindowFocus: false,
-        retry: 1
-    });
+    const today = new Date().toISOString().split('T')[0];
 
     const { data: suggestions } = useQuery({
-        queryKey: ['suggestions-v2', user?.id || 'default_user'],
-        queryFn: () => getDailyMealSuggestions(user?.id || 'default_user'),
-        enabled: true,
+        queryKey: ['suggestions', user?.id, today],
+        queryFn: () => getDailyMealSuggestions(user?.id || ''),
+        enabled: !!user?.id,
         staleTime: 1000 * 60 * 60, // 1 hour
         refetchOnWindowFocus: false,
         retry: 1
@@ -50,7 +44,22 @@ export default function Cookbook() {
         if (suggestions?.currentSession) {
             setCurrentSession(suggestions.currentSession as 'breakfast' | 'lunch' | 'dinner');
         }
-    }, [suggestions?.currentSession]);
+
+        if (suggestions) {
+            const allCategories = ['breakfast', 'lunch', 'dinner', 'snacks', 'drinks', 'desserts'];
+            allCategories.forEach(cat => {
+                const list = (suggestions as any)[cat];
+                if (Array.isArray(list) && list.length > 0) {
+                    console.log(`%c[Cookbook Diagnostics] ${cat.toUpperCase()} (${list.length} dishes)`, 'font-weight: bold; color: #4ade80;');
+                    console.table(list.map((r: any) => ({
+                        id: r.id,
+                        name: r.title || r.name,
+                        image: r.image_url || r.image
+                    })));
+                }
+            });
+        }
+    }, [suggestions]);
 
     const { data: favorites } = useQuery({
         queryKey: ['favorite-recipes', user?.id],
@@ -156,15 +165,15 @@ export default function Cookbook() {
                         </div>
                     ) : selectedCategory ? (
                         <div className="grid grid-cols-1 gap-4">
-                            {((suggestions as any)?.[selectedCategory] || []).map((meal: any, index: number) => (
-                                <CookbookCard key={`${meal.id}-${index}`} item={meal} />
+                            {((suggestions as any)?.[selectedCategory] || []).map((meal: any) => (
+                                <CookbookCard key={meal.id} item={meal} />
                             ))}
                         </div>
                     ) : activeTab === "favorites" ? (
                         <div className="grid grid-cols-1 gap-4">
                             {favorites && favorites.length > 0 ? (
                                 favorites.map((fav: any) => (
-                                    <CookbookCard key={fav.id} item={fav.recipes} />
+                                    <CookbookCard key={fav.id || fav.recipes?.id} item={fav.recipes} />
                                 ))
                             ) : (
                                 <div className="text-center py-24 text-slate-400 italic">
@@ -181,8 +190,8 @@ export default function Cookbook() {
                                 </h3>
                                 <div className="flex overflow-x-auto gap-4 pb-4 px-6 snap-x no-scrollbar">
                                     {((suggestions as any)?.[currentSession] || []).length > 0 ? (
-                                        ((suggestions as any)?.[currentSession] || []).map((meal: any, index: number) => (
-                                            <div key={`${meal.id}-${index}`} className="w-[85%] shrink-0 snap-center">
+                                        ((suggestions as any)?.[currentSession] || []).map((meal: any) => (
+                                            <div key={meal.id} className="w-[85%] shrink-0 snap-center">
                                                 <CookbookCard item={meal} />
                                             </div>
                                         ))
@@ -197,8 +206,8 @@ export default function Cookbook() {
                             <div className="px-6">
                                 <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest mb-4">{t('snacks_and_more')}</h3>
                                 <div className="grid grid-cols-1 gap-4">
-                                    {[...(suggestions?.snacks || []), ...(suggestions?.drinks || []), ...(suggestions?.desserts || [])].map((meal: any, index: number) => (
-                                        <CookbookCard key={`${meal.id}-${index}`} item={meal} />
+                                    {[...(suggestions?.snacks || []), ...(suggestions?.drinks || []), ...(suggestions?.desserts || [])].map((meal: any) => (
+                                        <CookbookCard key={meal.id} item={meal} />
                                     ))}
                                 </div>
                             </div>
@@ -206,8 +215,8 @@ export default function Cookbook() {
                     ) : (
                         <div className="grid grid-cols-1 gap-4">
                             {/* In "All" tab, show everything or prompt search */}
-                            {[...(suggestions?.breakfast || []), ...(suggestions?.lunch || []), ...(suggestions?.dinner || [])].map((meal: any, index: number) => (
-                                <CookbookCard key={`${meal.id}-${index}`} item={meal} />
+                            {[...(suggestions?.breakfast || []), ...(suggestions?.lunch || []), ...(suggestions?.dinner || [])].map((meal: any) => (
+                                <CookbookCard key={meal.id} item={meal} />
                             ))}
                         </div>
                     )}
@@ -216,6 +225,27 @@ export default function Cookbook() {
             </main>
         </div>
     );
+}
+
+function validateMealImages(recipes: any[]) {
+    const seenImages = new Set<string>();
+    return (recipes || []).filter((recipe) => {
+        const img = recipe.image_url || recipe.image;
+        if (!img) {
+            console.error(`[Meal Image] Missing image for ${recipe.title || recipe.name}`, recipe.id);
+            return false;
+        }
+        if (seenImages.has(img)) {
+            console.error(`[Meal Image] DUPLICATE IMAGE DETECTED`, {
+                recipe: recipe.title || recipe.name,
+                recipeId: recipe.id,
+                image: img,
+            });
+            return false;
+        }
+        seenImages.add(img);
+        return true;
+    });
 }
 
 function CookbookCard({ item }: { item: any }) {
@@ -229,9 +259,8 @@ function CookbookCard({ item }: { item: any }) {
     return (
         <div className="relative group w-full h-64 rounded-[32px] overflow-hidden shadow-md hover:shadow-2xl transition-all duration-500">
             <Link href={`/recipe/${id}`} className="block w-full h-full">
-                <img 
+                <MealImage 
                     src={image} 
-                    onError={(e) => { e.currentTarget.src = getFoodImageUrl(title, item.cuisine, item.meal_type); }}
                     alt={title} 
                     className="absolute inset-0 w-full h-full object-cover object-center transition-transform duration-700 group-hover:scale-110" 
                 />

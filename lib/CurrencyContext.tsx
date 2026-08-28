@@ -15,7 +15,7 @@ interface CurrencyContextType {
 }
 
 const CurrencyContext = createContext<CurrencyContextType>({
-    countryCode: 'US',
+    countryCode: 'UNKNOWN',
     currencyCode: 'USD',
     currencySymbol: '$',
     setManualOverride: () => { },
@@ -29,7 +29,7 @@ const CurrencyContext = createContext<CurrencyContextType>({
 export const useCurrency = () => useContext(CurrencyContext);
 
 export const CurrencyProvider = ({ children }: { children: ReactNode }) => {
-    const [countryCode, setCountryCode] = useState('US');
+    const [countryCode, setCountryCode] = useState('UNKNOWN');
     const [currencyCode, setCurrencyCode] = useState('USD');
     const [currencySymbol, setCurrencySymbol] = useState('$');
     const [isLoading, setIsLoading] = useState(true);
@@ -42,7 +42,7 @@ export const CurrencyProvider = ({ children }: { children: ReactNode }) => {
             const data = await getUserLocation();
 
             if (data) {
-                setCountryCode(data.country_code || 'US');
+                setCountryCode(data.country_code || 'UNKNOWN');
                 setCurrencyCode(data.currency || 'USD');
                 setCurrencySymbol(data.currency_symbol || '$');
                 
@@ -138,3 +138,5 @@ export const CurrencyProvider = ({ children }: { children: ReactNode }) => {
         </CurrencyContext.Provider>
     );
 };
+
+
