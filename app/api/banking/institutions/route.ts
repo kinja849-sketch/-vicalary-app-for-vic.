@@ -108,9 +108,9 @@ export async function GET(request: Request) {
                 const finverse = new FinverseProvider();
                 const institutions = await finverse.getInstitutions(country);
                 rawBanks = institutions.map(inst => ({
-                    institution_id: inst.institution_id,
+                    institution_id: (inst as any).institution_id || inst.id,
                     name: inst.name,
-                    logo_url: inst.logo_url || `/custom-logos/${inst.name.replace(/\s+/g, '-').toLowerCase()}-logo.png`,
+                    logo_url: (inst as any).logo_url || inst.logoUrl || `/custom-logos/${inst.name.replace(/\s+/g, '-').toLowerCase()}-logo.png`,
                     provider: 'finverse',
                     country_code: country
                 }));
