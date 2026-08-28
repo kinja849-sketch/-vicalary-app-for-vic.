@@ -20,11 +20,11 @@ export class RegionService {
    */
   static async detectRegion(): Promise<Omit<UserFinancialRegion, 'id' | 'user_id' | 'detected_at'>> {
     const defaultRegion = {
-      country_code: 'US',
-      country_name: 'United States',
-      currency_code: 'USD',
-      currency_symbol: '$',
-      locale: 'en-US',
+      country_code: 'ID',
+      country_name: 'Indonesia',
+      currency_code: 'IDR',
+      currency_symbol: 'Rp',
+      locale: 'id-ID',
       detection_method: 'ip' as const,
     };
 

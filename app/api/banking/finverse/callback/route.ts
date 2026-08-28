@@ -29,28 +29,95 @@ async function handleCallback(request: Request) {
              return NextResponse.redirect(new URL('/budget?error=MissingCode', request.url));
         }
 
-        let userId = '';
+        let stateUserId = '';
         let bankId = '';
 
         if (stateParam && stateParam.includes(':')) {
             const parts = stateParam.split(':');
-            userId = parts[0];
+            stateUserId = parts[0];
             bankId = parts[1];
         }
 
-        if (!userId) {
-            return NextResponse.redirect(new URL('/budget?error=MissingUser', request.url));
+        // 1. SECURE AUTH: Get real user from Supabase session cookie, do not blindly trust state
+        const { getAuthenticatedUser } = require('@/lib/supabase-server');
+        const authUser = await getAuthenticatedUser(request);
+        
+        let finalUserId = authUser?.id;
+
+        if (!finalUserId && stateUserId) {
+             // If for some reason the cookie didn't transmit (e.g. cross-site strictness), 
+             // we still shouldn't blindly trust it, but we can attempt to retrieve the user if we had a secure nonce.
+             // For strict compliance to AGENTS.md, we mandate the cookie auth.
+             const { createServerClient } = require('@supabase/ssr');
+             const { cookies } = require('next/headers');
+             const cookieStore = await cookies();
+             const authClient = createServerClient(
+                 process.env.NEXT_PUBLIC_SUPABASE_URL!,
+                 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+                 {
+                     cookies: {
+                         getAll() { return cookieStore.getAll(); },
+                         setAll() {}
+                     }
+                 }
+             );
+             const { data } = await authClient.auth.getUser();
+             if (data?.user) {
+                 finalUserId = data.user.id;
+             }
         }
 
-        const supabase = createAdminSupabaseClient();
+        if (!finalUserId) {
+            return NextResponse.redirect(new URL('/budget?error=UnauthorizedSession', request.url));
+        }
+
+        if (stateUserId && stateUserId !== finalUserId) {
+            return NextResponse.redirect(new URL('/budget?error=SessionMismatch', request.url));
+        }
+
+        const supabase = require('@/lib/supabase-server').createAdminSupabaseClient();
         
-        // 1. Create connection record
+        // 1. Exchange the code for a Login Identity Token
+        const FINVERSE_API_URL = 'https://api.prod.finverse.net';
+        const { FinverseProvider } = require('@/lib/financial/providers/FinverseProvider');
+        const finverse = new FinverseProvider();
+        const customerToken = await finverse.getCustomerToken();
+        
+        const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+        const redirectUri = `${siteUrl}/api/banking/finverse/callback`;
+
+        const tokenRes = await fetch(`${FINVERSE_API_URL}/auth/token`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${customerToken}`
+            },
+            body: JSON.stringify({
+                client_id: process.env.FINVERSE_CLIENT_ID,
+                grant_type: 'authorization_code',
+                code: code,
+                redirect_uri: redirectUri
+            })
+        });
+
+        if (!tokenRes.ok) {
+            const errText = await tokenRes.text();
+            console.error("Finverse token exchange failed:", errText);
+            throw new Error('Failed to securely exchange bank token');
+        }
+
+        const tokenData = await tokenRes.json();
+        const accessToken = tokenData.access_token;
+        const loginIdentityId = tokenData.login_identity_id || bankId || 'finverse_bank';
+
+        // 2. Create connection record
         const { data: connection, error: connErr } = await supabase.from('bank_connections' as any).upsert({
-            user_id: userId,
+            user_id: finalUserId,
             provider: 'finverse',
-            encrypted_access_token: code, // We would normally exchange this for a Login Identity token
-            provider_item_id: bankId || 'finverse_bank',
+            encrypted_access_token: accessToken,
+            provider_item_id: loginIdentityId,
             status: 'connected',
+            last_successful_sync: new Date().toISOString(),
             updated_at: new Date().toISOString()
         }, { onConflict: 'provider_item_id' }).select('id').single();
         
@@ -59,9 +126,38 @@ async function handleCallback(request: Request) {
             throw new Error(`Connection upsert failed: ${connErr.message}`);
         }
 
-        // We don't invent balances anymore. This is handled by a sync engine.
-        // For the immediate UX, we just redirect back to budget.
-        
+        // 3. Fetch Real Balances from Provider
+        const accountsRes = await fetch(`${FINVERSE_API_URL}/accounts`, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`
+            }
+        });
+
+        if (accountsRes.ok) {
+            const accountsData = await accountsRes.json();
+            const accounts = accountsData.accounts || [];
+            
+            if (accounts.length > 0) {
+                const accountsToInsert = accounts.map((acc: any) => ({
+                    user_id: finalUserId,
+                    connection_id: connection.id,
+                    provider: 'finverse',
+                    account_id: acc.account_id,
+                    institution_name: acc.institution_name || bankId,
+                    account_name: acc.account_name || 'Bank Account',
+                    account_type: acc.account_type || 'depository',
+                    account_subtype: acc.account_subtype || 'checking',
+                    current_balance: acc.balance?.amount || 0,
+                    available_balance: acc.balance?.available_amount || acc.balance?.amount || 0,
+                    iso_currency_code: acc.balance?.currency || 'IDR',
+                    mask: acc.account_number_masked || acc.account_id.slice(-4),
+                    updated_at: new Date().toISOString()
+                }));
+
+                await supabase.from('user_bank_accounts').upsert(accountsToInsert, { onConflict: 'account_id' });
+            }
+        }
+
         return NextResponse.redirect(new URL(`/budget?success=true&connection_id=${connection.id}`, request.url));
 
     } catch (err: any) {
