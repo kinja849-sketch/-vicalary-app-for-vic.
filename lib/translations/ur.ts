@@ -1,8 +1,8 @@
 export const ur = {
     welcome: "خوش آمدید",
     ready_journey: "کیا آپ اپنا سفر جاری رکھنے کے لیے تیار ہیں؟",
-    camera: "کھانے کا کیمرہ",
-    scanner: "بار کوڈ اسکینر",
+    camera: "کیمرہ",
+    scanner: "اسکینر",
     cook: "باورچی",
     cookbook: "کک بک",
     budget: "بجٹ",

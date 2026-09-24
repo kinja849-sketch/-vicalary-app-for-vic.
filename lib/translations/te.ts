@@ -1,8 +1,8 @@
 export const te = {
     welcome: "తిరిగి స్వాగతం",
     ready_journey: "మీ ప్రయాణాన్ని కొనసాగించడానికి సిద్ధంగా ఉన్నారా?",
-    camera: "భోజన కెమెరా",
-    scanner: "బార్‌కోడ్ స్కానర్",
+    camera: "కెమెరా",
+    scanner: "స్కానర్",
     cook: "వంట",
     cookbook: "వంటల పుస్తకం",
     budget: "బడ్జెట్",

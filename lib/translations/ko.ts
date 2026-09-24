@@ -1,8 +1,8 @@
 export const ko = {
     welcome: "다시 오신 것을 환영합니다",
     ready_journey: "여정을 계속할 준비가 되셨나요?",
-    camera: "음식 카메라",
-    scanner: "바코드 스캐너",
+    camera: "카메라",
+    scanner: "스캐너",
     cook: "요리하기",
     cookbook: "요리책",
     budget: "예산",

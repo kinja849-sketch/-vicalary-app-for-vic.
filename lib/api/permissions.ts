@@ -4,20 +4,47 @@ export type PermissionStatus = 'granted' | 'denied' | 'prompt';
 
 export const checkPermission = async (name: PermissionName): Promise<PermissionStatus> => {
     try {
+        const isGrantedInStorage = typeof window !== 'undefined' && (
+            (name === 'camera' as any && (localStorage.getItem('has_granted_camera') === 'true' || localStorage.getItem('permission_camera') === 'granted')) ||
+            (name === 'microphone' as any && (localStorage.getItem('has_granted_mic') === 'true' || localStorage.getItem('permission_microphone') === 'granted')) ||
+            localStorage.getItem(`permission_${name}`) === 'granted'
+        );
+
         if (typeof window === 'undefined' || !navigator.permissions || !navigator.permissions.query) {
+            if (isGrantedInStorage) return 'granted';
             const cached = localStorage.getItem(`permission_${name}`);
-            if (cached === 'granted' || cached === 'denied') return cached as PermissionStatus;
+            if (cached === 'denied') return 'denied';
             return 'prompt';
         }
         const result = await navigator.permissions.query({ name } as any);
-        if (result.state) {
-            localStorage.setItem(`permission_${name}`, result.state);
-            return result.state as PermissionStatus;
+        if (result.state === 'granted') {
+            localStorage.setItem(`permission_${name}`, 'granted');
+            if (name === 'camera' as any) localStorage.setItem('has_granted_camera', 'true');
+            if (name === 'microphone' as any) localStorage.setItem('has_granted_mic', 'true');
+            return 'granted';
         }
-        return 'prompt';
+        if (result.state === 'denied') {
+            localStorage.setItem(`permission_${name}`, 'denied');
+            if (name === 'camera' as any) localStorage.setItem('has_granted_camera', 'false');
+            if (name === 'microphone' as any) localStorage.setItem('has_granted_mic', 'false');
+            return 'denied';
+        }
+
+        if (isGrantedInStorage) {
+            return 'granted';
+        }
+
+        localStorage.setItem(`permission_${name}`, result.state);
+        return result.state as PermissionStatus;
     } catch (e) {
-        const cached = localStorage.getItem(`permission_${name}`);
-        if (cached === 'granted' || cached === 'denied') return cached as PermissionStatus;
+        const isGrantedInStorage = typeof window !== 'undefined' && (
+            (name === 'camera' as any && (localStorage.getItem('has_granted_camera') === 'true' || localStorage.getItem('permission_camera') === 'granted')) ||
+            (name === 'microphone' as any && (localStorage.getItem('has_granted_mic') === 'true' || localStorage.getItem('permission_microphone') === 'granted')) ||
+            localStorage.getItem(`permission_${name}`) === 'granted'
+        );
+        if (isGrantedInStorage) return 'granted';
+        const cached = typeof window !== 'undefined' ? localStorage.getItem(`permission_${name}`) : null;
+        if (cached === 'denied') return 'denied';
         return 'prompt';
     }
 };

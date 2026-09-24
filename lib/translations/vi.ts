@@ -1,8 +1,8 @@
 export const vi = {
     welcome: "Chào mừng trở lại",
     ready_journey: "Bạn đã sẵn sàng tiếp tục hành trình chưa?",
-    camera: "Camera món ăn",
-    scanner: "Quét mã vạch",
+    camera: "Máy ảnh",
+    scanner: "Máy quét",
     cook: "Nấu ăn",
     cookbook: "Sách nấu ăn",
     budget: "Ngân sách",

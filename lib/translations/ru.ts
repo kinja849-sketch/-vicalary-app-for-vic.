@@ -1,8 +1,8 @@
 export const ru = {
     welcome: "С возвращением",
     ready_journey: "Готовы продолжить свое путешествие?",
-    camera: "Камера еды",
-    scanner: "Сканер штрих-кода",
+    camera: "Камера",
+    scanner: "Сканер",
     cook: "Готовить",
     cookbook: "Кулинарная книга",
     budget: "Бюджет",

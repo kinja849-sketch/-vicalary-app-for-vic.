@@ -1,8 +1,8 @@
 export const so = {
     welcome: "Ku soo dhawaaw",
     ready_journey: "Ma diyaar u tahay inaad sii wadato safarkaaga?",
-    camera: "Kaamirada Cuntada",
-    scanner: "Iskaanka Lambarka",
+    camera: "Kaamero",
+    scanner: "Iskaan",
     cook: "Kari",
     cookbook: "Buugga Cuntada",
     budget: "Miisaaniyadda",

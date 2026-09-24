@@ -1,7 +1,7 @@
 "use client"
 import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link"
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { Camera as CameraIcon, RotateCw, Check, X, Info, Zap, Scale, HeartPulse, Activity, AlertCircle, ShoppingCart, Globe, FlaskConical, MessageSquare, Pill, TriangleAlert, Dna, SwitchCamera, ArrowLeft } from "lucide-react";
 import { analyzeFoodImage, scanProduct, saveFoodAnalysis } from "@/lib/api/food";
@@ -12,10 +12,22 @@ import { requestCameraAccess } from "@/lib/api/permissions";
 import { useNotificationStore } from "@/store/notificationStore";
 import { useCoachInjectionStore } from "@/store/coachInjectionStore";
 
-type ScanMode = "FOOD" | "BARCODE" | "MEDICATION";
+type ScanMode = "FOOD" | "BARCODE";
 
-export default function Camera() {
+interface CameraProps {
+  initialMode?: "FOOD" | "BARCODE";
+}
+
+export default function Camera({ initialMode }: CameraProps = {}) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+
+  const isScanner = initialMode === "BARCODE" ||
+    searchParams?.get("mode") === "scanner" ||
+    searchParams?.get("mode") === "barcode" ||
+    pathname?.includes("/scanner");
+
   const setPendingAnalysisContext = useAnalysisStore(state => state.setPendingAnalysisContext);
   const addNotification = useNotificationStore(state => state.addNotification);
   const setLatestAnalysis = useCoachInjectionStore(state => state.setLatestAnalysis);
@@ -23,7 +35,7 @@ export default function Camera() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
-  const [scanMode, setScanMode] = useState<ScanMode>("FOOD");
+  const [scanMode, setScanMode] = useState<ScanMode>(isScanner ? "BARCODE" : "FOOD");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<any>(null);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
@@ -48,30 +60,78 @@ export default function Camera() {
 
   const startCamera = async (facing: 'environment' | 'user' = 'environment', deviceId?: string) => {
     try {
-      // Build constraints: prefer deviceId (desktop) over facingMode (mobile)
-      const videoConstraint: MediaTrackConstraints = deviceId
-        ? { deviceId: { exact: deviceId } }
-        : { facingMode: facing };
+      stopCamera();
 
-      const mediaStream = await requestCameraAccess({
-        video: videoConstraint,
-        audio: false,
-      });
+      // Brief delay to allow hardware resources to fully release
+      await new Promise(r => setTimeout(r, 80));
+
+      let mediaStream: MediaStream | null = null;
+
+      // 1. Try with specific deviceId if provided (using ideal constraints so it never throws OverconstrainedError)
+      if (deviceId) {
+        try {
+          mediaStream = await requestCameraAccess({
+            video: {
+              deviceId: { ideal: deviceId },
+              facingMode: { ideal: facing },
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            },
+            audio: false,
+          });
+        } catch (e) {
+          console.warn("Camera start with deviceId failed, falling back to facingMode:", e);
+        }
+      }
+
+      // 2. Fallback: Request using ideal facingMode
+      if (!mediaStream) {
+        try {
+          mediaStream = await requestCameraAccess({
+            video: {
+              facingMode: { ideal: facing },
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            },
+            audio: false,
+          });
+        } catch (e) {
+          console.warn("Camera start with ideal constraints failed, falling back to basic facingMode:", e);
+          mediaStream = await requestCameraAccess({
+            video: { facingMode: facing },
+            audio: false,
+          });
+        }
+      }
+
+      if (!mediaStream) return;
+
       streamRef.current = mediaStream;
       setStream(mediaStream);
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
+        try {
+          await videoRef.current.play();
+        } catch (e) {
+          console.warn("Video auto-play warning:", e);
+        }
       }
     } catch (err) {
       console.error("Camera access failed in Camera.tsx:", err);
-      // Detailed error is already handled by requestCameraAccess toast
     }
   };
 
   const stopCamera = () => {
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current.getTracks().forEach(track => {
+        try {
+          track.stop();
+        } catch (e) {}
+      });
       streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
     }
     setStream(null);
   };
@@ -82,36 +142,39 @@ export default function Camera() {
     if (isSwitching) return;
     try {
       setIsSwitching(true);
-      // Enumerate all video input devices
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const videoDevices = devices.filter(d => d.kind === 'videoinput');
+      const targetFacing: 'environment' | 'user' = facingMode === 'environment' ? 'user' : 'environment';
 
-      if (videoDevices.length <= 1) {
-        // Only one camera — just toggle facingMode (mobile fallback)
-        const newFacing = facingMode === 'environment' ? 'user' : 'environment';
-        setFacingMode(newFacing);
-        stopCamera();
-        await startCamera(newFacing);
-        setIsSwitching(false);
-        return;
+      let targetDeviceId: string | undefined;
+
+      // Check available video devices to locate a matching sensor by keyword
+      if (typeof navigator !== 'undefined' && navigator.mediaDevices?.enumerateDevices) {
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const videoDevices = devices.filter(d => d.kind === 'videoinput');
+
+          if (videoDevices.length > 1) {
+            const frontKeywords = ['front', 'user', 'selfie', 'face', 'facetime'];
+            const backKeywords = ['back', 'rear', 'environment', 'world', 'main'];
+            const keywords = targetFacing === 'user' ? frontKeywords : backKeywords;
+
+            const matched = videoDevices.find(d =>
+              keywords.some(k => d.label.toLowerCase().includes(k))
+            );
+
+            if (matched && matched.deviceId) {
+              targetDeviceId = matched.deviceId;
+            }
+          }
+        } catch (e) {
+          console.warn("Device enumeration during switchCamera warning:", e);
+        }
       }
 
-      // Find the current device in use
-      const currentTrack = streamRef.current?.getVideoTracks()[0];
-      const currentDeviceId = currentTrack?.getSettings().deviceId;
-      const currentIndex = videoDevices.findIndex(d => d.deviceId === currentDeviceId);
-      const nextIndex = (currentIndex + 1) % videoDevices.length;
-      const nextDevice = videoDevices[nextIndex];
-
-      // Update facingMode label (best-effort from device label)
-      const label = nextDevice.label.toLowerCase();
-      const nextFacing = label.includes('front') || label.includes('user') ? 'user' : 'environment';
-      setFacingMode(nextFacing);
-
-      stopCamera();
-      await startCamera(nextFacing, nextDevice.deviceId);
+      setFacingMode(targetFacing);
+      await startCamera(targetFacing, targetDeviceId);
     } catch (err) {
       console.error("switchCamera failed:", err);
+      toast.error("Failed to switch camera direction");
     } finally {
       setIsSwitching(false);
     }
@@ -148,18 +211,30 @@ export default function Camera() {
 
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    if ('BarcodeDetector' in window) {
+    if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
       try {
         const detector = new (window as any).BarcodeDetector({
-          formats: ['ean_13', 'upc_a', 'upc_e', 'ean_8']
+          formats: ['ean_13', 'upc_a', 'upc_e', 'ean_8', 'code_128', 'code_39', 'code_93', 'itf', 'qr_code', 'data_matrix']
         });
         const barcodes = await detector.detect(canvas);
-        if (barcodes.length > 0) {
+        if (barcodes.length > 0 && barcodes[0]?.rawValue) {
           handleBarcodeDetected(barcodes[0].rawValue);
+          return;
         }
       } catch (e) {
         console.error("BarcodeDetector error:", e);
       }
+    }
+
+    try {
+      const { BrowserMultiFormatReader } = await import("@zxing/browser");
+      const reader = new BrowserMultiFormatReader();
+      const result = reader.decodeFromCanvas(canvas);
+      if (result && result.getText()) {
+        handleBarcodeDetected(result.getText());
+      }
+    } catch (e) {
+      // frame didn't contain a barcode, ignore
     }
   };
 
@@ -171,7 +246,7 @@ export default function Camera() {
     try {
       const result = await scanProduct(userId, barcode);
       if (result.error) throw new Error(result.error);
-      const fullResult = { ...result, type: 'BARCODE' as const };
+      const fullResult = { ...result, type: result.type || 'BARCODE' as const };
       setAnalysisResult(fullResult);
       setLatestAnalysis(fullResult);
       addNotification('success', "Product identified via Barcode!");
@@ -266,7 +341,10 @@ export default function Camera() {
               ref={videoRef}
               autoPlay
               playsInline
-              className="w-full h-full object-cover"
+              muted
+              className={`w-full h-full object-cover transition-transform duration-300 ${
+                facingMode === 'user' ? '-scale-x-100' : 'scale-x-100'
+              }`}
             />
 
             {/* Overlay elements */}
@@ -280,40 +358,12 @@ export default function Camera() {
             {/* Top Right Switch Camera */}
             <button
               onClick={switchCamera}
+              disabled={isSwitching}
               aria-label={facingMode === 'environment' ? 'Switch to front camera' : 'Switch to back camera'}
-              className="absolute top-8 right-6 p-3 bg-black/40 backdrop-blur-xl rounded-full border border-white/20 hover:bg-black/60 transition-all active:scale-90 z-10"
+              className="absolute top-8 right-6 p-3 bg-black/40 backdrop-blur-xl rounded-full border border-white/20 hover:bg-black/60 transition-all active:scale-90 z-10 disabled:opacity-50"
             >
-              <SwitchCamera className="w-6 h-6" />
+              <SwitchCamera className={`w-6 h-6 transition-transform duration-300 ${isSwitching ? 'animate-spin' : ''}`} />
             </button>
-
-            {/* Mode Switcher */}
-            <div className="absolute top-8 left-1/2 -translate-x-1/2 flex bg-black/50 backdrop-blur-xl p-1 rounded-full border border-white/10 z-10">
-              <button
-                onClick={() => setScanMode("FOOD")}
-                className={`px-3 py-1.5 rounded-full text-[10px] sm:text-xs font-bold transition-all ${scanMode === "FOOD" ? "bg-vic-blue text-white shadow-lg shadow-vic-blue/30" : "text-white/40 hover:text-white"}`}
-              >
-                MEAL
-              </button>
-              <button
-                onClick={() => setScanMode("BARCODE")}
-                className={`px-3 py-1.5 rounded-full text-[10px] sm:text-xs font-bold transition-all ${scanMode === "BARCODE" ? "bg-vic-green text-black shadow-lg shadow-vic-green/30" : "text-white/40 hover:text-white"}`}
-              >
-                BARCODE
-              </button>
-              <button
-                onClick={() => setScanMode("MEDICATION")}
-                className={`px-3 py-1.5 rounded-full text-[10px] sm:text-xs font-bold transition-all ${scanMode === "MEDICATION" ? "bg-purple-500 text-white shadow-lg shadow-purple-500/30" : "text-white/40 hover:text-white"}`}
-              >
-                MEDIC
-              </button>
-            </div>
-
-            <div className={`absolute top-24 left-1/2 -translate-x-1/2 px-4 py-2 bg-black/50 backdrop-blur-md rounded-full border border-white/10 flex items-center gap-2 z-10 ${scanMode === 'BARCODE' ? 'border-vic-green/30' : scanMode === 'MEDICATION' ? 'border-purple-500/30' : 'border-vic-blue/30'}`}>
-              {scanMode === 'MEDICATION' ? <Pill className="w-4 h-4 animate-pulse text-purple-400" /> : <Zap className={`w-4 h-4 animate-pulse ${scanMode === 'BARCODE' ? 'text-vic-green' : 'text-vic-blue'}`} />}
-              <span className={`text-[10px] font-black uppercase tracking-widest ${scanMode === 'BARCODE' ? 'text-vic-green' : scanMode === 'MEDICATION' ? 'text-purple-400' : 'text-vic-blue'}`}>
-                {scanMode === 'BARCODE' ? 'Barcode Auto-Scan Active' : scanMode === 'MEDICATION' ? 'Medication NDC Scanner' : 'Live Meal Analysis'}
-              </span>
-            </div>
 
             {/* Scanning Frame for Barcode */}
             {scanMode === "BARCODE" && (

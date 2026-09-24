@@ -1,8 +1,8 @@
 export const id = {
     welcome: "Selamat datang kembali",
     ready_journey: "Siap untuk melanjutkan perjalanan Anda?",
-    camera: "Kamera Makanan",
-    scanner: "Pemindai Kode Batang",
+    camera: "Kamera",
+    scanner: "Pemindai",
     cook: "Masak",
     cookbook: "Buku Resep",
     budget: "Anggaran",

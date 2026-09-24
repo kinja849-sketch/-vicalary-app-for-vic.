@@ -1,8 +1,8 @@
 export const hi = {
     welcome: "वापसी पर स्वागत है",
     ready_journey: "अपनी यात्रा जारी रखने के लिए तैयार हैं?",
-    camera: "भोजन कैमरा",
-    scanner: "बारकोड स्कैनर",
+    camera: "कैमरा",
+    scanner: "स्कैनर",
     cook: "पकाना",
     cookbook: "कुकबुक",
     budget: "बजट",

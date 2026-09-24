@@ -1,8 +1,8 @@
 export const ta = {
     welcome: "மீண்டும் வருக",
     ready_journey: "உங்கள் பயணத்தைத் தொடரத் தயாரா?",
-    camera: "உணவு கேமரா",
-    scanner: "பார்கோடு ஸ்கேனர்",
+    camera: "கேமரா",
+    scanner: "ஸ்கேனர்",
     cook: "சமைக்க",
     cookbook: "சமையல் புத்தகம்",
     budget: "பட்ஜெட்",

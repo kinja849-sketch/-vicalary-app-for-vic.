@@ -14,11 +14,19 @@ export default function CameraCapture({ onCapture, onClose }: CameraCaptureProps
     const streamRef = useRef<MediaStream | null>(null);
     const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment');
     const [captured, setCaptured] = useState(false);
+    const [isSwitching, setIsSwitching] = useState(false);
 
     const stopStream = () => {
         if (streamRef.current) {
-            streamRef.current.getTracks().forEach(track => track.stop());
+            streamRef.current.getTracks().forEach(track => {
+                try {
+                    track.stop();
+                } catch (e) {}
+            });
             streamRef.current = null;
+        }
+        if (videoRef.current) {
+            videoRef.current.srcObject = null;
         }
     };
 
@@ -31,17 +39,35 @@ export default function CameraCapture({ onCapture, onClose }: CameraCaptureProps
 
     const startCamera = async () => {
         stopStream();
+        await new Promise(r => setTimeout(r, 80));
         try {
-            const mediaStream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode },
-                audio: false
-            });
+            let mediaStream: MediaStream | null = null;
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: { ideal: facingMode } },
+                    audio: false
+                });
+            } catch (e) {
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    video: true,
+                    audio: false
+                });
+            }
+            if (!mediaStream) return;
+            if (typeof window !== 'undefined') {
+                localStorage.setItem('has_granted_camera', 'true');
+                localStorage.setItem('permission_camera', 'granted');
+            }
             streamRef.current = mediaStream;
             if (videoRef.current) {
                 videoRef.current.srcObject = mediaStream;
+                try {
+                    await videoRef.current.play();
+                } catch (e) {}
             }
         } catch (error) {
-            toast.error('Camera access denied');
+            console.error("Camera access failed:", error);
+            toast.error('Camera access denied or unavailable');
             onClose();
         }
     };
@@ -87,11 +113,17 @@ export default function CameraCapture({ onCapture, onClose }: CameraCaptureProps
                 </button>
                 {!captured && (
                     <button
-                        onClick={() => setFacingMode(prev => prev === 'user' ? 'environment' : 'user')}
+                        onClick={async () => {
+                            if (isSwitching) return;
+                            setIsSwitching(true);
+                            setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
+                            setTimeout(() => setIsSwitching(false), 500);
+                        }}
+                        disabled={isSwitching}
                         aria-label="Switch camera"
-                        className="text-white p-2"
+                        className="text-white p-2 active:scale-90 transition-transform disabled:opacity-50"
                     >
-                        <SwitchCamera size={30} />
+                        <SwitchCamera size={30} className={isSwitching ? 'animate-spin' : ''} />
                     </button>
                 )}
             </div>
@@ -103,7 +135,9 @@ export default function CameraCapture({ onCapture, onClose }: CameraCaptureProps
                     autoPlay
                     muted
                     playsInline
-                    className={`max-w-full max-h-full ${captured ? 'hidden' : 'block'}`}
+                    className={`max-w-full max-h-full transition-transform duration-300 ${
+                        facingMode === 'user' ? '-scale-x-100' : 'scale-x-100'
+                    } ${captured ? 'hidden' : 'block'}`}
                 />
                 <canvas
                     ref={canvasRef}

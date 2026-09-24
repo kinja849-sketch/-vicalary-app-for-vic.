@@ -1,8 +1,8 @@
 export const ar = {
     welcome: "مرحباً بك مجدداً",
     ready_journey: "هل أنت مستعد لمواصلة رحلتك؟",
-    camera: "كاميرا الوجبات",
-    scanner: "ماسح الباركود",
+    camera: "كاميرا",
+    scanner: "ماسح ضوئي",
     cook: "طباخ",
     cookbook: "كتاب الطبخ",
     budget: "الميزانية",

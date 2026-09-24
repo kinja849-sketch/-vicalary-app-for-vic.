@@ -16,6 +16,7 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
     const hasScannedRef = useRef(false);
     const isAnalyzingRef = useRef(isAnalyzing);
     const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+    const [isSwitching, setIsSwitching] = useState(false);
     const [status, setStatus] = useState<'scanning' | 'barcode_detected' | 'idle' | 'looking_up_product' | 'screening_boycott' | 'loading_nutrition' | 'loading_price' | 'ready' | 'product_not_found' | 'error'>('scanning');
 
     useEffect(() => {
@@ -23,6 +24,7 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
     }, [isAnalyzing]);
 
     useEffect(() => {
+        let isMounted = true;
         const scannerId = "reader";
         hasScannedRef.current = false;
         setStatus('scanning');
@@ -30,33 +32,57 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
         const html5QrCode = new Html5Qrcode(scannerId);
         scannerRef.current = html5QrCode;
 
-        const config = { 
-            fps: 10,
-            disableFlip: false,
-            formatsToSupport: [
-                0, // QR_CODE
-                9, // EAN_13
-                10, // EAN_8
-                14, // UPC_A
-                15 // UPC_E
-            ],
-            qrbox: { width: window.innerWidth * 0.8, height: window.innerHeight * 0.4 },
-            videoConstraints: {
-                width: { ideal: 1920 },
-                height: { ideal: 1080 },
-                advanced: [{ focusMode: "continuous" }]
-            }
-        };
-
         const startScanner = async () => {
             try {
+                let cameraSelection: any = { facingMode: facingMode };
+
+                // Intelligently find deviceId by label if multiple cameras exist
+                try {
+                    const cameras = await Html5Qrcode.getCameras();
+                    if (cameras && cameras.length > 1) {
+                        const frontKeywords = ['front', 'user', 'selfie', 'face'];
+                        const backKeywords = ['back', 'rear', 'environment', 'world', 'main'];
+                        const keywords = facingMode === 'user' ? frontKeywords : backKeywords;
+                        const matched = cameras.find(c =>
+                            keywords.some(k => c.label.toLowerCase().includes(k))
+                        );
+                        if (matched && matched.id) {
+                            cameraSelection = matched.id;
+                        }
+                    }
+                } catch (e) {
+                    console.warn("Could not query getCameras:", e);
+                }
+
+                if (!isMounted) return;
+
+                const config = { 
+                    fps: 10,
+                    disableFlip: false,
+                    formatsToSupport: [
+                        0, // QR_CODE
+                        9, // EAN_13
+                        10, // EAN_8
+                        14, // UPC_A
+                        15 // UPC_E
+                    ],
+                    qrbox: { width: window.innerWidth * 0.8, height: window.innerHeight * 0.4 },
+                    videoConstraints: {
+                        facingMode: { ideal: facingMode },
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 },
+                        advanced: [{ focusMode: "continuous" }]
+                    }
+                };
+
                 await html5QrCode.start(
-                    { facingMode: facingMode },
+                    cameraSelection,
                     config as any,
                     (decodedText) => {
                         if (hasScannedRef.current || isAnalyzingRef.current) return;
                         hasScannedRef.current = true;
-                        setStatus('barcode_detected'); console.log('[Scanner Debug]', { scannerState: 'barcode_detected', barcodeDetected: !!decodedText, barcodeValue: decodedText });;
+                        setStatus('barcode_detected');
+                        console.log('[Scanner Debug]', { scannerState: 'barcode_detected', barcodeDetected: !!decodedText, barcodeValue: decodedText });
                         html5QrCode.stop().catch(() => {});
                         
                         // Tiny delay for visual feedback before firing API
@@ -64,14 +90,21 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
                     },
                     () => {}
                 );
+                if (typeof window !== 'undefined') {
+                    localStorage.setItem('has_granted_camera', 'true');
+                    localStorage.setItem('permission_camera', 'granted');
+                }
             } catch (err: any) {
-                console.error("Camera startup error:", err);
+                if (isMounted) {
+                    console.error("Camera startup error in QRScanner:", err);
+                }
             }
         };
 
         startScanner();
 
         return () => {
+            isMounted = false;
             if (html5QrCode.isScanning) {
                 html5QrCode.stop().catch(() => {}).finally(() => {
                     try { html5QrCode.clear(); } catch {}
@@ -79,16 +112,34 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
             } else {
                 try { html5QrCode.clear(); } catch {}
             }
+            if (scannerRef.current === html5QrCode) {
+                scannerRef.current = null;
+            }
         };
     }, [facingMode]);
 
-    const toggleCamera = () => {
-        if (scannerRef.current?.isScanning) {
-            scannerRef.current.stop().then(() => {
-                setFacingMode(prev => prev === 'environment' ? 'user' : 'environment');
-            }).catch(console.error);
-        } else {
-            setFacingMode(prev => prev === 'environment' ? 'user' : 'environment');
+    const toggleCamera = async () => {
+        if (isSwitching) return;
+        setIsSwitching(true);
+        const nextFacing = facingMode === 'environment' ? 'user' : 'environment';
+        try {
+            if (scannerRef.current) {
+                if (scannerRef.current.isScanning) {
+                    await scannerRef.current.stop().catch(() => {});
+                }
+                try {
+                    scannerRef.current.clear();
+                } catch (e) {}
+                scannerRef.current = null;
+            }
+            // Yield for camera hardware release
+            await new Promise(r => setTimeout(r, 100));
+            setFacingMode(nextFacing);
+        } catch (err) {
+            console.error("Failed to switch camera in QRScanner:", err);
+            setFacingMode(nextFacing);
+        } finally {
+            setIsSwitching(false);
         }
     };
 
@@ -137,10 +188,11 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
 
                 <button
                     onClick={toggleCamera}
-                    aria-label="Switch camera direction"
-                    className="size-11 rounded-full bg-black/50 backdrop-blur-md text-white flex items-center justify-center border border-white/10"
+                    disabled={isSwitching}
+                    aria-label={`Switch to ${facingMode === 'environment' ? 'front' : 'back'} camera`}
+                    className="size-11 rounded-full bg-black/50 backdrop-blur-md text-white flex items-center justify-center border border-white/10 active:scale-90 transition-all disabled:opacity-50"
                 >
-                    <RefreshCw className="w-6 h-6" />
+                    <RefreshCw className={`w-6 h-6 transition-transform duration-300 ${isSwitching ? 'animate-spin' : ''}`} />
                 </button>
             </div>
 
@@ -197,6 +249,7 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
                     top: 0 !important;
                     left: 0 !important;
                     filter: contrast(1.1) brightness(1.1) saturate(1.2) sharpness(1.1);
+                    transform: ${facingMode === 'user' ? 'scaleX(-1)' : 'none'} !important;
                 }
                 /* completely hide the internal cropping box UI so it feels full-screen */
                 #qr-shaded-region {

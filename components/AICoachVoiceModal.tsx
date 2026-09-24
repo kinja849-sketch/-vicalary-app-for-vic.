@@ -49,7 +49,13 @@ export default function AICoachVoiceModal({
 
   const resolvedUserName = (!userName || userName === 'User' || userName === 'there') ? 'Vic' : userName;
 
-  const [hasMicPermission, setHasMicPermission] = useState<boolean | null>(null);
+  const [hasMicPermission, setHasMicPermission] = useState<boolean | null>(() => {
+    if (typeof window !== 'undefined') {
+      const isGranted = localStorage.getItem('has_granted_mic') === 'true' || localStorage.getItem('permission_microphone') === 'granted';
+      if (isGranted) return true;
+    }
+    return null;
+  });
   const [state, setState] = useState<ConversationState>('idle');
   const [isMuted, setIsMuted] = useState(false);
   const [isAudioMuted, setIsAudioMuted] = useState(false);
@@ -132,10 +138,29 @@ export default function AICoachVoiceModal({
     isMountedRef.current = true;
 
     const checkPermission = async () => {
+      const isGrantedInStorage = typeof window !== 'undefined' && (
+        localStorage.getItem('has_granted_mic') === 'true' ||
+        localStorage.getItem('permission_microphone') === 'granted'
+      );
+
+      if (isGrantedInStorage) {
+        setHasMicPermission(true);
+        unlockAudioContext().then(() => {
+          if (isMountedRef.current && voiceStateRef.current === 'idle' && activeTurnIdRef.current === null) {
+            startListeningRef.current();
+          }
+        });
+        return;
+      }
+
       if (typeof navigator !== 'undefined' && navigator.permissions?.query) {
         try {
           const status = await navigator.permissions.query({ name: 'microphone' as any });
           if (status.state === 'granted') {
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('has_granted_mic', 'true');
+              localStorage.setItem('permission_microphone', 'granted');
+            }
             setHasMicPermission(true);
             unlockAudioContext().then(() => {
               if (isMountedRef.current && voiceStateRef.current === 'idle' && activeTurnIdRef.current === null) {
@@ -680,6 +705,10 @@ export default function AICoachVoiceModal({
         }
       });
       stream.getTracks().forEach(track => track.stop());
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('has_granted_mic', 'true');
+        localStorage.setItem('permission_microphone', 'granted');
+      }
       setHasMicPermission(true);
       setTimeout(() => {
         if (isMountedRef.current && voiceStateRef.current === 'idle' && activeTurnIdRef.current === null) {

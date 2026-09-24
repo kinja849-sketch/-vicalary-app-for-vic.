@@ -1,8 +1,8 @@
 export const mr = {
     welcome: "पुन्हा स्वागत आहे",
     ready_journey: "तुमचा प्रवास सुरू ठेवण्यासाठी तयार आहात का?",
-    camera: "जेवण कॅमेरा",
-    scanner: "बारकोड स्कॅनर",
+    camera: "कॅमेरा",
+    scanner: "स्कॅनर",
     cook: "स्वयंपाक",
     cookbook: "कुकबुक",
     budget: "बजेट",

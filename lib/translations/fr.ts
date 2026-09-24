@@ -1,8 +1,8 @@
 export const fr = {
     welcome: "Bon retour",
     ready_journey: "Prêt à continuer votre voyage?",
-    camera: "Caméra repas",
-    scanner: "Scanner de code-barres",
+    camera: "Caméra",
+    scanner: "Scanner",
     cook: "Cuisiner",
     cookbook: "Livre de cuisine",
     budget: "Budget",

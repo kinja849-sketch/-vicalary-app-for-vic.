@@ -1,8 +1,8 @@
 export const pt = {
     welcome: "Bem-vindo de volta",
     ready_journey: "Pronto para continuar sua jornada?",
-    camera: "Câmera de Refeição",
-    scanner: "Scanner de Código de Barras",
+    camera: "Câmera",
+    scanner: "Scanner",
     cook: "Cozinhar",
     cookbook: "Livro de Receitas",
     budget: "Orçamento",

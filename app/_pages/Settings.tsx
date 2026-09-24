@@ -154,7 +154,7 @@ export default function Settings() {
           <SettingItem
             label={t('language')}
             icon="language"
-            value={((settings as any)?.is_language_auto !== false) ? `Auto (${currentLangObj?.native || lang.toUpperCase()})` : (currentLangObj?.native || lang.toUpperCase())}
+            value={((settings as any)?.is_language_auto !== false && (typeof window === 'undefined' || localStorage.getItem('has_user_selected_lang') !== 'true')) ? `Auto (${currentLangObj?.native || lang.toUpperCase()})` : (currentLangObj?.native || lang.toUpperCase())}
             onClick={() => setShowLanguageModal(true)}
           />
           <SettingItem
@@ -180,28 +180,32 @@ export default function Settings() {
               <div className="max-h-[60vh] overflow-y-auto">
                 <button
                   onClick={() => {
+                    if (typeof window !== 'undefined') {
+                      localStorage.removeItem('has_user_selected_lang');
+                    }
                     updateSettingsMutation.mutate({ is_language_auto: true });
                     setShowLanguageModal(false);
                   }}
-                  className={`w-full p-4 text-left flex items-center justify-between border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors ${((settings as any)?.is_language_auto !== false) ? 'bg-vic-green/10 text-vic-green font-bold' : ''}`}
+                  className={`w-full p-4 text-left flex items-center justify-between border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors ${((settings as any)?.is_language_auto !== false && (typeof window === 'undefined' || localStorage.getItem('has_user_selected_lang') !== 'true')) ? 'bg-vic-green/10 text-vic-green font-bold' : ''}`}
                 >
                   <div className="flex items-center gap-3">
                     <span className="text-2xl">🌎</span>
                     <span>Auto Detect</span>
                   </div>
-                  {((settings as any)?.is_language_auto !== false) && <span className="text-vic-green font-bold">✓</span>}
+                  {((settings as any)?.is_language_auto !== false && (typeof window === 'undefined' || localStorage.getItem('has_user_selected_lang') !== 'true')) && <span className="text-vic-green font-bold">✓</span>}
                 </button>
                 {languages.map((l) => (
                   <button
                     key={l.code}
                     onClick={() => {
                       if (typeof window !== 'undefined') {
+                        localStorage.setItem('has_user_selected_lang', 'true');
                         localStorage.setItem('app_lang', l.code);
                       }
                       updateSettingsMutation.mutate({ language: l.code, is_language_auto: false });
                       setShowLanguageModal(false);
                     }}
-                    className={`w-full p-4 text-left flex items-center justify-between border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors ${((settings as any)?.is_language_auto === false && lang === l.code) ? 'bg-vic-green/10 text-vic-green font-bold' : ''}`}
+                    className={`w-full p-4 text-left flex items-center justify-between border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors ${(((settings as any)?.is_language_auto === false || (typeof window !== 'undefined' && localStorage.getItem('has_user_selected_lang') === 'true')) && lang === l.code) ? 'bg-vic-green/10 text-vic-green font-bold' : ''}`}
                   >
                     <div className="flex items-center gap-3">
                       <span className="text-2xl">{l.flag}</span>

@@ -40,6 +40,7 @@ export default function Dashboard() {
   const [currentView, setCurrentView] = useState<"dashboard" | "progress">("dashboard");
   const [darkMode, setDarkMode] = useState(false);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
+  const [isSwitchingCamera, setIsSwitchingCamera] = useState(false);
 
   // Determine current meal type based on time
   const getCurrentMealType = () => {
@@ -206,66 +207,107 @@ export default function Dashboard() {
   };
 
   const switchCamera = async () => {
+    if (isSwitchingCamera) return;
     try {
-      // Enumerate all video input devices (works on both desktop and mobile)
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const videoDevices = devices.filter(d => d.kind === 'videoinput');
-
-      if (videoDevices.length <= 1) {
-        // Single camera: toggle facingMode as mobile fallback
-        const newMode = facingMode === "user" ? "environment" : "user";
-        setFacingMode(newMode);
-        if (cameraStreamRef.current) {
-          cameraStreamRef.current.getTracks().forEach(track => track.stop());
-        }
-        try {
-          const stream = await requestCameraAccess({ video: { facingMode: newMode } });
-          if (cameraVideoRef.current) {
-            cameraVideoRef.current.srcObject = stream;
-            cameraStreamRef.current = stream;
-            await cameraVideoRef.current.play().catch(() => {});
-          }
-        } catch (err) {
-          console.error("Failed to switch camera:", err);
-        }
-        return;
-      }
-
-      // Multi-camera: cycle to the next device by deviceId
-      const currentTrack = cameraStreamRef.current?.getVideoTracks()[0];
-      const currentDeviceId = currentTrack?.getSettings().deviceId;
-      const currentIndex = videoDevices.findIndex(d => d.deviceId === currentDeviceId);
-      const nextIndex = (currentIndex + 1) % videoDevices.length;
-      const nextDevice = videoDevices[nextIndex];
-
-      const label = nextDevice.label.toLowerCase();
-      const newMode = label.includes('front') || label.includes('user') ? 'user' : 'environment';
-      setFacingMode(newMode);
+      setIsSwitchingCamera(true);
+      const targetFacing: "user" | "environment" = facingMode === "environment" ? "user" : "environment";
 
       if (cameraStreamRef.current) {
-        cameraStreamRef.current.getTracks().forEach(track => track.stop());
-      }
-      try {
-        const stream = await requestCameraAccess({
-          video: { deviceId: { exact: nextDevice.deviceId } }
+        cameraStreamRef.current.getTracks().forEach(track => {
+          try {
+            track.stop();
+          } catch (e) {}
         });
-        if (cameraVideoRef.current) {
-          cameraVideoRef.current.srcObject = stream;
-          cameraStreamRef.current = stream;
-          await cameraVideoRef.current.play().catch(() => {});
+        cameraStreamRef.current = null;
+      }
+      if (cameraVideoRef.current) {
+        cameraVideoRef.current.srcObject = null;
+      }
+
+      await new Promise(r => setTimeout(r, 80));
+
+      let targetDeviceId: string | undefined;
+
+      // Check available video devices to locate a matching sensor by keyword
+      if (typeof navigator !== 'undefined' && navigator.mediaDevices?.enumerateDevices) {
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const videoDevices = devices.filter(d => d.kind === 'videoinput');
+
+          if (videoDevices.length > 1) {
+            const frontKeywords = ['front', 'user', 'selfie', 'face', 'facetime'];
+            const backKeywords = ['back', 'rear', 'environment', 'world', 'main'];
+            const keywords = targetFacing === 'user' ? frontKeywords : backKeywords;
+
+            const matched = videoDevices.find(d =>
+              keywords.some(k => d.label.toLowerCase().includes(k))
+            );
+
+            if (matched && matched.deviceId) {
+              targetDeviceId = matched.deviceId;
+            }
+          }
+        } catch (e) {
+          console.warn("Device enumeration during switchCamera warning:", e);
         }
-      } catch (err) {
-        console.error("Failed to switch camera:", err);
+      }
+
+      setFacingMode(targetFacing);
+
+      let stream: MediaStream | null = null;
+      if (targetDeviceId) {
+        try {
+          stream = await requestCameraAccess({
+            video: {
+              deviceId: { ideal: targetDeviceId },
+              facingMode: { ideal: targetFacing },
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            }
+          });
+        } catch (e) {
+          console.warn("Switch camera with ideal deviceId failed, falling back to facingMode:", e);
+        }
+      }
+
+      if (!stream) {
+        stream = await requestCameraAccess({
+          video: {
+            facingMode: { ideal: targetFacing },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          }
+        });
+      }
+
+      if (cameraVideoRef.current && stream) {
+        cameraVideoRef.current.srcObject = stream;
+        cameraStreamRef.current = stream;
+        try {
+          await cameraVideoRef.current.play();
+        } catch (e) {
+          console.warn("Video auto-play warning:", e);
+        }
       }
     } catch (err) {
-      console.error("switchCamera enumeration failed:", err);
+      console.error("switchCamera failed:", err);
+      toast.error("Failed to switch camera direction");
+    } finally {
+      setIsSwitchingCamera(false);
     }
   };
 
   const closeCamera = () => {
     if (cameraStreamRef.current) {
-      cameraStreamRef.current.getTracks().forEach(track => track.stop());
+      cameraStreamRef.current.getTracks().forEach(track => {
+        try {
+          track.stop();
+        } catch (e) {}
+      });
       cameraStreamRef.current = null;
+    }
+    if (cameraVideoRef.current) {
+      cameraVideoRef.current.srcObject = null;
     }
     setShowCameraModal(false);
   };
@@ -657,10 +699,13 @@ export default function Dashboard() {
           <div className="relative w-full h-full bg-black overflow-hidden">
             <video
               ref={cameraVideoRef}
-              className="absolute inset-0 w-full h-full object-cover"
+              className={`absolute inset-0 w-full h-full object-cover transition-transform duration-300 ${
+                facingMode === 'user' ? '-scale-x-100' : 'scale-x-100'
+              }`}
               style={{ filter: 'contrast(1.1) brightness(1.1) saturate(1.2) sharpness(1.1)' } as any}
               autoPlay
               playsInline
+              muted
             />
 
             {/* Immersive Scan Overlay */}
@@ -678,9 +723,11 @@ export default function Dashboard() {
               <div className="flex gap-3">
                 <button
                   onClick={switchCamera}
-                  className="size-10 rounded-full bg-black/20 backdrop-blur-2xl text-white flex items-center justify-center border border-white/10 hover:bg-black/40 transition-all active:scale-90"
+                  disabled={isSwitchingCamera}
+                  aria-label={facingMode === 'environment' ? 'Switch to front camera' : 'Switch to back camera'}
+                  className="size-10 rounded-full bg-black/20 backdrop-blur-2xl text-white flex items-center justify-center border border-white/10 hover:bg-black/40 transition-all active:scale-90 disabled:opacity-50"
                 >
-                  <SwitchCamera size={20} />
+                  <SwitchCamera size={20} className={isSwitchingCamera ? 'animate-spin' : ''} />
                 </button>
               </div>
             </div>

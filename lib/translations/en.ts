@@ -1,7 +1,7 @@
 export const en = {
     welcome: "Welcome back",
     ready_journey: "Ready to continue your journey?",
-    camera: "Meal Camera",
+    camera: "Camera",
     scanner: "Scanner",
     cook: "Cook",
     cookbook: "Cookbook",

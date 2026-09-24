@@ -1,8 +1,8 @@
 export const zh = {
     welcome: "欢迎回来",
     ready_journey: "准备好继续您的旅程了吗？",
-    camera: "餐饮相机",
-    scanner: "条码扫描器",
+    camera: "相机",
+    scanner: "扫描器",
     cook: "烹饪",
     cookbook: "食谱",
     budget: "预算",

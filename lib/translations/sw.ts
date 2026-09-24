@@ -1,8 +1,8 @@
 export const sw = {
     welcome: "Karibu tena",
     ready_journey: "Uko tayari kuendelea na safari yako?",
-    camera: "Kamera ya Chakula",
-    scanner: "Scanner ya Barcode",
+    camera: "Kamera",
+    scanner: "Scanner",
     cook: "Pika",
     cookbook: "Kitabu cha Mapishi",
     budget: "Bajeti",

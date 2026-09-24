@@ -117,17 +117,18 @@ export const useTranslation = () => {
         return 'en';
     };
 
-    const isAuto = (settings as any)?.is_language_auto !== false;
+    const hasUserSelectedLang = typeof window !== 'undefined' && localStorage.getItem('has_user_selected_lang') === 'true';
+    const isAuto = !hasUserSelectedLang && (settings as any)?.is_language_auto !== false;
     const cachedLang = (typeof window !== 'undefined' ? localStorage.getItem('app_lang') : null) as Language;
 
     const rawLang = !isAuto
-        ? ((settings as any)?.language || cachedLang || getBrowserLang() || 'en')
+        ? ((settings as any)?.language || cachedLang || 'en')
         : (getPrimaryLanguage(detectedLoc?.languages) || (settings as any)?.language || cachedLang || getBrowserLang() || 'en');
 
     // Location-only effect removed in favor of direct finalLang syncing to app_lang below
 
     useEffect(() => {
-        if (user && detectedLoc && isAuto) {
+        if (user && detectedLoc && isAuto && !hasUserSelectedLang) {
             const syncKey = `location_synced_${user.id}`;
             const toastKey = `location_toasted_${user.id}`;
             
@@ -168,7 +169,7 @@ export const useTranslation = () => {
                 if (typeof window !== 'undefined') localStorage.setItem(syncKey, todayStr);
             }
         }
-    }, [detectedLoc, isAuto, user, settings, queryClient]);
+    }, [detectedLoc, isAuto, hasUserSelectedLang, user, settings, queryClient]);
 
     const langMap: Record<string, Language> = {
         'ind': 'id', 'eng': 'en', 'fra': 'fr', 'deu': 'de', 'ger': 'de',
@@ -187,6 +188,7 @@ export const useTranslation = () => {
         }
         if (typeof window !== 'undefined' && finalLang) {
             localStorage.setItem('app_lang', finalLang);
+            document.documentElement.lang = finalLang;
         }
     }, [finalLang]);
 

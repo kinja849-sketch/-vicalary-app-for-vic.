@@ -2,10 +2,10 @@
   "name": "vicalary",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 8080",
     "build": "next build",
     "build:client": "next build",
-    "start": "next start",
+    "start": "next start -p 8080",
     "typecheck": "tsc --noEmit",
     "format.fix": "prettier --write ."
   },

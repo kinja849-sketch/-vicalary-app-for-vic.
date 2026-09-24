@@ -1,8 +1,8 @@
 export const bn = {
     welcome: "আবার স্বাগতম",
     ready_journey: "আপনার যাত্রা চালিয়ে যেতে প্রস্তুত?",
-    camera: "মিল ক্যামেরা",
-    scanner: "বারকোড স্ক্যানার",
+    camera: "ক্যামেরা",
+    scanner: "স্ক্যানার",
     cook: "রান্না",
     cookbook: "কুকবুক",
     budget: "বাজেট",

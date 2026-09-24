@@ -1,8 +1,8 @@
 export const tr = {
     welcome: "Tekrar hoş geldiniz",
     ready_journey: "Yolculuğunuza devam etmeye hazır mısınız?",
-    camera: "Yemek Kamerası",
-    scanner: "Barkod Tarayıcı",
+    camera: "Kamera",
+    scanner: "Tarayıcı",
     cook: "Pişir",
     cookbook: "Yemek Kitabı",
     budget: "Bütçe",
