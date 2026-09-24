@@ -1,50 +1,62 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { createServerSupabaseClient, createAdminSupabaseClient } from '@/lib/supabase-server';
+import { NextResponse } from 'next/server';
+import { getAuthenticatedUser, createAdminSupabaseClient } from '@/lib/supabase-server';
 
-export async function POST(req: NextRequest) {
-  try {
-    const supabase = createServerSupabaseClient();
-    
-    // 1. Authenticate user
-    const { data: { session }, error: authError } = await supabase.auth.getSession();
-    if (authError || !session?.user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+export async function POST(request: Request) {
+    try {
+        const user = await getAuthenticatedUser(request);
+        if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+        const body = await request.json().catch(() => ({}));
+        const { product_name, quantity = 1, unit_price, total_amount, currency, barcode, category, source = 'manual' } = body;
+
+        if (!product_name || !unit_price || !total_amount) {
+            return NextResponse.json({ success: false, error: 'Missing required fields' }, { status: 400 });
+        }
+
+        const supabase = createAdminSupabaseClient();
+        
+        const { data, error } = await supabase.from('financial_transactions').insert({
+            user_id: user.id,
+            merchant_name: product_name,
+            description: `Scanner purchase: ${product_name} x${quantity}`,
+            amount: Number(total_amount),
+            currency,
+            category,
+            source,
+            transaction_date: new Date().toISOString(),
+        }).select().single();
+
+        if (error) {
+            console.error("[Expenses API] Error inserting expense:", error);
+            throw new Error(error.message);
+        }
+
+        return NextResponse.json({ success: true, expense: data });
+    } catch (err: any) {
+        return NextResponse.json({ success: false, error: err.message }, { status: 500 });
     }
-    const userId = session.user.id;
+}
 
-    const body = await req.json();
-    const { amount, currency, description, category, source, merchantName } = body;
+export async function GET(request: Request) {
+    try {
+        const user = await getAuthenticatedUser(request);
+        if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-    if (!amount || !currency || !description || !source) {
-      return NextResponse.json({ error: 'Missing required expense fields' }, { status: 400 });
+        const { searchParams } = new URL(request.url);
+        const limit = Number(searchParams.get('limit')) || 50;
+
+        const supabase = createAdminSupabaseClient();
+        
+        const { data, error } = await supabase.from('financial_transactions')
+            .select('*')
+            .eq('user_id', user.id)
+            .order('transaction_date', { ascending: false })
+            .limit(limit);
+
+        if (error) throw new Error(error.message);
+
+        return NextResponse.json({ success: true, expenses: data });
+    } catch (err: any) {
+        return NextResponse.json({ success: false, error: err.message }, { status: 500 });
     }
-
-    const adminClient = createAdminSupabaseClient();
-
-    // 2. Insert into the unified financial_transactions ledger
-    const { data, error } = await adminClient.from('financial_transactions').insert({
-      user_id: userId,
-      amount,
-      currency,
-      description,
-      merchant_name: merchantName || null,
-      category: category || 'Uncategorized',
-      source, // 'manual' or 'barcode_scan'
-      transaction_date: new Date().toISOString(),
-      is_pending: true, // Manual and Scanned are considered pending until reconciled with bank
-      reconciliation_status: 'unmatched'
-    }).select('id').single();
-
-    if (error || !data) {
-      throw new Error(error?.message || "Database insert failed");
-    }
-
-    return NextResponse.json({ success: true, transactionId: data.id });
-  } catch (error: any) {
-    console.error("[API] Error logging expense:", error);
-    return NextResponse.json({ 
-      success: false, 
-      error: error.message || 'Internal Server Error' 
-    }, { status: 500 });
-  }
 }

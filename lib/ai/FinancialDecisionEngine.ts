@@ -12,8 +12,27 @@ export class FinancialDecisionEngine {
    * The AI cannot modify, invent, or hallucinate financial transactions.
    */
   static async getDailyAdvisoryInsight(userId: string): Promise<string> {
-    // 1. Fetch the exact, authoritative ledger calculation
-    const budgetSummary: BudgetSummary = await BudgetEngine.calculateBudgetStatus(userId);
+    // 1. Resolve basic GeoContext for the user to satisfy BudgetEngine
+    let geo = { countryCode: 'US', currencyCode: 'USD', currencySymbol: '$' };
+    try {
+      const { createAdminSupabaseClient } = await import('../../lib/supabase-server');
+      const { BudgetNormalizationService } = await import('../financial/BudgetNormalizationService');
+      const supabase = createAdminSupabaseClient();
+      const { data: userSettings } = await supabase.from('user_settings').select('currency, country_code').eq('user_id', userId).maybeSingle();
+      if (userSettings?.currency) {
+        geo = {
+          countryCode: userSettings.country_code || 'US',
+          currencyCode: userSettings.currency,
+          currencySymbol: BudgetNormalizationService.getCurrencySymbol(userSettings.currency)
+        };
+      }
+    } catch (e) {
+      console.warn("Could not resolve geo context for AI decision engine:", e);
+    }
+    
+    // 2. Fetch the exact, authoritative ledger calculation
+    const budgetSummary: BudgetSummary | null = await BudgetEngine.calculateBudgetStatus(userId, geo);
+    if (!budgetSummary) return "Unable to generate insights.";
     
     // 2. Format a highly restrictive system prompt to keep the AI in its lane
     const systemPrompt = `

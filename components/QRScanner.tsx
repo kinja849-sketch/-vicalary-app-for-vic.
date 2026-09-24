@@ -1,6 +1,6 @@
 "use client"
 import { useEffect, useRef, useState } from 'react';
-import { X, RefreshCw } from 'lucide-react';
+import { X, RefreshCw, ArrowLeft } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { toast } from 'sonner';
 
@@ -16,7 +16,7 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
     const hasScannedRef = useRef(false);
     const isAnalyzingRef = useRef(isAnalyzing);
     const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
-    const [status, setStatus] = useState<'scanning' | 'detected'>('scanning');
+    const [status, setStatus] = useState<'scanning' | 'barcode_detected' | 'idle' | 'looking_up_product' | 'screening_boycott' | 'loading_nutrition' | 'loading_price' | 'ready' | 'product_not_found' | 'error'>('scanning');
 
     useEffect(() => {
         isAnalyzingRef.current = isAnalyzing;
@@ -56,7 +56,7 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
                     (decodedText) => {
                         if (hasScannedRef.current || isAnalyzingRef.current) return;
                         hasScannedRef.current = true;
-                        setStatus('detected');
+                        setStatus('barcode_detected'); console.log('[Scanner Debug]', { scannerState: 'barcode_detected', barcodeDetected: !!decodedText, barcodeValue: decodedText });;
                         html5QrCode.stop().catch(() => {});
                         
                         // Tiny delay for visual feedback before firing API
@@ -119,7 +119,7 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
     };
 
     return (
-        <div className="fixed inset-0 z-[100] bg-black flex flex-col items-center">
+        <div className="fixed inset-0 z-[1000] bg-black flex flex-col items-center">
             {/* Header / Actions */}
             <div className="absolute top-0 inset-x-0 z-10 flex items-center justify-between p-5 mt-10">
                 <button
@@ -132,7 +132,7 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
                     aria-label="Close scanner"
                     className="size-11 rounded-full bg-black/50 backdrop-blur-md text-white flex items-center justify-center border border-white/10"
                 >
-                    <X className="w-6 h-6" />
+                    <ArrowLeft className="w-6 h-6" />
                 </button>
 
                 <button
@@ -148,7 +148,7 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
             <div id="reader" className="w-full h-full max-h-screen relative overflow-hidden bg-black" style={{ height: '100dvh' }}>
             </div>
 
-            {/* Status indicator ?” bottom of screen */}
+            {/* Status indicator ?â€ bottom of screen */}
             <div className="absolute bottom-0 inset-x-0 pb-12 flex flex-col items-center gap-6 z-20">
                 {isAnalyzing ? (
                     <div className="flex flex-col items-center gap-4 bg-black/60 p-6 rounded-3xl backdrop-blur-md border border-white/10">
@@ -168,7 +168,7 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
                         </button>
                         
                         <div className="pointer-events-none">
-                            {status === 'detected' ? (
+                            {status === 'barcode_detected' ? (
                                 <div className="flex items-center gap-2 px-6 py-3 bg-emerald-500 rounded-full shadow-2xl">
                                     <div className="w-2.5 h-2.5 rounded-full bg-white animate-ping" />
                                     <span className="text-white font-black text-sm tracking-widest uppercase">
@@ -208,3 +208,5 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
         </div>
     );
 }
+
+

@@ -579,13 +579,19 @@ export default function ChatConversation() {
     }, [conversation, isAI, isSelf, profile, otherParticipant, otherUserProfile, isVirtual, virtualProfile, queryClient, user?.id, localActiveId]);
 
     const displayAvatar = useMemo(() => {
-        if (isAI) return '/app logo.png';
+        if (isAI) return '/app-logo.png';
         if (isSelf) return sanitizeMediaUrl(profile?.avatar_url);
         
         const rawP = isVirtual ? virtualProfile : (otherUserProfile || otherParticipant?.user_profiles);
         const p = Array.isArray(rawP) ? rawP[0] : rawP;
         
-        if (p?.avatar_url) return sanitizeMediaUrl(p.avatar_url);
+        if (p?.avatar_url) {
+            let sanitized = sanitizeMediaUrl(p.avatar_url);
+            if (sanitized?.includes('APP%20LOGO') || sanitized?.includes('APP LOGO')) {
+                return '/app-logo.png';
+            }
+            return sanitized;
+        }
         if (conversation?.display_avatar) return sanitizeMediaUrl(conversation.display_avatar);
         
         const cachedConvs = queryClient.getQueryData<any[]>(['conversations', user?.id]);
@@ -1894,12 +1900,36 @@ export default function ChatConversation() {
         );
     }
 
-    return (
-        <div className="flex flex-col h-[100dvh] bg-[#F0F2F5] dark:bg-[#111B21] transition-colors duration-300 overflow-hidden relative">
-            {/* Background Pattern Overlay */}
-            <div className="absolute inset-0 opacity-[0.06] pointer-events-none bg-[url('https://static.whatsapp.net/rsrc.php/v3/yl/r/gi_tyrZ_m8E.png')] dark:invert"></div>
+    if (!conversation && !isVirtual) {
+        return (
+            <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-[#F0F2F5] dark:bg-[#111B21]">
+                <div className="text-center p-6 bg-white dark:bg-[#202C33] rounded-3xl shadow-xl max-w-sm mx-4 border border-slate-100 dark:border-white/5">
+                    <div className="w-16 h-16 bg-red-100 dark:bg-red-500/20 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </div>
+                    <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Conversation Not Found</h2>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
+                        This conversation may have been deleted or is unavailable.
+                    </p>
+                    <button 
+                        onClick={() => router.push('/chat')}
+                        className="w-full py-3 bg-vic-green hover:bg-vic-green/90 text-white font-semibold rounded-xl transition-all"
+                    >
+                        Return to Chats
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
-            <div className="relative flex flex-col h-full z-10">
+    return (
+        <div className="absolute inset-0 z-50 flex flex-col bg-[#F0F2F5] dark:bg-[#111B21] transition-colors duration-300 overflow-hidden">
+            {/* Background Pattern Overlay */}
+            <div className="absolute inset-0 opacity-[0.06] pointer-events-none dark:invert"></div>
+
+            <div className="relative flex flex-col flex-1 h-full overflow-hidden">
                 {/* Header */}
                 <header className="shrink-0 h-[64px] bg-[#F0F2F5] dark:bg-[#202C33] border-b border-white/5 flex items-center px-4 gap-3 z-30 shadow-sm">
                     <button onClick={() => router.back()} className="p-2 -ml-2 text-[#54656F] dark:text-[#8696A0] hover:bg-black/5 dark:hover:bg-white/5 rounded-full">
@@ -1951,7 +1981,6 @@ export default function ChatConversation() {
                     }}>
                         <h2 className="text-[16px] font-semibold text-[#111B21] dark:text-[#e9edef] truncate flex items-center gap-1.5">
                             {displayName}
-                            {isAI && <span className="text-[9px] font-bold bg-vic-green/20 text-vic-green px-1.5 py-0.5 rounded-full">AI</span>}
                         </h2>
                         <div className="text-[13px] text-[#667781] dark:text-[#8696a0] truncate relative h-5 flex items-center">
                             {isProcessingVoice ? (
@@ -1961,7 +1990,7 @@ export default function ChatConversation() {
                             ) : otherUserOnline ? (
                                 <span className="text-vic-green font-medium">Online</span>
                             ) : isAI ? (
-                                <span>AI Coach</span>
+                                null
                             ) : isSelf ? (
                                 <span>Personal Workspace</span>
                             ) : (
@@ -1979,14 +2008,7 @@ export default function ChatConversation() {
 
                     <div className="flex items-center gap-2">
                         {isAI ? (
-                            <button
-                                onClick={() => setShowAiVoiceModal(true)}
-                                className="px-3 py-1.5 bg-vic-green/15 hover:bg-vic-green/25 text-vic-green rounded-full flex items-center gap-1.5 transition-all text-xs font-bold shadow-sm"
-                                title="Talk to Coach (Live Voice)"
-                            >
-                                <Sparkles size={16} className="animate-pulse" />
-                                <span>Talk to Coach</span>
-                            </button>
+                            null
                         ) : !isSelf ? (
                             <>
                                 <button onClick={() => handleStartCall('video')} className="p-2 text-[#54656F] dark:text-[#8696A0] hover:bg-black/5 rounded-full">

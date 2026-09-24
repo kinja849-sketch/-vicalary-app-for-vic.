@@ -35,12 +35,9 @@ export const BottomNavbar: React.FC = () => {
     const { notifications } = useNotificationStore();
     const unreadNotificationsCount = notifications.filter(n => !n.isRead).length;
 
-    // Hide navbar on certain pages
-    const hiddenPaths = ['/', '/auth', '/onboarding', '/phone-input', '/verification-code'];
-    const isChatDetail = pathname.startsWith('/chat/') && pathname !== '/chat';
-    const isExpertDetail = pathname.startsWith('/expert/');
-
-    if (hiddenPaths.includes(pathname) || isChatDetail || isExpertDetail) {
+    // Only show navbar on specific main pages
+    const allowedPaths = ['/dashboard', '/notifications', '/chat', '/settings'];
+    if (!allowedPaths.includes(pathname)) {
         return null;
     }
 

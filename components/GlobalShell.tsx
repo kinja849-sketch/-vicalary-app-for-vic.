@@ -89,8 +89,8 @@ export function GlobalShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  const hiddenPaths = ['/', '/auth', '/onboarding', '/phone-input', '/verification-code'];
-  const isNavbarVisible = !hiddenPaths.includes(pathname) && !isChatConversation && !pathname.startsWith('/expert/');
+  const allowedPaths = ['/dashboard', '/notifications', '/chat', '/settings'];
+  const isNavbarVisible = allowedPaths.includes(pathname);
 
   return (
     <div className="min-h-[100dvh] w-full bg-slate-100 dark:bg-slate-950 flex justify-center items-stretch">

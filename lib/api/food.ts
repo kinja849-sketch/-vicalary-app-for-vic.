@@ -239,18 +239,44 @@ export const saveFoodAnalysis = async (userId: string, analysis: any) => {
     const price = Number(analysis.price || analysis.estimated_price || 0);
     if (price > 0) {
         try {
+            // Resolve user's currency dynamically instead of hardcoding
+            let expenseCurrency = 'USD';
+            try {
+                const { data: userSettings } = await supabase
+                    .from('user_settings')
+                    .select('currency')
+                    .eq('user_id', userId)
+                    .single();
+                if (userSettings?.currency) {
+                    expenseCurrency = userSettings.currency;
+                } else {
+                    // Fallback: check budget profile currency
+                    const { data: budgetProfile } = await supabase
+                        .from('user_budget_profiles')
+                        .select('currency')
+                        .eq('user_id', userId)
+                        .limit(1)
+                        .maybeSingle();
+                    if (budgetProfile?.currency) {
+                        expenseCurrency = budgetProfile.currency;
+                    }
+                }
+            } catch (currErr) {
+                console.warn("[Food] Could not resolve user currency, defaulting to USD:", currErr);
+            }
+
             await supabase.from('financial_transactions').insert({
                 user_id: userId,
                 transaction_date: new Date().toISOString(),
                 amount: price,
-                currency: 'IDR', // Or derive from geo
+                currency: expenseCurrency,
                 category: 'Food & Dining',
+                merchant_name: analysis.name || 'Scanned Item',
                 description: `Purchase: ${analysis.name}`,
+                source: 'barcode_scan',
                 reconciliation_status: 'pending',
-                provider: 'scanner',
-                provider_category: 'barcode_scan'
-            });
-            console.log("Recorded scanner expense:", price);
+            } as any);
+            console.log(`[Food] Recorded scanner expense: ${expenseCurrency} ${price}`);
         } catch (txErr) {
             console.error("Failed to record scanner expense:", txErr);
         }

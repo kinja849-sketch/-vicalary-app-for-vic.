@@ -33,9 +33,9 @@ export type Database = {
         Relationships: []
       }
       user_budget_profiles: {
-        Row: { id: string; user_id: string; monthly_budget: number; }
-        Insert: { id?: string; user_id: string; monthly_budget: number; [key: string]: any }
-        Update: { id?: string; user_id?: string; monthly_budget?: number; [key: string]: any }
+        Row: { id: string; user_id: string; monthly_budget: number; currency: string; budget_source: string; financial_goal: string | null; is_normalized: boolean | null; original_amount: number | null; original_currency: string | null; exchange_rate_used: number | null; exchange_rate_source: string | null; normalized_at: string | null; created_at: string; updated_at: string; }
+        Insert: { id?: string; user_id: string; monthly_budget: number; currency?: string; budget_source?: string; financial_goal?: string | null; is_normalized?: boolean | null; original_amount?: number | null; original_currency?: string | null; exchange_rate_used?: number | null; exchange_rate_source?: string | null; normalized_at?: string | null; created_at?: string; updated_at?: string; [key: string]: any }
+        Update: { id?: string; user_id?: string; monthly_budget?: number; currency?: string; budget_source?: string; financial_goal?: string | null; is_normalized?: boolean | null; original_amount?: number | null; original_currency?: string | null; exchange_rate_used?: number | null; exchange_rate_source?: string | null; normalized_at?: string | null; created_at?: string; updated_at?: string; [key: string]: any }
         Relationships: []
       }
       product_price_cache: {

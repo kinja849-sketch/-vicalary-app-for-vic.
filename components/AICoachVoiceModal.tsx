@@ -525,10 +525,7 @@ export default function AICoachVoiceModal({
       console.error('[AICoachVoiceModal] AI processing error:', err);
       if (activeTurnIdRef.current === turnId) {
         activeTurnIdRef.current = null;
-        updateVoiceState('listening');
-        if (isMountedRef.current && !isMutedRef.current) {
-          startListening();
-        }
+        updateVoiceState('idle', 'API_ERROR_STOP');
       }
     }
   }, [conversationId, userId, resolvedUserName, voiceLang, speakText, playDirectAudio, updateVoiceState]);
@@ -776,27 +773,7 @@ export default function AICoachVoiceModal({
               </select>
             </div>
 
-            {/* Diagnostic HUD Toggle */}
-            <button
-              onClick={() => setShowDebugHUD(!showDebugHUD)}
-              className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase transition-all flex items-center gap-1 ${
-                showDebugHUD ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/30' : 'bg-white/10 text-slate-300 hover:text-white'
-              }`}
-              title="Toggle Mobile Voice Diagnostics"
-            >
-              <Activity size={12} />
-              <span>HUD</span>
-            </button>
           </div>
-
-          <button
-            onClick={handleClose}
-            className="p-2 bg-white/10 hover:bg-white/20 active:scale-95 rounded-full text-slate-300 hover:text-white transition-all"
-            title="Close voice mode"
-            aria-label="Close voice mode"
-          >
-            <X size={20} />
-          </button>
         </div>
 
         {/* Center Main Stage - 3D Organic Morphing Blob */}
@@ -902,38 +879,14 @@ export default function AICoachVoiceModal({
 
         {/* Minimalist Bottom Control Pill */}
         <div className="relative z-10 w-full max-w-xs flex items-center justify-center gap-4 pb-4">
-          {hasMicPermission && (
-            <div className="flex items-center gap-4 p-2 px-4 rounded-full bg-white/10 backdrop-blur-xl border border-white/10 shadow-2xl">
-              {/* Mute / Unmute Mic Button */}
-              <button
-                onClick={toggleMute}
-                className={`p-3 rounded-full transition-all duration-200 ${
-                  isMuted
-                    ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
-                    : 'bg-white/10 text-white hover:bg-white/20'
-                }`}
-                title={isMuted ? 'Unmute Mic' : 'Mute Mic'}
-              >
-                {isMuted ? <MicOff size={20} /> : <Mic size={20} />}
-              </button>
-
-              {/* Mute / Unmute Voice Output */}
-              <button
-                onClick={() => {
-                  if (!isAudioMuted) interruptAgent();
-                  setIsAudioMuted(!isAudioMuted);
-                }}
-                className={`p-3 rounded-full transition-all duration-200 ${
-                  isAudioMuted
-                    ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                    : 'bg-white/10 text-white hover:bg-white/20'
-                }`}
-                title={isAudioMuted ? 'Unmute Voice' : 'Mute Voice'}
-              >
-                {isAudioMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
-              </button>
-            </div>
-          )}
+          <button
+            onClick={handleClose}
+            className="p-4 bg-white/10 hover:bg-white/20 active:scale-95 rounded-full text-slate-300 hover:text-white transition-all shadow-xl backdrop-blur-xl border border-white/10"
+            title="Close voice mode"
+            aria-label="Close voice mode"
+          >
+            <X size={24} />
+          </button>
         </div>
       </motion.div>
     </AnimatePresence>

@@ -61,13 +61,40 @@ export const BankConnectionWidget = () => {
             const success = searchParams?.get('success');
             const errorParam = searchParams?.get('error');
             
-            if (connectionId || success) {
-                setConnectionState('syncing');
-                // Strip params from URL to prevent loop if user refreshes
-                router.replace('/budget', { scroll: false });
-            } else if (errorParam) {
+            if (errorParam) {
                 setConnectionState('error');
                 router.replace('/budget', { scroll: false });
+                return;
+            }
+            
+            if (connectionId || success) {
+                setConnectionState('syncing');
+                router.replace('/budget', { scroll: false });
+                
+                let attempts = 0;
+                const pollBanks = async () => {
+                    attempts++;
+                    try {
+                        const res = await fetch(`/api/banking/user-banks`, {
+                            credentials: 'include',
+                            headers: { 'Authorization': `Bearer ${session.access_token}` }
+                        });
+                        const data = await res.json();
+                        if (data.banks && data.banks.length > 0) {
+                            setConnectedAccount(data.banks[0]);
+                            setConnectionState('connected');
+                            return;
+                        }
+                    } catch (err) {}
+                    
+                    if (attempts < 5) {
+                        setTimeout(pollBanks, 3000);
+                    } else {
+                        setConnectionState('selecting_bank');
+                    }
+                };
+                pollBanks();
+                return;
             }
             
             try {
@@ -117,6 +144,50 @@ export const BankConnectionWidget = () => {
         fetchBanks();
     }, [countryCode, session]);
 
+    const [iframeUrl, setIframeUrl] = useState<string | null>(null);
+
+    useEffect(() => {
+        const handleMessage = (event: MessageEvent) => {
+            if (event.data?.type === 'FINVERSE_SUCCESS') {
+                setIframeUrl(null);
+                setConnectionState('syncing');
+                // Poll for banks immediately and every 3 seconds for 15 seconds
+                let attempts = 0;
+                const pollBanks = async () => {
+                    attempts++;
+                    try {
+                        const res = await fetch(`/api/banking/user-banks`, {
+                            credentials: 'include',
+                            headers: { 'Authorization': `Bearer ${session?.access_token}` }
+                        });
+                        const data = await res.json();
+                        if (data.banks && data.banks.length > 0) {
+                            setConnectedAccount(data.banks[0]);
+                            setConnectionState('connected');
+                            toast.success(t('bank_linked_success'));
+                            return;
+                        }
+                    } catch (e) {}
+                    
+                    if (attempts < 5) {
+                        setTimeout(pollBanks, 3000);
+                    } else {
+                        setConnectionState('selecting_bank');
+                        toast.error("Bank linked, but accounts didn't sync immediately. Please refresh later.");
+                    }
+                };
+                pollBanks();
+            } else if (event.data?.type === 'FINVERSE_ERROR') {
+                setIframeUrl(null);
+                setConnectionState('error');
+                toast.error(event.data.error || 'Bank connection failed.');
+            }
+        };
+
+        window.addEventListener('message', handleMessage);
+        return () => window.removeEventListener('message', handleMessage);
+    }, [session, t]);
+
     const handleConnect = async (bank: Bank) => {
         if (!user) return;
         setConnectionState('creating_session');
@@ -143,7 +214,7 @@ export const BankConnectionWidget = () => {
                     setConnectionState('error');
                 }
             } else {
-                // Strict Finverse Redirect Flow
+                // Strict Finverse Redirect Flow -> Now rendered in Iframe!
                 let endpoint = `/api/banking/${bank.provider}/create-link`;
                 if (!['finverse', 'plaid'].includes(bank.provider)) endpoint = '/api/banking/finverse/create-link';
                 
@@ -163,7 +234,8 @@ export const BankConnectionWidget = () => {
                     setConnectionState('connected');
                     toast.success(t('bank_linked_success'));
                 } else if (data.success && data.redirect_url) {
-                    window.location.href = data.redirect_url;
+                    setIframeUrl(data.redirect_url);
+                    setConnectionState('connecting');
                 } else {
                     toast.error(data.error || t('bank_secure_failed'));
                     setConnectionState('error');
@@ -277,12 +349,44 @@ export const BankConnectionWidget = () => {
 
     return (
         <div className="bg-white dark:bg-[#1f2c34] p-6 rounded-2xl border border-slate-200 dark:border-slate-800 mb-8 shadow-sm relative">
+            
+            {iframeUrl && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in">
+                    <div className="bg-white dark:bg-[#1f2c34] w-full max-w-md h-[80vh] sm:rounded-2xl flex flex-col overflow-hidden shadow-2xl relative">
+                        <div className="flex justify-between items-center p-4 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0d1418]">
+                            <h3 className="font-bold text-sm uppercase tracking-wider text-slate-900 dark:text-white">Secure Bank Login</h3>
+                            <button 
+                                onClick={() => {
+                                    setIframeUrl(null);
+                                    setConnectionState('selecting_bank');
+                                }} 
+                                className="text-slate-500 hover:text-slate-900 dark:hover:text-white text-sm font-bold"
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                        <iframe 
+                            src={iframeUrl} 
+                            className="w-full flex-1 bg-white" 
+                            allow="clipboard-write; camera; geolocation"
+                        />
+                    </div>
+                </div>
+            )}
+
             {plaidToken && (
                 <PlaidLinkHandler 
                     token={plaidToken} 
                     onSuccess={handlePlaidSuccess} 
                     onExit={handlePlaidExit} 
                 />
+            )}
+
+            {connectionState === 'syncing' && (
+                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-white/80 dark:bg-[#1f2c34]/80 backdrop-blur-sm rounded-2xl">
+                    <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-vic-green mb-3"></div>
+                    <p className="text-sm font-bold text-slate-700 dark:text-slate-300">Syncing Accounts...</p>
+                </div>
             )}
 
             <div className="flex items-center gap-2 mb-2 text-vic-green font-bold text-sm uppercase tracking-wider">

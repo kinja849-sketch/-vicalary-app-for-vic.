@@ -312,7 +312,9 @@ export default function Chat() {
       .map((c: any) => ({
         ...c,
         display_name: c.display_name || (c.name && c.name !== 'Direct Chat' ? c.name : null) || c.other_participant_info?.full_name || c.other_participant_info?.username || c.other_participant_info?.phone_number || 'User',
-        display_avatar: c.display_avatar || c.other_participant_info?.avatar_url || null,
+        display_avatar: (c.display_avatar?.includes('APP LOGO') || c.display_avatar?.includes('APP%20LOGO')) 
+            ? '/app-logo.png' 
+            : (c.display_avatar || c.other_participant_info?.avatar_url || null),
         display_phone: c.display_phone || c.other_participant_info?.phone_number || null
       }));
 

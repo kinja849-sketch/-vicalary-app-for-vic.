@@ -1,6 +1,6 @@
 "use client"
 import { useState, useEffect, useRef } from "react";
-import { X, SwitchCamera, Images, Camera, Sun, Moon, RefreshCw } from "lucide-react";
+import { X, SwitchCamera, Images, Camera, Sun, Moon, RefreshCw, ArrowLeft } from "lucide-react";
 import Link from "next/link"
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -672,7 +672,7 @@ export default function Dashboard() {
                 onClick={closeCamera}
                 className="size-10 rounded-full bg-black/20 backdrop-blur-2xl text-white flex items-center justify-center border border-white/10 hover:bg-black/40 transition-all active:scale-90"
               >
-                <X size={20} />
+                <ArrowLeft size={20} />
               </button>
               
               <div className="flex gap-3">
@@ -761,7 +761,7 @@ export default function Dashboard() {
           {countryFlag && (
             <div 
               className="absolute -bottom-0.5 -right-0.5 size-5 rounded-full overflow-hidden border-2 border-background-light dark:border-[#0d1418] shadow-[0_2px_6px_rgba(0,0,0,0.15)] dark:shadow-[0_2px_6px_rgba(255,255,255,0.08)] group-hover:shadow-[0_0_8px_rgba(19,236,55,0.3)] transition-all bg-slate-100 dark:bg-slate-800 flex items-center justify-center z-10"
-              title={`${country} • ${lang.toUpperCase()}`}
+              title={`${country} â€¢ ${lang.toUpperCase()}`}
             >
               <img src={countryFlag} alt={country} className="w-full h-full object-cover" />
             </div>
@@ -886,3 +886,4 @@ export default function Dashboard() {
     </div>
   );
 }
+

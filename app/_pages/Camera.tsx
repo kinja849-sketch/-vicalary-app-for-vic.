@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link"
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { Camera as CameraIcon, RotateCw, Check, X, Info, Zap, Scale, HeartPulse, Activity, AlertCircle, ShoppingCart, Globe, FlaskConical, MessageSquare, Pill, TriangleAlert, Dna, SwitchCamera } from "lucide-react";
+import { Camera as CameraIcon, RotateCw, Check, X, Info, Zap, Scale, HeartPulse, Activity, AlertCircle, ShoppingCart, Globe, FlaskConical, MessageSquare, Pill, TriangleAlert, Dna, SwitchCamera, ArrowLeft } from "lucide-react";
 import { analyzeFoodImage, scanProduct, saveFoodAnalysis } from "@/lib/api/food";
 import { useAnalysisStore } from "@/store/analysisStore";
 import { supabase } from "@/lib/supabase";
@@ -76,8 +76,12 @@ export default function Camera() {
     setStream(null);
   };
 
+  const [isSwitching, setIsSwitching] = useState(false);
+
   const switchCamera = async () => {
+    if (isSwitching) return;
     try {
+      setIsSwitching(true);
       // Enumerate all video input devices
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videoDevices = devices.filter(d => d.kind === 'videoinput');
@@ -88,6 +92,7 @@ export default function Camera() {
         setFacingMode(newFacing);
         stopCamera();
         await startCamera(newFacing);
+        setIsSwitching(false);
         return;
       }
 
@@ -107,6 +112,8 @@ export default function Camera() {
       await startCamera(nextFacing, nextDevice.deviceId);
     } catch (err) {
       console.error("switchCamera failed:", err);
+    } finally {
+      setIsSwitching(false);
     }
   };
 
@@ -239,7 +246,7 @@ export default function Camera() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-4 relative overflow-hidden">
+    <div className="h-full flex-1 w-full bg-slate-950 text-white flex flex-col relative overflow-hidden">
       {/* Background elements */}
       <div className="absolute top-0 left-0 w-full h-full opacity-10 pointer-events-none">
         <div className="absolute top-10 left-10 w-64 h-64 bg-vic-blue rounded-full blur-[120px]" />
@@ -253,7 +260,7 @@ export default function Camera() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="relative w-full max-w-lg aspect-[3/4] rounded-3xl overflow-hidden border-2 border-slate-800 shadow-2xl bg-black"
+            className="relative w-full h-full overflow-hidden bg-black flex-1"
           >
             <video
               ref={videoRef}
@@ -265,29 +272,43 @@ export default function Camera() {
             {/* Overlay elements */}
             <div className="absolute inset-0 border-[40px] border-black/20 pointer-events-none" />
 
+            {/* Top Left Close */}
+            <Link href="/dashboard" className="absolute top-8 left-6 p-3 bg-black/40 backdrop-blur-xl rounded-full border border-white/20 hover:bg-black/60 transition-all z-10">
+              <ArrowLeft className="w-6 h-6" />
+            </Link>
+
+            {/* Top Right Switch Camera */}
+            <button
+              onClick={switchCamera}
+              aria-label={facingMode === 'environment' ? 'Switch to front camera' : 'Switch to back camera'}
+              className="absolute top-8 right-6 p-3 bg-black/40 backdrop-blur-xl rounded-full border border-white/20 hover:bg-black/60 transition-all active:scale-90 z-10"
+            >
+              <SwitchCamera className="w-6 h-6" />
+            </button>
+
             {/* Mode Switcher */}
-            <div className="absolute top-8 left-1/2 -translate-x-1/2 flex bg-black/50 backdrop-blur-xl p-1 rounded-full border border-white/10">
+            <div className="absolute top-8 left-1/2 -translate-x-1/2 flex bg-black/50 backdrop-blur-xl p-1 rounded-full border border-white/10 z-10">
               <button
                 onClick={() => setScanMode("FOOD")}
-                className={`px-4 py-2 rounded-full text-xs font-bold transition-all ${scanMode === "FOOD" ? "bg-vic-blue text-white shadow-lg shadow-vic-blue/30" : "text-white/40 hover:text-white"}`}
+                className={`px-3 py-1.5 rounded-full text-[10px] sm:text-xs font-bold transition-all ${scanMode === "FOOD" ? "bg-vic-blue text-white shadow-lg shadow-vic-blue/30" : "text-white/40 hover:text-white"}`}
               >
-                MEAL SCAN
+                MEAL
               </button>
               <button
                 onClick={() => setScanMode("BARCODE")}
-                className={`px-4 py-2 rounded-full text-xs font-bold transition-all ${scanMode === "BARCODE" ? "bg-vic-green text-black shadow-lg shadow-vic-green/30" : "text-white/40 hover:text-white"}`}
+                className={`px-3 py-1.5 rounded-full text-[10px] sm:text-xs font-bold transition-all ${scanMode === "BARCODE" ? "bg-vic-green text-black shadow-lg shadow-vic-green/30" : "text-white/40 hover:text-white"}`}
               >
                 BARCODE
               </button>
               <button
                 onClick={() => setScanMode("MEDICATION")}
-                className={`px-4 py-2 rounded-full text-xs font-bold transition-all ${scanMode === "MEDICATION" ? "bg-purple-500 text-white shadow-lg shadow-purple-500/30" : "text-white/40 hover:text-white"}`}
+                className={`px-3 py-1.5 rounded-full text-[10px] sm:text-xs font-bold transition-all ${scanMode === "MEDICATION" ? "bg-purple-500 text-white shadow-lg shadow-purple-500/30" : "text-white/40 hover:text-white"}`}
               >
                 MEDIC
               </button>
             </div>
 
-            <div className={`absolute top-24 left-1/2 -translate-x-1/2 px-4 py-2 bg-black/50 backdrop-blur-md rounded-full border border-white/10 flex items-center gap-2 ${scanMode === 'BARCODE' ? 'border-vic-green/30' : scanMode === 'MEDICATION' ? 'border-purple-500/30' : 'border-vic-blue/30'}`}>
+            <div className={`absolute top-24 left-1/2 -translate-x-1/2 px-4 py-2 bg-black/50 backdrop-blur-md rounded-full border border-white/10 flex items-center gap-2 z-10 ${scanMode === 'BARCODE' ? 'border-vic-green/30' : scanMode === 'MEDICATION' ? 'border-purple-500/30' : 'border-vic-blue/30'}`}>
               {scanMode === 'MEDICATION' ? <Pill className="w-4 h-4 animate-pulse text-purple-400" /> : <Zap className={`w-4 h-4 animate-pulse ${scanMode === 'BARCODE' ? 'text-vic-green' : 'text-vic-blue'}`} />}
               <span className={`text-[10px] font-black uppercase tracking-widest ${scanMode === 'BARCODE' ? 'text-vic-green' : scanMode === 'MEDICATION' ? 'text-purple-400' : 'text-vic-blue'}`}>
                 {scanMode === 'BARCODE' ? 'Barcode Auto-Scan Active' : scanMode === 'MEDICATION' ? 'Medication NDC Scanner' : 'Live Meal Analysis'}
@@ -296,7 +317,7 @@ export default function Camera() {
 
             {/* Scanning Frame for Barcode */}
             {scanMode === "BARCODE" && (
-              <div className="absolute inset-0 flex items-center justify-center">
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
                 <div className="w-64 h-48 border-2 border-vic-green/30 rounded-2xl relative">
                   <div className="absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 border-vic-green rounded-tl-lg" />
                   <div className="absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 border-vic-green rounded-tr-lg" />
@@ -311,11 +332,7 @@ export default function Camera() {
               </div>
             )}
 
-            <div className="absolute bottom-12 left-1/2 -translate-x-1/2 flex items-center gap-6">
-              <Link href="/dashboard" className="p-4 bg-white/10 backdrop-blur-xl rounded-full border border-white/20 hover:bg-white/20 transition-all">
-                <X className="w-6 h-6" />
-              </Link>
-
+            <div className="absolute bottom-12 left-1/2 -translate-x-1/2 flex items-center justify-center z-10 w-full px-6">
               {scanMode === "FOOD" && (
                 <button
                   onClick={takePhoto}
@@ -324,15 +341,6 @@ export default function Camera() {
                   <div className="w-16 h-16 rounded-full border-2 border-white/40" />
                 </button>
               )}
-
-              {/* Camera facing switch — always visible while camera is live */}
-              <button
-                onClick={switchCamera}
-                aria-label={facingMode === 'environment' ? 'Switch to front camera' : 'Switch to back camera'}
-                className="p-4 bg-white/10 backdrop-blur-xl rounded-full border border-white/20 hover:bg-white/20 transition-all active:scale-90"
-              >
-                <SwitchCamera className="w-6 h-6" />
-              </button>
             </div>
           </motion.div>
         ) : isAnalyzing ? (

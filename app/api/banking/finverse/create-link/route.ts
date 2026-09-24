@@ -71,8 +71,10 @@ export async function POST(request: Request) {
             const provider = new FinverseProvider();
             const customerToken = await provider.getCustomerToken();
 
+            const FINVERSE_API_URL = process.env.FINVERSE_API_URL || 'https://api.prod.finverse.net';
+
             // Create Link Token / URL
-            const response = await fetch('https://api.prod.finverse.net/link/token', {
+            const response = await fetch(`${FINVERSE_API_URL}/link/token`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

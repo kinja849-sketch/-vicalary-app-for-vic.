@@ -4,16 +4,20 @@ import { supabase } from '../supabase'
 // BUDGET MANAGEMENT (V2 ARCHITECTURE)
 // ============================================================================
 
-export const getBudgetStatus = async (userId: string) => {
+export const getBudgetStatus = async (userId: string, clientCurrency?: string, clientCountry?: string) => {
     const { data: { session } } = await supabase.auth.getSession();
     
+    const headers: Record<string, string> = {
+        'Authorization': session ? `Bearer ${session.access_token}` : ''
+    };
+    if (clientCurrency) headers['x-user-currency'] = clientCurrency;
+    if (clientCountry) headers['x-user-country'] = clientCountry;
+
     // In V2 Architecture, the backend's deterministic BudgetEngine is responsible for
     // returning the daily budget status, fetching from user_budget_profiles and financial_transactions.
     const res = await fetch('/api/budget/daily', {
         method: 'GET',
-        headers: {
-            'Authorization': session ? `Bearer ${session.access_token}` : ''
-        }
+        headers
     });
     
     if (!res.ok) {

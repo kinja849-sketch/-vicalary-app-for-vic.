@@ -10,7 +10,7 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 const FINVERSE_CUSTOMER_APP_ID = process.env.FINVERSE_CUSTOMER_APP_ID;
 const FINVERSE_CLIENT_ID = process.env.FINVERSE_CLIENT_ID;
 const FINVERSE_CLIENT_SECRET = process.env.FINVERSE_CLIENT_SECRET;
-const FINVERSE_API_URL = 'https://api.prod.finverse.net';
+const FINVERSE_API_URL = process.env.FINVERSE_API_URL || 'https://api.prod.finverse.net';
 
 export class FinverseProvider implements BankingProvider {
   readonly id = 'finverse';

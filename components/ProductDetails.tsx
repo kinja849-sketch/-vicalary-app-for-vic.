@@ -280,7 +280,27 @@ export function ProductDetails({
                             </p>
                         )}
                     </div>
-
+                    
+                    {!is_compliant ? (
+                        <div className="space-y-6">
+                            <h2 className="text-xl font-black text-rose-600 dark:text-rose-400">This product is flagged.</h2>
+                            <p className="text-slate-600 dark:text-slate-400">
+                                This brand or company has been flagged by your active boycott campaigns. We recommend choosing an alternative.
+                            </p>
+                            
+                            {cheaper_alternatives && cheaper_alternatives.length > 0 && (
+                                <div className="space-y-4">
+                                    <h3 className="font-bold text-slate-800 dark:text-white">Recommended Alternatives</h3>
+                                    {cheaper_alternatives.map((alt: any, idx: number) => (
+                                        <div key={idx} className="bg-slate-100 dark:bg-white/5 p-4 rounded-xl">
+                                            <p className="font-bold">{alt.name}</p>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                    <>
                     {/* 2. Description Paragraphs */}
                     {description && (
                         <div className="space-y-4">
@@ -439,6 +459,8 @@ export function ProductDetails({
                                 ))}
                             </div>
                         </div>
+                    )}
+                    </>
                     )}
                 </main>
 

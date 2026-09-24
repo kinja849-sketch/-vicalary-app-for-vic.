@@ -22,11 +22,11 @@ async function handleCallback(request: Request) {
         }
 
         if (errorMsg) {
-             return NextResponse.redirect(new URL(`/budget?error=${encodeURIComponent(errorMsg)}`, request.url));
+             throw new Error(`Finverse Error: ${errorMsg}`);
         }
 
         if (!code) {
-             return NextResponse.redirect(new URL('/budget?error=MissingCode', request.url));
+             throw new Error('Missing authorization code from Finverse.');
         }
 
         let stateUserId = '';
@@ -68,22 +68,22 @@ async function handleCallback(request: Request) {
         }
 
         if (!finalUserId) {
-            return NextResponse.redirect(new URL('/budget?error=UnauthorizedSession', request.url));
+            throw new Error('UnauthorizedSession');
         }
 
         if (stateUserId && stateUserId !== finalUserId) {
-            return NextResponse.redirect(new URL('/budget?error=SessionMismatch', request.url));
+            throw new Error('SessionMismatch');
         }
 
         const supabase = require('@/lib/supabase-server').createAdminSupabaseClient();
         
         // 1. Exchange the code for a Login Identity Token
-        const FINVERSE_API_URL = 'https://api.prod.finverse.net';
+        const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+        const FINVERSE_API_URL = process.env.FINVERSE_API_URL || 'https://api.prod.finverse.net';
         const { FinverseProvider } = require('@/lib/financial/providers/FinverseProvider');
         const finverse = new FinverseProvider();
         const customerToken = await finverse.getCustomerToken();
         
-        const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
         const redirectUri = `${siteUrl}/api/banking/finverse/callback`;
 
         const tokenRes = await fetch(`${FINVERSE_API_URL}/auth/token`, {
@@ -158,11 +158,47 @@ async function handleCallback(request: Request) {
             }
         }
 
-        return NextResponse.redirect(new URL(`/budget?success=true&connection_id=${connection.id}`, request.url));
+        const successHtml = `
+            <!DOCTYPE html>
+            <html>
+            <head><title>Success</title></head>
+            <body>
+                <script>
+                    if (window.parent && window.parent !== window) {
+                        window.parent.postMessage({ type: 'FINVERSE_SUCCESS', connection_id: '${connection.id}' }, '*');
+                    } else if (window.opener) {
+                        window.opener.postMessage({ type: 'FINVERSE_SUCCESS', connection_id: '${connection.id}' }, '*');
+                        window.close();
+                    } else {
+                        window.location.href = '/budget?success=true&connection_id=${connection.id}';
+                    }
+                </script>
+            </body>
+            </html>
+        `;
+        return new NextResponse(successHtml, { headers: { 'Content-Type': 'text/html' } });
 
     } catch (err: any) {
         console.error("Finverse callback error:", err);
-        return NextResponse.redirect(new URL(`/budget?error=${encodeURIComponent(err.message)}`, request.url));
+        const errorHtml = `
+            <!DOCTYPE html>
+            <html>
+            <head><title>Error</title></head>
+            <body>
+                <script>
+                    if (window.parent && window.parent !== window) {
+                        window.parent.postMessage({ type: 'FINVERSE_ERROR', error: '${err.message.replace(/'/g, "\\'")}' }, '*');
+                    } else if (window.opener) {
+                        window.opener.postMessage({ type: 'FINVERSE_ERROR', error: '${err.message.replace(/'/g, "\\'")}' }, '*');
+                        window.close();
+                    } else {
+                        window.location.href = '/budget?error=${encodeURIComponent(err.message)}';
+                    }
+                </script>
+            </body>
+            </html>
+        `;
+        return new NextResponse(errorHtml, { headers: { 'Content-Type': 'text/html' }, status: 500 });
     }
 }
 
