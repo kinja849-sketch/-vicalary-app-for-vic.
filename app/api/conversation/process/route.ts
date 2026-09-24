@@ -57,18 +57,39 @@ export async function POST(req: NextRequest) {
       : client;
 
     // Verify user owns / participates in the conversation
-    const { data: participant, error: partError } = await dbClient
-      .from('conversation_participants')
-      .select('id')
-      .eq('conversation_id', conversation_id)
-      .eq('user_id', targetUserId)
-      .maybeSingle();
+    const isVirtualAi = conversation_id === 'ai-coach' ||
+      String(conversation_id).startsWith('new-') ||
+      String(conversation_id).includes('00000000-0000-0000-0000-000000000001');
 
-    if (partError || !participant) {
-      return NextResponse.json(
-        { error: 'Forbidden: You do not have access to this conversation' },
-        { status: 403 }
-      );
+    let resolvedConvId = conversation_id;
+
+    if (!isVirtualAi) {
+      const { data: participant, error: partError } = await dbClient
+        .from('conversation_participants')
+        .select('id')
+        .eq('conversation_id', conversation_id)
+        .eq('user_id', targetUserId)
+        .maybeSingle();
+
+      if (partError || !participant) {
+        return NextResponse.json(
+          { error: 'Forbidden: You do not have access to this conversation' },
+          { status: 403 }
+        );
+      }
+    } else {
+      // Find active AI coach conversation for this user if one already exists
+      const { data: existingAiPart } = await dbClient
+        .from('conversation_participants')
+        .select('conversation_id, conversations!inner(conversation_type)')
+        .eq('user_id', targetUserId)
+        .eq('conversations.conversation_type', 'ai')
+        .limit(1)
+        .maybeSingle();
+
+      if (existingAiPart?.conversation_id) {
+        resolvedConvId = existingAiPart.conversation_id;
+      }
     }
 
     if (body.stream) {
@@ -81,7 +102,7 @@ export async function POST(req: NextRequest) {
         try {
           await processConversationStream(dbClient, {
             userId: targetUserId,
-            conversationId: conversation_id,
+            conversationId: resolvedConvId,
             userMessage: content,
             mediaUrl: media_url,
             locationContext: location_context,
@@ -111,7 +132,7 @@ export async function POST(req: NextRequest) {
 
     const result = await processConversation(dbClient, {
       userId: targetUserId,
-      conversationId: conversation_id,
+      conversationId: resolvedConvId,
       userMessage: content,
       mediaUrl: media_url,
       locationContext: location_context,

@@ -52,8 +52,9 @@ export interface ProcessConversationResult {
 export type VoiceStreamEvent =
   | { type: 'thinking' }
   | { type: 'first_audio'; audioBase64: string; text: string; metrics: { firstSentenceMs: number; ttsDurationMs: number; totalTurnMs: number } }
+  | { type: 'audio'; audioBase64: string; text: string; metrics: { firstSentenceMs: number; ttsDurationMs: number; totalTurnMs: number } }
   | { type: 'text_chunk'; text: string }
-  | { type: 'done'; fullText: string; metrics: { firstSentenceMs: number; ttsDurationMs: number; totalTurnMs: number } }
+  | { type: 'done'; fullText: string; audioBase64?: string; metrics: { firstSentenceMs: number; ttsDurationMs: number; totalTurnMs: number } }
   | { type: 'error'; error: string };
 
 export async function processConversationStream(
@@ -72,12 +73,14 @@ export async function processConversationStream(
     // 1. Classify Intent
     const classification: IntentClassification = classifyIntentFast(userMessage);
 
-    // 2. Dynamic Context Assembly
+    // 2. Dynamic Context Assembly (skip slow external tools in voiceMode unless specifically required)
     let profileContext: UserProfileContext | null = null;
     let mealPlanContext: MealPlanContext | null = null;
     let budgetContext: BudgetContext | null = null;
     let affiliationContext: AffiliationRecord | null = null;
     let toolResults: ToolExecutionResult[] = [];
+
+    const shouldRunExternalTools = !voiceMode || classification.requires_external_search;
 
     const [
       profileRes,
@@ -101,7 +104,7 @@ export async function processConversationStream(
           classification.requires_budget_snapshot ? loadBudgetContext(supabase, userId) : Promise.resolve(null),
           classification.requires_affiliation_lookup ? loadAffiliationContext(supabase, classification.extracted_entity || userMessage) : Promise.resolve(null),
           loadRecentConversationHistory(supabase, conversationId, 4),
-          routeAndExecuteTools({ userMessage, locationContext })
+          shouldRunExternalTools ? routeAndExecuteTools({ userMessage, locationContext }) : Promise.resolve([])
         ]);
 
     profileContext = profileRes;
@@ -142,7 +145,7 @@ export async function processConversationStream(
     }
     messagesPayload.push({ role: 'user', content: userMessage });
 
-    // 5. Stream from OpenAI and synthesize first sentence immediately
+    // 5. Stream response from OpenAI and synthesize complete spoken response
     const apiKey = process.env.OPENAI_API_KEY || process.env.NEXT_PUBLIC_OPENAI_API_KEY;
     const model = process.env.OPENAI_MODEL || process.env.NEXT_PUBLIC_OPENAI_MODEL || 'gpt-4o-mini';
 
@@ -168,8 +171,8 @@ export async function processConversationStream(
       body: JSON.stringify({
         model,
         messages: messagesPayload,
-        temperature: 0.2,
-        max_tokens: 90,
+        temperature: 0.3,
+        max_tokens: 350,
         stream: true
       }),
       signal: controller.signal
@@ -183,13 +186,8 @@ export async function processConversationStream(
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let fullText = '';
-    let firstSentence = '';
-    let firstSentenceDispatched = false;
-    let ttsPromise: Promise<string | null> | null = null;
-    let firstSentenceMs = 0;
-    let ttsStartMs = 0;
-
     let buffer = '';
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -205,35 +203,8 @@ export async function processConversationStream(
           try {
             const parsed = JSON.parse(trimmed.slice(6));
             const delta = parsed.choices?.[0]?.delta?.content || '';
-            fullText += delta;
-
-            if (!firstSentenceDispatched) {
-              const cleaned = fullText.replace(/[*#_~`>]/g, '');
-              const match = cleaned.match(/^([^.!?\n]+[.!?\n])/);
-              if (match && match[1].trim().length >= 15) {
-                firstSentence = match[1].trim();
-                firstSentenceDispatched = true;
-                firstSentenceMs = Date.now() - startTime;
-                ttsStartMs = Date.now();
-                console.log(`[AI] First sentence synthesized in ${firstSentenceMs}ms: "${firstSentence}"`);
-                
-                // Synthesize audio and dispatch event as soon as ready
-                ttsPromise = synthesizeVoiceAudio(firstSentence);
-                ttsPromise.then((audioBase64) => {
-                  if (audioBase64) {
-                    const ttsDurationMs = Date.now() - ttsStartMs;
-                    const totalTurnMs = Date.now() - startTime;
-                    console.log(`[TTS STREAM] First audio event dispatched in ${totalTurnMs}ms (TTS: ${ttsDurationMs}ms)`);
-                    onEvent({
-                      type: 'first_audio',
-                      audioBase64,
-                      text: firstSentence,
-                      metrics: { firstSentenceMs, ttsDurationMs, totalTurnMs }
-                    });
-                  }
-                }).catch(err => console.warn('[TTS STREAM] Error:', err));
-              }
-            } else {
+            if (delta) {
+              fullText += delta;
               onEvent({ type: 'text_chunk', text: delta });
             }
           } catch (e) {}
@@ -242,37 +213,28 @@ export async function processConversationStream(
     }
     clearTimeout(timeoutId);
 
-    // If first sentence was not dispatched by punctuation, fallback to full text
-    if (!firstSentenceDispatched) {
-      firstSentence = fullText.trim();
-      firstSentenceMs = Date.now() - startTime;
-      ttsStartMs = Date.now();
-      const audioBase64 = await synthesizeVoiceAudio(firstSentence);
-      const ttsDurationMs = Date.now() - ttsStartMs;
-      const totalTurnMs = Date.now() - startTime;
-      if (audioBase64) {
-        onEvent({
-          type: 'first_audio',
-          audioBase64,
-          text: firstSentence,
-          metrics: { firstSentenceMs, ttsDurationMs, totalTurnMs }
-        });
-      }
-    }
-
-    if (ttsPromise) {
-      await ttsPromise;
-    }
-
     const finalFullText = formatConversationalOutput(fullText.trim());
+    const ttsStartMs = Date.now();
+    const fullAudioBase64 = await synthesizeVoiceAudio(finalFullText);
+    const ttsDurationMs = Date.now() - ttsStartMs;
     const totalTurnMs = Date.now() - startTime;
+
+    if (fullAudioBase64) {
+      onEvent({
+        type: 'audio',
+        audioBase64: fullAudioBase64,
+        text: finalFullText,
+        metrics: { firstSentenceMs: 0, ttsDurationMs, totalTurnMs }
+      });
+    }
 
     onEvent({
       type: 'done',
       fullText: finalFullText,
+      audioBase64: fullAudioBase64 || undefined,
       metrics: {
-        firstSentenceMs,
-        ttsDurationMs: ttsStartMs ? Date.now() - ttsStartMs : 0,
+        firstSentenceMs: 0,
+        ttsDurationMs,
         totalTurnMs
       }
     });
@@ -356,7 +318,7 @@ export async function processConversation(
           classification.requires_budget_snapshot ? loadBudgetContext(supabase, userId) : Promise.resolve(null),
           classification.requires_affiliation_lookup ? loadAffiliationContext(supabase, classification.extracted_entity || userMessage) : Promise.resolve(null),
           loadRecentConversationHistory(supabase, conversationId, 4),
-          routeAndExecuteTools({ userMessage, locationContext })
+          (voiceMode && !classification.requires_external_search) ? Promise.resolve([]) : routeAndExecuteTools({ userMessage, locationContext })
         ]);
 
     profileContext = profileRes;
@@ -402,8 +364,8 @@ export async function processConversation(
     // 5. Generate Model Response (Streaming First Sentence in Voice Mode)
     if (voiceMode) {
       const voiceResult = await generateStreamingVoiceTurn(messagesPayload, {
-        maxTokens: 90,
-        temperature: 0.2
+        maxTokens: 350,
+        temperature: 0.3
       });
 
       const finalContent = formatConversationalOutput(voiceResult.fullText);
@@ -563,7 +525,8 @@ Rule: When asked about the date, day, month, time, or year, ALWAYS answer accura
   if (voiceMode) {
     prompt += `\n[VOICE MODE - CRITICAL DIRECTIVES]:
 - You are speaking directly to the user in a live audio conversation.
-- Speak in 1 to 2 crisp, direct, conversational sentences maximum.
+- Comprehensively answer all questions asked by the user in a cohesive, natural spoken manner. Do not drop, omit, or ignore parts of multi-part questions.
+- Keep answers natural, warm, and conversational (typically 2 to 4 spoken sentences). Avoid robotic brevity or excessive length.
 - NEVER use markdown, bullet points, asterisks, numbered lists, emoji headers, or code blocks.
 - Speak naturally and confidently.
 - If asked about allergies or dietary restrictions, state them directly from the profile immediately.
@@ -679,8 +642,8 @@ async function generateStreamingVoiceTurn(
       body: JSON.stringify({
         model,
         messages,
-        temperature: options?.temperature ?? 0.2,
-        max_tokens: options?.maxTokens ?? 90,
+        temperature: options?.temperature ?? 0.3,
+        max_tokens: options?.maxTokens ?? 350,
         stream: true
       }),
       signal: controller.signal
@@ -694,13 +657,8 @@ async function generateStreamingVoiceTurn(
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let fullText = '';
-    let firstSentence = '';
-    let firstSentenceFound = false;
-    let ttsPromise: Promise<string | null> | null = null;
-    let firstSentenceMs = 0;
-    let ttsStartMs = 0;
-
     let buffer = '';
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -716,43 +674,25 @@ async function generateStreamingVoiceTurn(
           try {
             const parsed = JSON.parse(trimmed.slice(6));
             const delta = parsed.choices?.[0]?.delta?.content || '';
-            fullText += delta;
-
-            if (!firstSentenceFound) {
-              const cleaned = fullText.replace(/[*#_~`>]/g, '');
-              const match = cleaned.match(/^([^.!?\n]+[.!?\n])/);
-              if (match && match[1].trim().length >= 15) {
-                firstSentence = match[1].trim();
-                firstSentenceFound = true;
-                firstSentenceMs = Date.now() - startTime;
-                ttsStartMs = Date.now();
-                console.log(`[AI] First sentence synthesized in ${firstSentenceMs}ms: "${firstSentence}"`);
-                ttsPromise = synthesizeVoiceAudio(firstSentence);
-              }
-            }
+            if (delta) fullText += delta;
           } catch (e) {}
         }
       }
     }
 
-    if (!firstSentenceFound) {
-      firstSentence = fullText.trim();
-      firstSentenceMs = Date.now() - startTime;
-      ttsStartMs = Date.now();
-      ttsPromise = synthesizeVoiceAudio(firstSentence);
-    }
-
-    const ttsAudio = ttsPromise ? await ttsPromise : null;
-    const ttsDurationMs = ttsStartMs ? Date.now() - ttsStartMs : 0;
+    const finalFullText = formatConversationalOutput(fullText.trim());
+    const ttsStartMs = Date.now();
+    const ttsAudio = await synthesizeVoiceAudio(finalFullText);
+    const ttsDurationMs = Date.now() - ttsStartMs;
     const totalTurnMs = Date.now() - startTime;
 
-    console.log(`[TTS] First audio synthesized in ${ttsDurationMs}ms (Total turn latency: ${totalTurnMs}ms)`);
+    console.log(`[TTS] Audio synthesized in ${ttsDurationMs}ms (Total turn latency: ${totalTurnMs}ms)`);
 
     return {
-      fullText: fullText.trim() || "I'm listening. How can I help you today?",
+      fullText: finalFullText || "I'm listening. How can I help you today?",
       firstSentenceAudioBase64: ttsAudio || undefined,
       metrics: {
-        firstSentenceMs,
+        firstSentenceMs: 0,
         ttsDurationMs,
         totalTurnMs
       }
@@ -809,7 +749,7 @@ async function synthesizeVoiceAudio(text: string): Promise<string | null> {
   if (!apiKey || apiKey.includes('placeholder')) return null;
 
   try {
-    const spokenText = formatForSpeech(text).slice(0, 400);
+    const spokenText = formatForSpeech(text).slice(0, 1500);
     const response = await fetch('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
       headers: {

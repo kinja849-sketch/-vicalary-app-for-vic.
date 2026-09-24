@@ -111,12 +111,16 @@
     @apply border-border;
   }
 
+  html,
   body {
     @apply bg-background text-foreground;
     font-family: "Epilogue", "Inter", sans-serif;
     min-height: 100vh;
     margin: 0;
     overflow-x: hidden;
+    overscroll-behavior: none;
+    touch-action: pan-y;
+    -webkit-text-size-adjust: 100%;
   }
 
   :where(p, span, li, h1, h2, h3, h4, h5, h6, a, button, label, td, th) {

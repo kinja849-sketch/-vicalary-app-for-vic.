@@ -242,13 +242,14 @@ export default function Onboarding() {
 
   useEffect(() => {
     if (!authLoading) {
-      if (!user) {
+      const isPreview = typeof window !== 'undefined' && (new URLSearchParams(window.location.search).get('preview') === 'true');
+      if (!user && !isPreview) {
         router.push("/auth");
-      } else {
+      } else if (user) {
         // Check if profile exists, and sync if not
         getUserProfile(user.id).then(profile => {
           if (profile) {
-            if (profile.onboarding_completed) {
+            if (profile.onboarding_completed && !isPreview) {
               router.push("/dashboard");
             }
           } else if (!syncAttempted) {
@@ -520,7 +521,7 @@ export default function Onboarding() {
               <button
                 onClick={handleContinue}
                 disabled={saveMutation.isPending}
-                className="continue-btn flex cursor-pointer items-center justify-center overflow-hidden rounded-2xl h-16 px-8 w-full max-w-md bg-white text-vic-blue text-lg font-bold leading-normal tracking-[0.015em] shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all active:translate-y-0.5 disabled:opacity-50 mx-auto"
+                className="continue-btn flex cursor-pointer items-center justify-center overflow-hidden rounded-2xl h-16 px-8 w-full max-w-md bg-vic-blue hover:bg-vic-blue/90 text-white text-lg font-black leading-normal tracking-wide shadow-xl shadow-vic-blue/25 hover:shadow-2xl hover:-translate-y-0.5 transition-all active:scale-[0.98] disabled:opacity-50 mx-auto"
               >
                 <span className="truncate">
                   {saveMutation.isPending ? "..." : currentStep === questions.length - 1 ? t('finish') : t('continue')}
@@ -554,7 +555,7 @@ function AgeSelector({ value, yearsLabel, onChange }: { value?: number, yearsLab
   return (
     <div className="flex flex-col items-center justify-center w-full max-w-sm space-y-6 select-none touch-manipulation">
       {/* High-visibility Age Display */}
-      <div className="bg-white/95 backdrop-blur-md rounded-3xl p-6 shadow-xl border-2 border-vic-blue/10 w-full text-center">
+      <div className="bg-white/95 backdrop-blur-md rounded-3xl p-6 shadow-xl border-2 border-vic-blue/15 ring-2 ring-vic-blue/5 w-full text-center">
         <span className="text-xs uppercase tracking-widest text-vic-blue/60 font-black block mb-1">Selected Age</span>
         <div className="text-vic-blue text-5xl font-black flex items-baseline justify-center gap-2">
           {age}
@@ -562,14 +563,16 @@ function AgeSelector({ value, yearsLabel, onChange }: { value?: number, yearsLab
         </div>
       </div>
 
-      {/* Slider Control with Non-Interactive Visual Direction Guides */}
+      {/* Slider Control with Interactive Direction Buttons */}
       <div className="flex items-center gap-3 w-full px-2">
-        <div
-          className="size-11 rounded-2xl bg-white/80 text-vic-blue/60 shadow-sm flex items-center justify-center font-black pointer-events-none select-none shrink-0"
-          aria-hidden="true"
+        <button
+          type="button"
+          onClick={() => onChange(Math.max(18, age - 1))}
+          className="size-11 rounded-2xl bg-white text-vic-blue shadow-md hover:bg-vic-blue/5 hover:scale-105 active:scale-95 flex items-center justify-center font-black select-none shrink-0 transition-all cursor-pointer border border-vic-blue/10"
+          aria-label="Decrease age"
         >
           <Minus size={20} />
-        </div>
+        </button>
 
         <div className="flex-1 relative flex items-center">
           <input
@@ -586,12 +589,14 @@ function AgeSelector({ value, yearsLabel, onChange }: { value?: number, yearsLab
           />
         </div>
 
-        <div
-          className="size-11 rounded-2xl bg-white/80 text-vic-blue/60 shadow-sm flex items-center justify-center font-black pointer-events-none select-none shrink-0"
-          aria-hidden="true"
+        <button
+          type="button"
+          onClick={() => onChange(Math.min(90, age + 1))}
+          className="size-11 rounded-2xl bg-white text-vic-blue shadow-md hover:bg-vic-blue/5 hover:scale-105 active:scale-95 flex items-center justify-center font-black select-none shrink-0 transition-all cursor-pointer border border-vic-blue/10"
+          aria-label="Increase age"
         >
           <Plus size={20} />
-        </div>
+        </button>
       </div>
     </div>
   );
@@ -704,7 +709,7 @@ function NumberSlider({
   return (
     <div className="flex flex-col items-center justify-center w-full max-w-sm space-y-6 select-none touch-manipulation">
       {/* Unit Toggle & Display Card */}
-      <div className="bg-white/95 backdrop-blur-md rounded-3xl p-6 shadow-xl border-2 border-vic-blue/10 w-full relative">
+      <div className="bg-white/95 backdrop-blur-md rounded-3xl p-6 shadow-xl border-2 border-vic-blue/15 ring-2 ring-vic-blue/5 w-full relative">
         <div className="flex justify-between items-center mb-2">
           <span className="text-xs uppercase tracking-widest text-vic-blue/60 font-black">Value</span>
           {/* Unit Toggle */}
@@ -754,14 +759,16 @@ function NumberSlider({
         </div>
       </div>
 
-      {/* Slider Control with Non-Interactive Visual Direction Guides */}
+      {/* Slider Control with Interactive Direction Buttons */}
       <div className="flex items-center gap-3 w-full px-2">
-        <div
-          className="size-11 rounded-2xl bg-white/80 text-vic-blue/60 shadow-sm flex items-center justify-center font-black pointer-events-none select-none shrink-0"
-          aria-hidden="true"
+        <button
+          type="button"
+          onClick={() => onChange(Math.max(min, rawValue - 1))}
+          className="size-11 rounded-2xl bg-white text-vic-blue shadow-md hover:bg-vic-blue/5 hover:scale-105 active:scale-95 flex items-center justify-center font-black select-none shrink-0 transition-all cursor-pointer border border-vic-blue/10"
+          aria-label="Decrease value"
         >
           <Minus size={20} />
-        </div>
+        </button>
 
         <div className="flex-1 relative flex items-center">
           <input
@@ -778,12 +785,14 @@ function NumberSlider({
           />
         </div>
 
-        <div
-          className="size-11 rounded-2xl bg-white/80 text-vic-blue/60 shadow-sm flex items-center justify-center font-black pointer-events-none select-none shrink-0"
-          aria-hidden="true"
+        <button
+          type="button"
+          onClick={() => onChange(Math.min(max, rawValue + 1))}
+          className="size-11 rounded-2xl bg-white text-vic-blue shadow-md hover:bg-vic-blue/5 hover:scale-105 active:scale-95 flex items-center justify-center font-black select-none shrink-0 transition-all cursor-pointer border border-vic-blue/10"
+          aria-label="Increase value"
         >
           <Plus size={20} />
-        </div>
+        </button>
       </div>
     </div>
   );
@@ -834,7 +843,7 @@ function SliderInput({
   return (
     <div className="flex flex-col items-center justify-center w-full max-w-sm space-y-6 select-none touch-manipulation">
       {/* Visual Highlight Card with High Contrast Display */}
-      <div className="bg-white/95 backdrop-blur-md rounded-3xl p-6 shadow-xl border-2 border-vic-blue/10 w-full text-center relative overflow-hidden">
+      <div className="bg-white/95 backdrop-blur-md rounded-3xl p-6 shadow-xl border-2 border-vic-blue/15 ring-2 ring-vic-blue/5 w-full text-center relative overflow-hidden">
         {isCurrency && (
           <div className="absolute top-3 right-3 p-2 bg-vic-green/20 rounded-full text-vic-blue">
             <Wallet size={16} />
@@ -863,14 +872,16 @@ function SliderInput({
         )}
       </div>
 
-      {/* Slider Control with Non-Interactive Visual Direction Guides */}
+      {/* Slider Control with Interactive Direction Buttons */}
       <div className="flex items-center gap-3 w-full px-2">
-        <div
-          className="size-11 rounded-2xl bg-white/80 text-vic-blue/60 shadow-sm flex items-center justify-center font-black pointer-events-none select-none shrink-0"
-          aria-hidden="true"
+        <button
+          type="button"
+          onClick={() => onChange(Math.max(min, rawValue - step))}
+          className="size-11 rounded-2xl bg-white text-vic-blue shadow-md hover:bg-vic-blue/5 hover:scale-105 active:scale-95 flex items-center justify-center font-black select-none shrink-0 transition-all cursor-pointer border border-vic-blue/10"
+          aria-label="Decrease value"
         >
           <Minus size={20} />
-        </div>
+        </button>
 
         <div className="flex-1 relative flex items-center">
           <input
@@ -887,12 +898,14 @@ function SliderInput({
           />
         </div>
 
-        <div
-          className="size-11 rounded-2xl bg-white/80 text-vic-blue/60 shadow-sm flex items-center justify-center font-black pointer-events-none select-none shrink-0"
-          aria-hidden="true"
+        <button
+          type="button"
+          onClick={() => onChange(Math.min(max, rawValue + step))}
+          className="size-11 rounded-2xl bg-white text-vic-blue shadow-md hover:bg-vic-blue/5 hover:scale-105 active:scale-95 flex items-center justify-center font-black select-none shrink-0 transition-all cursor-pointer border border-vic-blue/10"
+          aria-label="Increase value"
         >
           <Plus size={20} />
-        </div>
+        </button>
       </div>
 
       {/* Min / Max bounds */}
@@ -937,7 +950,7 @@ function RangeSlider({
   return (
     <div className="flex flex-col items-center justify-center w-full max-w-sm space-y-6 select-none touch-manipulation">
       {/* High Visibility Card */}
-      <div className="bg-white/95 backdrop-blur-md rounded-3xl p-6 shadow-xl border-2 border-vic-blue/10 w-full text-center">
+      <div className="bg-white/95 backdrop-blur-md rounded-3xl p-6 shadow-xl border-2 border-vic-blue/15 ring-2 ring-vic-blue/5 w-full text-center">
         <span className="text-xs uppercase tracking-widest text-vic-blue/60 font-black block mb-1">Target Change</span>
         <div className="text-vic-blue text-4xl sm:text-5xl font-black flex items-baseline justify-center gap-2">
           {rawValue > 0 ? `+${rawValue}` : rawValue}
@@ -948,14 +961,16 @@ function RangeSlider({
         </div>
       </div>
 
-      {/* Slider with Non-Interactive Visual Direction Guides */}
+      {/* Slider with Interactive Direction Buttons */}
       <div className="flex items-center gap-3 w-full px-2">
-        <div
-          className="size-11 rounded-2xl bg-white/80 text-vic-blue/60 shadow-sm flex items-center justify-center font-black pointer-events-none select-none shrink-0"
-          aria-hidden="true"
+        <button
+          type="button"
+          onClick={() => onChange(Math.max(min, Number((rawValue - step).toFixed(1))))}
+          className="size-11 rounded-2xl bg-white text-vic-blue shadow-md hover:bg-vic-blue/5 hover:scale-105 active:scale-95 flex items-center justify-center font-black select-none shrink-0 transition-all cursor-pointer border border-vic-blue/10"
+          aria-label="Decrease target"
         >
           <Minus size={20} />
-        </div>
+        </button>
 
         <div className="flex-1 relative flex items-center">
           <input
@@ -972,12 +987,14 @@ function RangeSlider({
           />
         </div>
 
-        <div
-          className="size-11 rounded-2xl bg-white/80 text-vic-blue/60 shadow-sm flex items-center justify-center font-black pointer-events-none select-none shrink-0"
-          aria-hidden="true"
+        <button
+          type="button"
+          onClick={() => onChange(Math.min(max, Number((rawValue + step).toFixed(1))))}
+          className="size-11 rounded-2xl bg-white text-vic-blue shadow-md hover:bg-vic-blue/5 hover:scale-105 active:scale-95 flex items-center justify-center font-black select-none shrink-0 transition-all cursor-pointer border border-vic-blue/10"
+          aria-label="Increase target"
         >
           <Plus size={20} />
-        </div>
+        </button>
       </div>
     </div>
   );

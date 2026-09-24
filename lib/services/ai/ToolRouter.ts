@@ -188,8 +188,8 @@ export async function routeAndExecuteTools(context: ToolRoutingContext): Promise
   const lowerMsg = userMessage.toLowerCase();
   const results: ToolExecutionResult[] = [];
 
-  // Detect current events, research, live facts, or world news intent
-  const isCurrentEventOrNews = /(news|today|yesterday|recently|recent|happening|happened|current|latest|gaza|israel|ukraine|indonesia|event|stock price|election|breaking|president|minister|research|study|studies|weather|who is|who won|update|trends|what is going on|situation in)/i.test(lowerMsg);
+  // Detect genuine current events, breaking news, or external events (excluding routine queries with 'today' or 'recent')
+  const isCurrentEventOrNews = /\b(breaking news|world news|current events|stock price|election results|who won the|conflict in|situation in|latest study on|weather in)\b/i.test(lowerMsg);
   
   // Detect location / nearby places intent
   const isLocationPlacesQuery = /(nearest|near me|nearby|where can i find|supermarket|grocery store|gym|pharmacy|halal food|restaurant near|where am i|my current location|my location|what city|what country|where do i live|where am i located)/i.test(lowerMsg);

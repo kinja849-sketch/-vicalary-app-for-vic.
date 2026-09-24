@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import { GlobalProviders } from "@/components/GlobalProviders";
 import "./global.css";
@@ -10,6 +10,15 @@ export const metadata: Metadata = {
     icon: "/app logo.png",
     apple: "/app logo.png",
   },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({

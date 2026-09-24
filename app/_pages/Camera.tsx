@@ -58,53 +58,26 @@ export default function Camera({ initialMode }: CameraProps = {}) {
     };
   }, []);
 
-  const startCamera = async (facing: 'environment' | 'user' = 'environment', deviceId?: string) => {
+  const startCamera = async (facing: 'environment' | 'user' = 'environment') => {
     try {
-      stopCamera();
+      const oldStream = streamRef.current;
 
-      // Brief delay to allow hardware resources to fully release
-      await new Promise(r => setTimeout(r, 80));
-
-      let mediaStream: MediaStream | null = null;
-
-      // 1. Try with specific deviceId if provided (using ideal constraints so it never throws OverconstrainedError)
-      if (deviceId) {
-        try {
-          mediaStream = await requestCameraAccess({
-            video: {
-              deviceId: { ideal: deviceId },
-              facingMode: { ideal: facing },
-              width: { ideal: 1920 },
-              height: { ideal: 1080 },
-            },
-            audio: false,
-          });
-        } catch (e) {
-          console.warn("Camera start with deviceId failed, falling back to facingMode:", e);
-        }
-      }
-
-      // 2. Fallback: Request using ideal facingMode
-      if (!mediaStream) {
-        try {
-          mediaStream = await requestCameraAccess({
-            video: {
-              facingMode: { ideal: facing },
-              width: { ideal: 1920 },
-              height: { ideal: 1080 },
-            },
-            audio: false,
-          });
-        } catch (e) {
-          console.warn("Camera start with ideal constraints failed, falling back to basic facingMode:", e);
-          mediaStream = await requestCameraAccess({
-            video: { facingMode: facing },
-            audio: false,
-          });
-        }
-      }
+      const mediaStream = await requestCameraAccess({
+        video: {
+          facingMode: { ideal: facing },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+        audio: false,
+      });
 
       if (!mediaStream) return;
+
+      if (oldStream && oldStream !== mediaStream) {
+        oldStream.getTracks().forEach(track => {
+          try { track.stop(); } catch (e) {}
+        });
+      }
 
       streamRef.current = mediaStream;
       setStream(mediaStream);
@@ -144,34 +117,23 @@ export default function Camera({ initialMode }: CameraProps = {}) {
       setIsSwitching(true);
       const targetFacing: 'environment' | 'user' = facingMode === 'environment' ? 'user' : 'environment';
 
-      let targetDeviceId: string | undefined;
-
-      // Check available video devices to locate a matching sensor by keyword
-      if (typeof navigator !== 'undefined' && navigator.mediaDevices?.enumerateDevices) {
+      // 1. First attempt in-place track constraint switch (zero permissions, instant flip)
+      const currentTrack = streamRef.current?.getVideoTracks()?.[0];
+      if (currentTrack && typeof currentTrack.applyConstraints === 'function') {
         try {
-          const devices = await navigator.mediaDevices.enumerateDevices();
-          const videoDevices = devices.filter(d => d.kind === 'videoinput');
-
-          if (videoDevices.length > 1) {
-            const frontKeywords = ['front', 'user', 'selfie', 'face', 'facetime'];
-            const backKeywords = ['back', 'rear', 'environment', 'world', 'main'];
-            const keywords = targetFacing === 'user' ? frontKeywords : backKeywords;
-
-            const matched = videoDevices.find(d =>
-              keywords.some(k => d.label.toLowerCase().includes(k))
-            );
-
-            if (matched && matched.deviceId) {
-              targetDeviceId = matched.deviceId;
-            }
-          }
+          await currentTrack.applyConstraints({
+            facingMode: { ideal: targetFacing }
+          });
+          setFacingMode(targetFacing);
+          return;
         } catch (e) {
-          console.warn("Device enumeration during switchCamera warning:", e);
+          // If in-place constraint switch is not supported by device, fall through to stream switch
         }
       }
 
+      // 2. Direct facingMode stream switch keeping existing session permission intact
       setFacingMode(targetFacing);
-      await startCamera(targetFacing, targetDeviceId);
+      await startCamera(targetFacing);
     } catch (err) {
       console.error("switchCamera failed:", err);
       toast.error("Failed to switch camera direction");

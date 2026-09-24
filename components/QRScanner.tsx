@@ -34,25 +34,7 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
 
         const startScanner = async () => {
             try {
-                let cameraSelection: any = { facingMode: facingMode };
-
-                // Intelligently find deviceId by label if multiple cameras exist
-                try {
-                    const cameras = await Html5Qrcode.getCameras();
-                    if (cameras && cameras.length > 1) {
-                        const frontKeywords = ['front', 'user', 'selfie', 'face'];
-                        const backKeywords = ['back', 'rear', 'environment', 'world', 'main'];
-                        const keywords = facingMode === 'user' ? frontKeywords : backKeywords;
-                        const matched = cameras.find(c =>
-                            keywords.some(k => c.label.toLowerCase().includes(k))
-                        );
-                        if (matched && matched.id) {
-                            cameraSelection = matched.id;
-                        }
-                    }
-                } catch (e) {
-                    console.warn("Could not query getCameras:", e);
-                }
+                const cameraSelection: any = { facingMode: { ideal: facingMode } };
 
                 if (!isMounted) return;
 

@@ -1925,11 +1925,11 @@ export default function ChatConversation() {
     }
 
     return (
-        <div className="absolute inset-0 z-50 flex flex-col bg-[#F0F2F5] dark:bg-[#111B21] transition-colors duration-300 overflow-hidden">
+        <div className="fixed inset-0 max-w-[480px] mx-auto z-50 flex flex-col bg-[#F0F2F5] dark:bg-[#111B21] transition-colors duration-300 overflow-hidden touch-pan-y overscroll-none select-none">
             {/* Background Pattern Overlay */}
             <div className="absolute inset-0 opacity-[0.06] pointer-events-none dark:invert"></div>
 
-            <div className="relative flex flex-col flex-1 h-full overflow-hidden">
+            <div className="relative flex flex-col flex-1 h-full overflow-hidden w-full max-w-full">
                 {/* Header */}
                 <header className="shrink-0 h-[64px] bg-[#F0F2F5] dark:bg-[#202C33] border-b border-white/5 flex items-center px-4 gap-3 z-30 shadow-sm">
                     <button onClick={() => router.back()} className="p-2 -ml-2 text-[#54656F] dark:text-[#8696A0] hover:bg-black/5 dark:hover:bg-white/5 rounded-full">
@@ -2008,7 +2008,14 @@ export default function ChatConversation() {
 
                     <div className="flex items-center gap-2">
                         {isAI ? (
-                            null
+                            <button 
+                                onClick={() => setShowAiVoiceModal(true)} 
+                                className="p-2 text-vic-green hover:bg-vic-green/10 rounded-full transition-colors flex items-center justify-center"
+                                aria-label="Start Voice Call with Health Coach"
+                                title="Talk with Vee"
+                            >
+                                <Phone size={22} className="text-vic-green" />
+                            </button>
                         ) : !isSelf ? (
                             <>
                                 <button onClick={() => handleStartCall('video')} className="p-2 text-[#54656F] dark:text-[#8696A0] hover:bg-black/5 rounded-full">
@@ -2174,8 +2181,8 @@ export default function ChatConversation() {
                 </main>
 
                 {/* Input Footer */}
-                <footer className="px-3 md:px-4 py-2 bg-[#F0F2F5] dark:bg-[#202c33] flex items-end gap-2 relative z-40 pb-safe shrink-0">
-                    <div className="flex-1 flex items-end gap-2 w-full max-w-[1200px] mx-auto min-w-0">
+                <footer className="px-3 md:px-4 py-2 bg-[#F0F2F5] dark:bg-[#202c33] flex items-end gap-2 relative z-40 pb-safe shrink-0 w-full max-w-[480px] mx-auto">
+                    <div className="flex-1 flex items-end gap-2 w-full max-w-[480px] mx-auto min-w-0">
                         {(!conversation && !isVirtual) ? (
                             <div className="w-full flex items-center justify-center p-4 text-slate-500 text-sm">
                                 <div className="animate-spin size-5 border-2 border-vic-green border-t-transparent rounded-full"></div>
@@ -2215,7 +2222,7 @@ export default function ChatConversation() {
                                             if (inputRef.current) inputRef.current.style.height = 'auto';
                                         }
                                     }}
-                                    className="flex-1 bg-transparent border-none py-2 px-1 text-[15px] leading-[20px] focus:ring-0 text-[#111B21] dark:text-[#D1D7DB] placeholder-[#667781] resize-none max-h-[100px] min-h-[38px] outline-none min-w-0"
+                                    className="flex-1 bg-transparent border-none py-2 px-1 text-[16px] leading-[20px] focus:ring-0 text-[#111B21] dark:text-[#D1D7DB] placeholder-[#667781] resize-none max-h-[100px] min-h-[38px] outline-none min-w-0"
                                 />
                             </div>
                         )}
@@ -2223,7 +2230,7 @@ export default function ChatConversation() {
                         <div className="flex items-center gap-2 relative shrink-0">
                             {/* Recording Preview Overlay */}
                             {recordingStatus === 'preview' && recordedAudio && (
-                                <div className="absolute bottom-[60px] right-0 left-[-300px] md:left-[-400px] bg-white dark:bg-[#202c33] p-3 rounded-2xl shadow-2xl border border-black/10 dark:border-white/10 flex items-center gap-4 animate-in slide-in-from-bottom-2">
+                                <div className="absolute bottom-[60px] inset-x-0 bg-white dark:bg-[#202c33] p-3 rounded-2xl shadow-2xl border border-black/10 dark:border-white/10 flex items-center gap-4 animate-in slide-in-from-bottom-2">
                                     <button
                                         onClick={discardRecording}
                                         className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors"

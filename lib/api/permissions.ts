@@ -10,8 +10,12 @@ export const checkPermission = async (name: PermissionName): Promise<PermissionS
             localStorage.getItem(`permission_${name}`) === 'granted'
         );
 
+        // Persistent grant priority: Once allowed, never ask or revert to prompt
+        if (isGrantedInStorage) {
+            return 'granted';
+        }
+
         if (typeof window === 'undefined' || !navigator.permissions || !navigator.permissions.query) {
-            if (isGrantedInStorage) return 'granted';
             const cached = localStorage.getItem(`permission_${name}`);
             if (cached === 'denied') return 'denied';
             return 'prompt';
@@ -30,10 +34,6 @@ export const checkPermission = async (name: PermissionName): Promise<PermissionS
             return 'denied';
         }
 
-        if (isGrantedInStorage) {
-            return 'granted';
-        }
-
         localStorage.setItem(`permission_${name}`, result.state);
         return result.state as PermissionStatus;
     } catch (e) {
@@ -50,17 +50,22 @@ export const checkPermission = async (name: PermissionName): Promise<PermissionS
 };
 
 export const requestCameraAccess = async (options: MediaStreamConstraints = { video: { facingMode: 'environment' } }) => {
-    const status = await checkPermission('camera' as any);
+    const isGrantedInStorage = typeof window !== 'undefined' && (
+        localStorage.getItem('has_granted_camera') === 'true' || localStorage.getItem('permission_camera') === 'granted'
+    );
 
-    if (status === 'denied') {
-        const lastAlert = sessionStorage.getItem('camera_denied_alert');
-        if (!lastAlert) {
-            toast.error("Camera access is blocked. Please enable it in your browser settings.", {
-                duration: 5000
-            });
-            sessionStorage.setItem('camera_denied_alert', 'true');
+    if (!isGrantedInStorage) {
+        const status = await checkPermission('camera' as any);
+        if (status === 'denied') {
+            const lastAlert = sessionStorage.getItem('camera_denied_alert');
+            if (!lastAlert) {
+                toast.error("Camera access is blocked. Please enable it in your browser settings.", {
+                    duration: 5000
+                });
+                sessionStorage.setItem('camera_denied_alert', 'true');
+            }
+            throw new Error('Permission denied');
         }
-        throw new Error('Permission denied');
     }
 
     try {

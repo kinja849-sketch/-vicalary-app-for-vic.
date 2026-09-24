@@ -86,6 +86,7 @@ export default function AICoachVoiceModal({
   const abortControllerRef = useRef<AbortController | null>(null);
   const sessionTurnsRef = useRef<{ role: 'user' | 'assistant'; content: string; created_at: string }[]>([]);
   const startListeningRef = useRef<() => void>(() => {});
+  const pendingSpokenTextRef = useRef<string>('');
 
   // Mobile Web Audio unlocker (Triggered on early user gestures)
   const unlockAudioContext = useCallback(async () => {
@@ -385,6 +386,7 @@ export default function AICoachVoiceModal({
       try { recognitionRef.current.abort(); } catch (e) {}
     }
 
+    pendingSpokenTextRef.current = '';
     updateVoiceState('processing');
     setLiveInterim('');
     setDebugHUD(prev => ({
@@ -486,10 +488,10 @@ export default function AICoachVoiceModal({
             if (trimmed.startsWith('data: ')) {
               try {
                 const event = JSON.parse(trimmed.slice(6));
-                if (event.type === 'first_audio' && event.audioBase64 && !hasStartedAudio && activeTurnIdRef.current === turnId) {
+                if ((event.type === 'first_audio' || event.type === 'audio') && event.audioBase64 && !hasStartedAudio && activeTurnIdRef.current === turnId) {
                   hasStartedAudio = true;
                   const timeToAudio = Math.round(performance.now() - reqStartTime);
-                  console.log(`[VOICE TURN ${turnId}] 3. First audio chunk received (${timeToAudio}ms ⚡)`, event.metrics);
+                  console.log(`[VOICE TURN ${turnId}] 3. Audio payload received (${timeToAudio}ms ⚡)`, event.metrics);
                   setDebugHUD(prev => ({
                     ...prev,
                     apiStatus: '200 OK (Stream)',
@@ -503,6 +505,18 @@ export default function AICoachVoiceModal({
                   replyText = event.fullText;
                   const serverDuration = Math.round(performance.now() - reqStartTime);
                   console.log(`[VOICE TURN ${turnId}] 4. Complete turn finished in ${serverDuration}ms:`, event.metrics);
+                  if (event.audioBase64 && !hasStartedAudio && activeTurnIdRef.current === turnId) {
+                    hasStartedAudio = true;
+                    setDebugHUD(prev => ({
+                      ...prev,
+                      apiStatus: '200 OK (Stream)',
+                      latencyMs: serverDuration,
+                      audioStatus: 'Playing ⚡'
+                    }));
+                    if (isMountedRef.current && !isAudioMutedRef.current) {
+                      playDirectAudio(event.audioBase64, turnId).catch(err => console.error('[AICoachVoiceModal] Audio play error:', err));
+                    }
+                  }
                 }
               } catch (e) {}
             }
@@ -603,25 +617,27 @@ export default function AICoachVoiceModal({
           return;
         }
 
-        let interimText = '';
-        let finalText = '';
+        let fullTranscript = '';
+        let interimTranscript = '';
         let confidenceScore = 0.95;
 
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
+        // Process ALL result segments from index 0 so earlier finalized sentences are never dropped
+        for (let i = 0; i < event.results.length; ++i) {
           const res = event.results[i];
           const part = res[0]?.transcript || '';
           if (res[0]?.confidence) {
             confidenceScore = res[0].confidence;
           }
           if (res.isFinal) {
-            finalText += part;
+            fullTranscript += (fullTranscript ? ' ' : '') + part.trim();
           } else {
-            interimText += part;
+            interimTranscript += (interimTranscript ? ' ' : '') + part.trim();
           }
         }
 
-        const currentText = (finalText || interimText).trim();
+        const currentText = (fullTranscript + (interimTranscript ? ' ' + interimTranscript : '')).trim();
         if (currentText) {
+          pendingSpokenTextRef.current = currentText;
           setLiveInterim(currentText);
           console.log(`[VOICE turn_${turnIdRef.current}] Lang: ${voiceLang} | Live: "${currentText}" (${Math.round(confidenceScore * 100)}%)`);
         }
@@ -629,7 +645,7 @@ export default function AICoachVoiceModal({
         if (isMountedRef.current && currentText.length >= 2) {
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 
-          // 850ms natural breathing cadence VAD silence detection
+          // 1400ms natural breathing cadence VAD silence detection to allow multi-part questions
           silenceTimerRef.current = setTimeout(() => {
             if (
               voiceStateRef.current === 'listening' &&
@@ -637,11 +653,13 @@ export default function AICoachVoiceModal({
               isMountedRef.current
             ) {
               try { recognition.abort(); } catch (e) {}
-              const normalized = normalizeSpokenInput(currentText);
+              const toProcess = pendingSpokenTextRef.current || currentText;
+              pendingSpokenTextRef.current = '';
+              const normalized = normalizeSpokenInput(toProcess);
               console.log(`[VOICE turn_${turnIdRef.current}] Finalized: "${normalized}" (${voiceLang})`);
               processUserSpeech(normalized);
             }
-          }, 850);
+          }, 1400);
         }
       };
 
@@ -668,6 +686,21 @@ export default function AICoachVoiceModal({
 
       recognition.onend = () => {
         if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+
+        const pendingText = pendingSpokenTextRef.current.trim();
+        if (
+          pendingText.length >= 2 &&
+          voiceStateRef.current === 'listening' &&
+          activeTurnIdRef.current === null &&
+          isMountedRef.current
+        ) {
+          pendingSpokenTextRef.current = '';
+          const normalized = normalizeSpokenInput(pendingText);
+          console.log(`[VOICE turn_${turnIdRef.current}] Finalized on recognition.onend: "${normalized}"`);
+          processUserSpeech(normalized);
+          return;
+        }
+
         if (
           isMountedRef.current &&
           voiceStateRef.current === 'listening' &&

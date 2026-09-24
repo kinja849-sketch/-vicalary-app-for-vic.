@@ -212,71 +212,37 @@ export default function Dashboard() {
       setIsSwitchingCamera(true);
       const targetFacing: "user" | "environment" = facingMode === "environment" ? "user" : "environment";
 
-      if (cameraStreamRef.current) {
-        cameraStreamRef.current.getTracks().forEach(track => {
-          try {
-            track.stop();
-          } catch (e) {}
-        });
-        cameraStreamRef.current = null;
-      }
-      if (cameraVideoRef.current) {
-        cameraVideoRef.current.srcObject = null;
-      }
-
-      await new Promise(r => setTimeout(r, 80));
-
-      let targetDeviceId: string | undefined;
-
-      // Check available video devices to locate a matching sensor by keyword
-      if (typeof navigator !== 'undefined' && navigator.mediaDevices?.enumerateDevices) {
+      // 1. First attempt in-place track constraint switch (zero permissions, instant flip)
+      const currentTrack = cameraStreamRef.current?.getVideoTracks()?.[0];
+      if (currentTrack && typeof currentTrack.applyConstraints === 'function') {
         try {
-          const devices = await navigator.mediaDevices.enumerateDevices();
-          const videoDevices = devices.filter(d => d.kind === 'videoinput');
-
-          if (videoDevices.length > 1) {
-            const frontKeywords = ['front', 'user', 'selfie', 'face', 'facetime'];
-            const backKeywords = ['back', 'rear', 'environment', 'world', 'main'];
-            const keywords = targetFacing === 'user' ? frontKeywords : backKeywords;
-
-            const matched = videoDevices.find(d =>
-              keywords.some(k => d.label.toLowerCase().includes(k))
-            );
-
-            if (matched && matched.deviceId) {
-              targetDeviceId = matched.deviceId;
-            }
-          }
+          await currentTrack.applyConstraints({
+            facingMode: { ideal: targetFacing }
+          });
+          setFacingMode(targetFacing);
+          return;
         } catch (e) {
-          console.warn("Device enumeration during switchCamera warning:", e);
+          // Fall through to seamless stream switch
         }
       }
 
+      // 2. Direct facingMode stream switch keeping existing session permission intact
+      const oldStream = cameraStreamRef.current;
       setFacingMode(targetFacing);
 
-      let stream: MediaStream | null = null;
-      if (targetDeviceId) {
-        try {
-          stream = await requestCameraAccess({
-            video: {
-              deviceId: { ideal: targetDeviceId },
-              facingMode: { ideal: targetFacing },
-              width: { ideal: 1920 },
-              height: { ideal: 1080 },
-            }
-          });
-        } catch (e) {
-          console.warn("Switch camera with ideal deviceId failed, falling back to facingMode:", e);
+      const stream = await requestCameraAccess({
+        video: {
+          facingMode: { ideal: targetFacing },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
         }
-      }
+      });
 
-      if (!stream) {
-        stream = await requestCameraAccess({
-          video: {
-            facingMode: { ideal: targetFacing },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-          }
+      if (!stream) return;
+
+      if (oldStream && oldStream !== stream) {
+        oldStream.getTracks().forEach(track => {
+          try { track.stop(); } catch (e) {}
         });
       }
 
