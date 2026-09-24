@@ -16,6 +16,7 @@ import { routeAndExecuteTools, ToolExecutionResult } from './ToolRouter';
 import { formatForSpeech } from './SpeechFormatter';
 
 const COACH_ID = '00000000-0000-0000-0000-000000000001';
+export const DEFAULT_COACH_VOICE = 'nova';
 
 export interface ProcessConversationInput {
   userId: string;

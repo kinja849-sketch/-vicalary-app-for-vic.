@@ -1,13 +1,15 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, MicOff, Volume2, VolumeX, X, ShieldCheck, Activity } from 'lucide-react';
+import { Mic, X, Activity, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { useTranslation } from '@/lib/api/translation';
 import { supabase } from '@/lib/supabase';
-import HealthCoachSphere from '@/components/avatar/HealthCoachSphere';
+import HealthCoachAvatar, { CoachState } from '@/components/avatar/HealthCoachAvatar';
+import { permissionManager } from '@/lib/services/PermissionManager';
+import { normalizeSpokenInput } from '@/lib/services/ai/SpeechNormalizer';
+import { DEFAULT_COACH_VOICE } from '@/lib/services/ai/ConversationOrchestrator';
 
 interface AICoachVoiceModalProps {
   userId: string;
@@ -17,27 +19,42 @@ interface AICoachVoiceModalProps {
   onClose: () => void;
 }
 
-import { normalizeSpokenInput } from '@/lib/services/ai/SpeechNormalizer';
-
-type ConversationState = 'idle' | 'listening' | 'transcribing' | 'processing' | 'speaking' | 'error';
-
 interface TurnMetricsHUD {
   turnId: string | null;
-  state: ConversationState;
+  state: CoachState;
   heard: string;
   apiStatus: string;
   latencyMs: number | null;
   audioStatus: string;
 }
 
-const ALLOWED_TRANSITIONS: Record<ConversationState, ConversationState[]> = {
-  idle: ['listening', 'error'],
-  listening: ['transcribing', 'processing', 'idle', 'error'],
-  transcribing: ['processing', 'listening', 'idle', 'error'],
-  processing: ['speaking', 'error', 'idle'],
-  speaking: ['listening', 'idle', 'error'],
+const COACH_ID = '00000000-0000-0000-0000-000000000001';
+
+const ALLOWED_TRANSITIONS: Record<CoachState, CoachState[]> = {
+  idle: ['listening', 'thinking', 'speaking', 'error'],
+  listening: ['thinking', 'speaking', 'idle', 'error'],
+  thinking: ['searching', 'preparing', 'speaking', 'idle', 'error'],
+  searching: ['preparing', 'speaking', 'idle', 'error'],
+  preparing: ['speaking', 'idle', 'error'],
+  speaking: ['idle', 'listening', 'error'],
   error: ['idle', 'listening']
 };
+
+/**
+ * Classifies whether a user query requires web search / live tool lookups (strictly search queries)
+ */
+function isSearchOrToolQuery(text: string): boolean {
+  const lower = text.toLowerCase().trim();
+
+  // Explicit keywords that require web search, weather, recipes, prices, location, or live facts
+  const searchKeywords = [
+    'weather', 'temperature', 'search', 'find', 'calories in', 'nutrition of',
+    'how to cook', 'recipe for', 'price of', 'boycott', 'location of', 'current events',
+    'indonesia', 'forecast'
+  ];
+
+  return searchKeywords.some(kw => lower.includes(kw));
+}
 
 export default function AICoachVoiceModal({
   userId,
@@ -46,41 +63,55 @@ export default function AICoachVoiceModal({
   onClose,
 }: AICoachVoiceModalProps) {
   const queryClient = useQueryClient();
-
   const resolvedUserName = (!userName || userName === 'User' || userName === 'there') ? 'Vic' : userName;
 
+  // Permission state (Synchronously defaults to true if local permission cache exists)
   const [hasMicPermission, setHasMicPermission] = useState<boolean | null>(() => {
     if (typeof window !== 'undefined') {
-      const isGranted = localStorage.getItem('has_granted_mic') === 'true' || localStorage.getItem('permission_microphone') === 'granted';
+      const isGranted = localStorage.getItem('vic_permission_microphone_onboarded') === 'true' ||
+        localStorage.getItem('has_granted_mic') === 'true' ||
+        localStorage.getItem('permission_microphone') === 'granted';
       if (isGranted) return true;
     }
-    return null;
+    return true; // Default to true so modal opens & greets immediately
   });
-  const [state, setState] = useState<ConversationState>('idle');
+  const [permissionBlocked, setPermissionBlocked] = useState(false);
+
+  // Authoritative State Machine & Turn Lock
+  const [state, setState] = useState<CoachState>('speaking');
   const [isMuted, setIsMuted] = useState(false);
-  const [isAudioMuted, setIsAudioMuted] = useState(false);
-  // Default explicitly to 'en-US' (independent of IP geographic location)
   const [voiceLang, setVoiceLang] = useState<'en-US' | 'id-ID' | 'es-ES' | 'ar-SA' | 'fr-FR'>('en-US');
   const [liveInterim, setLiveInterim] = useState<string>('');
   const [showDebugHUD, setShowDebugHUD] = useState(false);
+  
+  // Audio amplitude levels for avatar reactivity
+  const [micLevel, setMicLevel] = useState<number>(0);
+  const [audioLevel, setAudioLevel] = useState<number>(0);
+
   const [debugHUD, setDebugHUD] = useState<TurnMetricsHUD>({
     turnId: null,
-    state: 'idle',
+    state: 'speaking',
     heard: '',
     apiStatus: 'Ready',
     latencyMs: null,
     audioStatus: 'Ready'
   });
 
-  const voiceStateRef = useRef<ConversationState>('idle');
+  // State refs for async callbacks & auto-greeting
+  const voiceStateRef = useRef<CoachState>('speaking');
+  const turnInProgressRef = useRef<boolean>(true);
   const activeTurnIdRef = useRef<string | null>(null);
   const isMutedRef = useRef(false);
-  const isAudioMutedRef = useRef(false);
+  const hasGreetedRef = useRef<boolean>(false);
   const recognitionRef = useRef<any>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const micAnalyserRef = useRef<AnalyserNode | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const audioAnalyserRef = useRef<AnalyserNode | null>(null);
   const isMountedRef = useRef(true);
   const silenceTimerRef = useRef<any>(null);
+  const animFrameRef = useRef<any>(null);
   const sessionIdRef = useRef<string>(crypto.randomUUID ? crypto.randomUUID() : `sess_${Date.now()}`);
   const turnIdRef = useRef<number>(0);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -88,7 +119,7 @@ export default function AICoachVoiceModal({
   const startListeningRef = useRef<() => void>(() => {});
   const pendingSpokenTextRef = useRef<string>('');
 
-  // Mobile Web Audio unlocker (Triggered on early user gestures)
+  // Unlock AudioContext for Mobile Browsers
   const unlockAudioContext = useCallback(async () => {
     try {
       if (!audioContextRef.current) {
@@ -99,20 +130,19 @@ export default function AICoachVoiceModal({
       }
       if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
         await audioContextRef.current.resume();
-        console.log('[VOICE] AudioContext unlocked successfully');
       }
     } catch (err) {
       console.warn('[VOICE] AudioContext unlock warning:', err);
     }
   }, []);
 
-  // Synchronized state updater with strict transition validation
-  const updateVoiceState = useCallback((nextState: ConversationState, reason = 'standard') => {
+  // State machine updater
+  const updateVoiceState = useCallback((nextState: CoachState, reason = 'standard') => {
     const currentState = voiceStateRef.current;
     if (currentState !== nextState) {
       const allowed = ALLOWED_TRANSITIONS[currentState] || [];
       if (!allowed.includes(nextState)) {
-        console.warn(`[VOICE BLOCKED] Illegal state transition from ${currentState} -> ${nextState} (reason: ${reason}, activeTurn: ${activeTurnIdRef.current})`);
+        console.warn(`[VOICE BLOCKED] Transition from ${currentState} -> ${nextState} blocked (${reason})`);
         return;
       }
     }
@@ -125,80 +155,41 @@ export default function AICoachVoiceModal({
     console.log(`[VOICE TURN ${activeTurnIdRef.current || 'INIT'}] STATE: ${nextState} (${reason})`);
   }, []);
 
-  // Sync mute state refs
-  useEffect(() => {
-    isMutedRef.current = isMuted;
-  }, [isMuted]);
+  // Mic audio amplitude analyzer loop
+  const setupMicAnalyser = useCallback(async (stream: MediaStream) => {
+    try {
+      await unlockAudioContext();
+      if (!audioContextRef.current) return;
+      
+      const source = audioContextRef.current.createMediaStreamSource(stream);
+      const analyser = audioContextRef.current.createAnalyser();
+      analyser.fftSize = 64;
+      source.connect(analyser);
+      micAnalyserRef.current = analyser;
 
-  useEffect(() => {
-    isAudioMutedRef.current = isAudioMuted;
-  }, [isAudioMuted]);
-
-  // Check initial microphone permission on mount (One-time check, no reactive turn interference)
-  useEffect(() => {
-    isMountedRef.current = true;
-
-    const checkPermission = async () => {
-      const isGrantedInStorage = typeof window !== 'undefined' && (
-        localStorage.getItem('has_granted_mic') === 'true' ||
-        localStorage.getItem('permission_microphone') === 'granted'
-      );
-
-      if (isGrantedInStorage) {
-        setHasMicPermission(true);
-        unlockAudioContext().then(() => {
-          if (isMountedRef.current && voiceStateRef.current === 'idle' && activeTurnIdRef.current === null) {
-            startListeningRef.current();
-          }
-        });
-        return;
-      }
-
-      if (typeof navigator !== 'undefined' && navigator.permissions?.query) {
-        try {
-          const status = await navigator.permissions.query({ name: 'microphone' as any });
-          if (status.state === 'granted') {
-            if (typeof window !== 'undefined') {
-              localStorage.setItem('has_granted_mic', 'true');
-              localStorage.setItem('permission_microphone', 'granted');
-            }
-            setHasMicPermission(true);
-            unlockAudioContext().then(() => {
-              if (isMountedRef.current && voiceStateRef.current === 'idle' && activeTurnIdRef.current === null) {
-                startListeningRef.current();
-              }
-            });
-          } else {
-            setHasMicPermission(false);
-          }
-        } catch {
-          setHasMicPermission(false);
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      const updateMic = () => {
+        if (!isMountedRef.current) return;
+        if (voiceStateRef.current === 'listening' && micAnalyserRef.current) {
+          micAnalyserRef.current.getByteFrequencyData(dataArray);
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+          const avg = sum / dataArray.length;
+          setMicLevel(Math.min(1.0, avg / 128));
+        } else {
+          setMicLevel(0);
         }
-      } else {
-        setHasMicPermission(false);
-      }
-    };
-
-    checkPermission();
-
-    return () => {
-      isMountedRef.current = false;
-      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-      if (recognitionRef.current) {
-        try { recognitionRef.current.abort(); } catch (e) {}
-      }
-      if (currentAudioRef.current) {
-        try {
-          currentAudioRef.current.pause();
-          currentAudioRef.current.currentTime = 0;
-        } catch (e) {}
-      }
-    };
+        animFrameRef.current = requestAnimationFrame(updateMic);
+      };
+      updateMic();
+    } catch (err) {
+      console.warn('[VOICE] Mic analyzer setup warning:', err);
+    }
   }, [unlockAudioContext]);
 
-  // Instant interruption helper: cuts off AI speech and aborts in-flight turn immediately
+  // Instant interruption helper
   const interruptAgent = useCallback(() => {
-    console.log('[VOICE] User interrupt triggered');
+    console.log('[VOICE] User interruption triggered');
     if (abortControllerRef.current) {
       try { abortControllerRef.current.abort(); } catch (e) {}
       abortControllerRef.current = null;
@@ -210,23 +201,26 @@ export default function AICoachVoiceModal({
       } catch (e) {}
       currentAudioRef.current = null;
     }
+    
+    turnInProgressRef.current = false;
     activeTurnIdRef.current = null;
+
     if (isMountedRef.current && !isMutedRef.current) {
-      updateVoiceState('listening');
-      setTimeout(startListening, 150);
+      updateVoiceState('listening', 'INTERRUPT');
+      setTimeout(startListening, 80);
     } else {
-      updateVoiceState('idle');
+      updateVoiceState('idle', 'INTERRUPT');
     }
   }, [updateVoiceState]);
 
-  // Direct Fast Audio Playback from Server Payload
+  // Direct Audio Playback with Amplitude Reactivity
   const playDirectAudio = useCallback(async (audioSrc: string, turnId: string) => {
     await unlockAudioContext();
-    if (!isMountedRef.current || isAudioMutedRef.current) {
+    if (!isMountedRef.current || !audioSrc) {
+      turnInProgressRef.current = false;
       activeTurnIdRef.current = null;
       if (isMountedRef.current && !isMutedRef.current) {
-        updateVoiceState('listening');
-        startListening();
+        updateVoiceState('idle');
       }
       return;
     }
@@ -235,160 +229,228 @@ export default function AICoachVoiceModal({
       try { recognitionRef.current.abort(); } catch (e) {}
     }
 
-    updateVoiceState('speaking');
+    updateVoiceState('speaking', 'PLAY_AUDIO');
     setDebugHUD(prev => ({ ...prev, audioStatus: 'Playing ⚡' }));
 
     try {
       const audio = new Audio(audioSrc);
       currentAudioRef.current = audio;
 
-      console.log(`[VOICE TURN ${turnId}] audio.play() called`);
+      if (audioContextRef.current) {
+        try {
+          const source = audioContextRef.current.createMediaElementSource(audio);
+          const analyser = audioContextRef.current.createAnalyser();
+          analyser.fftSize = 64;
+          source.connect(analyser);
+          analyser.connect(audioContextRef.current.destination);
+          audioAnalyserRef.current = analyser;
+
+          const dataArray = new Uint8Array(analyser.frequencyBinCount);
+          const updateAudioLevel = () => {
+            if (voiceStateRef.current === 'speaking' && audioAnalyserRef.current) {
+              audioAnalyserRef.current.getByteFrequencyData(dataArray);
+              let sum = 0;
+              for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+              const avg = sum / dataArray.length;
+              setAudioLevel(Math.min(1.0, avg / 128));
+              requestAnimationFrame(updateAudioLevel);
+            } else {
+              setAudioLevel(0);
+            }
+          };
+          updateAudioLevel();
+        } catch (e) {}
+      }
+
       await new Promise<void>((resolve) => {
-        audio.onended = () => {
-          console.log(`[VOICE TURN ${turnId}] Audio onended event fired`);
+        audio.onended = () => resolve();
+        audio.onerror = () => resolve();
+        audio.play().catch((playErr) => {
+          console.warn(`[VOICE TURN ${turnId}] audio.play() warning:`, playErr);
           resolve();
-        };
-        audio.onerror = (e) => {
-          console.warn(`[VOICE TURN ${turnId}] Audio onerror event fired:`, e);
-          resolve();
-        };
-        audio.play()
-          .then(() => {
-            console.log(`[VOICE TURN ${turnId}] Audio playback SUCCESS`);
-          })
-          .catch((playErr: any) => {
-            console.error(`[VOICE TURN ${turnId}] audio.play() FAILED: ${playErr?.name || 'Error'} - ${playErr?.message || playErr}`);
-            resolve();
-          });
+        });
       });
     } catch (err) {
       console.warn('[AICoachVoiceModal] Direct audio playback error:', err);
     } finally {
       currentAudioRef.current = null;
+      setAudioLevel(0);
 
-      // Only transition back to listening if this turn is still the active turn
       if (activeTurnIdRef.current === turnId) {
+        turnInProgressRef.current = false;
         activeTurnIdRef.current = null;
         setDebugHUD(prev => ({ ...prev, audioStatus: 'Idle' }));
+
         if (isMountedRef.current && !isMutedRef.current) {
-          console.log(`[VOICE TURN ${turnId}] 5. Audio ended -> Returning to LISTENING`);
-          updateVoiceState('listening', 'AUDIO_COMPLETED');
-          startListening();
+          updateVoiceState('idle', 'AUDIO_ENDED');
+          setTimeout(() => {
+            if (isMountedRef.current && voiceStateRef.current === 'idle' && !turnInProgressRef.current) {
+              updateVoiceState('listening', 'AUTO_NEXT_TURN');
+              startListening();
+            }
+          }, 80);
         } else if (isMountedRef.current) {
-          updateVoiceState('idle', 'AUDIO_COMPLETED_MUTED');
+          updateVoiceState('idle', 'AUDIO_ENDED_MUTED');
         }
       }
     }
   }, [updateVoiceState, unlockAudioContext]);
 
-  // Strict OpenAI Fast Neural Voice Playback (Fallback)
+  // Fast Spoken TTS Voice Helper
   const speakText = useCallback(async (text: string, turnId: string) => {
-    await unlockAudioContext();
-    if (!isMountedRef.current || isAudioMutedRef.current || !text.trim()) {
-      activeTurnIdRef.current = null;
-      if (isMountedRef.current && !isMutedRef.current) {
-        updateVoiceState('listening', 'SPEAK_SKIPPED');
-        startListening();
-      }
-      return;
-    }
-
-    if (recognitionRef.current) {
-      try { recognitionRef.current.abort(); } catch (e) {}
-    }
-
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-
     try {
       const res = await fetch('/api/text-to-speech', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text,
-          voice: 'alloy',
-          speed: 1.05,
+          voice: DEFAULT_COACH_VOICE,
+          speed: 1.1,
           language: voiceLang.split('-')[0]
         }),
-        signal: controller.signal,
       }).catch(() => null);
 
       if (res && res.ok && isMountedRef.current && activeTurnIdRef.current === turnId) {
         const audioBlob = await res.blob();
         const audioUrl = URL.createObjectURL(audioBlob);
-
-        const audio = new Audio(audioUrl);
-        currentAudioRef.current = audio;
-        updateVoiceState('speaking', 'TTS_FALLBACK_START');
-        setDebugHUD(prev => ({ ...prev, audioStatus: 'Playing ⚡' }));
-
-        console.log(`[VOICE TURN ${turnId}] Fallback TTS audio.play() called`);
-        await new Promise<void>((resolve) => {
-          audio.onended = () => resolve();
-          audio.onerror = () => resolve();
-          audio.play()
-            .then(() => {
-              console.log(`[VOICE TURN ${turnId}] Fallback TTS playback SUCCESS`);
-            })
-            .catch((playErr: any) => {
-              console.error(`[VOICE TURN ${turnId}] Fallback TTS audio.play() FAILED:`, playErr);
-              resolve();
-            });
-        });
-
+        await playDirectAudio(audioUrl, turnId);
         try { URL.revokeObjectURL(audioUrl); } catch (e) {}
-      }
-    } catch (err) {
-      console.warn('[AICoachVoiceModal] Voice playback error:', err);
-    } finally {
-      currentAudioRef.current = null;
-      abortControllerRef.current = null;
-
-      if (activeTurnIdRef.current === turnId) {
+      } else if (activeTurnIdRef.current === turnId) {
+        turnInProgressRef.current = false;
         activeTurnIdRef.current = null;
-        setDebugHUD(prev => ({ ...prev, audioStatus: 'Idle' }));
         if (isMountedRef.current && !isMutedRef.current) {
-          updateVoiceState('listening', 'TTS_FALLBACK_COMPLETED');
+          updateVoiceState('listening', 'TTS_FALLBACK_FREE');
           startListening();
-        } else if (isMountedRef.current) {
-          updateVoiceState('idle', 'TTS_FALLBACK_COMPLETED_MUTED');
+        }
+      }
+    } catch (e) {
+      console.warn('[VOICE] Fast TTS speech warning:', e);
+      if (activeTurnIdRef.current === turnId) {
+        turnInProgressRef.current = false;
+        activeTurnIdRef.current = null;
+        if (isMountedRef.current && !isMutedRef.current) {
+          updateVoiceState('listening', 'TTS_ERROR_FREE');
+          startListening();
         }
       }
     }
-  }, [voiceLang, updateVoiceState, unlockAudioContext]);
+  }, [voiceLang, playDirectAudio, updateVoiceState]);
 
-  // Process user speech with AI Health Coach (Single-Flight Turn Manager)
+  // Automatic Voice Greeting Trigger upon Modal Selection (Persisted to conversation thread)
+  const triggerAutoGreeting = useCallback(async () => {
+    if (hasGreetedRef.current || !isMountedRef.current) return;
+    hasGreetedRef.current = true;
+
+    const greetingTurnId = `greet_${Date.now()}`;
+    activeTurnIdRef.current = greetingTurnId;
+    turnInProgressRef.current = true;
+
+    updateVoiceState('speaking', 'AUTO_GREETING_START');
+
+    const greetingMessage = `Hi ${resolvedUserName}! How can I help you with your health goals today?`;
+    console.log('[VOICE] Triggering auto-greeting out loud & persisting to database:', greetingMessage);
+    
+    // Persist greeting to Supabase messages table for this conversation thread
+    if (conversationId && conversationId !== 'ai-coach') {
+      supabase.from('messages').insert({
+        conversation_id: conversationId,
+        sender_id: COACH_ID,
+        content: greetingMessage,
+        message_type: 'text',
+        created_at: new Date().toISOString()
+      }).then(() => {
+        queryClient.invalidateQueries({ queryKey: ['messages', conversationId] });
+      });
+    }
+
+    sessionTurnsRef.current.push({
+      role: 'assistant',
+      content: greetingMessage,
+      created_at: new Date().toISOString()
+    });
+
+    await speakText(greetingMessage, greetingTurnId);
+  }, [resolvedUserName, conversationId, queryClient, speakText, updateVoiceState]);
+
+  // Check initial microphone permission & trigger auto-greeting immediately on mount
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    const checkPermissionOnMount = async () => {
+      if (!hasGreetedRef.current) {
+        triggerAutoGreeting();
+      }
+
+      const status = await permissionManager.checkPermission('microphone', userId);
+      
+      if (status.browserState === 'denied') {
+        setHasMicPermission(false);
+        setPermissionBlocked(true);
+        turnInProgressRef.current = false;
+        activeTurnIdRef.current = null;
+        updateVoiceState('idle', 'MIC_DENIED');
+        return;
+      }
+
+      if (status.browserState === 'granted' || status.appOnboarded) {
+        setHasMicPermission(true);
+        setPermissionBlocked(false);
+        await unlockAudioContext();
+      }
+    };
+
+    checkPermissionOnMount();
+
+    return () => {
+      isMountedRef.current = false;
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch (e) {}
+      }
+      if (currentAudioRef.current) {
+        try {
+          currentAudioRef.current.pause();
+          currentAudioRef.current.currentTime = 0;
+        } catch (e) {}
+      }
+      if (micStreamRef.current) {
+        micStreamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [userId, unlockAudioContext, triggerAutoGreeting, updateVoiceState]);
+
+  // Process user speech turn
   const processUserSpeech = useCallback(async (userText: string) => {
     const cleanedText = userText.trim();
-    if (!cleanedText || cleanedText.length < 2 || !isMountedRef.current || activeTurnIdRef.current !== null) {
+    if (!cleanedText || cleanedText.length < 2 || !isMountedRef.current) {
+      turnInProgressRef.current = false;
       return;
     }
 
     const turnId = crypto.randomUUID ? crypto.randomUUID() : `turn_${Date.now()}`;
+    turnInProgressRef.current = true;
     activeTurnIdRef.current = turnId;
     turnIdRef.current += 1;
     const currentTurn = turnIdRef.current;
 
     await unlockAudioContext();
 
-    // Interrupt any previous controller/audio
     if (abortControllerRef.current) {
       try { abortControllerRef.current.abort(); } catch (e) {}
     }
     const currentController = new AbortController();
     abortControllerRef.current = currentController;
 
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-    }
-
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     if (recognitionRef.current) {
       try { recognitionRef.current.abort(); } catch (e) {}
     }
 
     pendingSpokenTextRef.current = '';
-    updateVoiceState('processing');
+    updateVoiceState('thinking', 'SPEECH_FINALIZED');
     setLiveInterim('');
+
     setDebugHUD(prev => ({
       ...prev,
       turnId: turnId.slice(0, 8),
@@ -398,15 +460,25 @@ export default function AICoachVoiceModal({
       audioStatus: 'Waiting'
     }));
 
-    // Record user turn in-memory
     sessionTurnsRef.current.push({
       role: 'user',
       content: cleanedText,
       created_at: new Date().toISOString(),
     });
 
+    // Spoken Search Fillers strictly for real web search / tool queries
+    const isSearchQuery = isSearchOrToolQuery(cleanedText);
+    if (isSearchQuery && isMountedRef.current) {
+      const snappySearchFillers = [
+        "Let me check that for you.",
+        "Let me see.",
+        "Let me look into that for you."
+      ];
+      const selectedFiller = snappySearchFillers[Math.floor(Math.random() * snappySearchFillers.length)];
+      speakText(selectedFiller, turnId).catch(() => {});
+    }
+
     try {
-      // 1. Non-blocking user speech persistence
       supabase.from('messages').insert({
         conversation_id: conversationId,
         sender_id: userId,
@@ -415,31 +487,15 @@ export default function AICoachVoiceModal({
         created_at: new Date().toISOString()
       }).then();
 
-      let userLocation = null;
-      try {
-        const locCache = localStorage.getItem('vicalary_location_v2');
-        if (locCache) userLocation = JSON.parse(locCache).data;
-      } catch (e) {}
-
-      // 2. Obtain active Supabase session for authenticated API communication
       const { data: sessionData } = await supabase.auth.getSession();
       const session = sessionData?.session;
-
-      console.log('[VOICE AUTH]', {
-        authenticated: Boolean(session?.user),
-        hasSession: Boolean(session),
-        hasAccessToken: Boolean(session?.access_token),
-        userId: session?.user?.id || userId || 'none',
-      });
 
       if (!session?.access_token) {
         throw new Error('User is not authenticated');
       }
 
       const reqStartTime = performance.now();
-      console.log(`[VOICE TURN ${turnId}] 2. Dispatched to /api/conversation/process...`);
 
-      // 3. Call unified conversation orchestrator with live streaming
       const coachRes = await fetch('/api/conversation/process', {
         method: 'POST',
         headers: {
@@ -452,7 +508,6 @@ export default function AICoachVoiceModal({
           conversation_id: conversationId,
           user_id: session.user.id,
           content: cleanedText,
-          location_context: userLocation,
           locale: voiceLang.split('-')[0],
           voice_mode: true,
           stream: true,
@@ -464,7 +519,7 @@ export default function AICoachVoiceModal({
 
       if (!coachRes.ok) {
         setDebugHUD(prev => ({ ...prev, apiStatus: `Error ${coachRes.status}` }));
-        throw new Error(`AI Coach process conversation failed with status ${coachRes.status}`);
+        throw new Error(`AI Coach failed with status ${coachRes.status}`);
       }
 
       let replyText = '';
@@ -488,23 +543,26 @@ export default function AICoachVoiceModal({
             if (trimmed.startsWith('data: ')) {
               try {
                 const event = JSON.parse(trimmed.slice(6));
-                if ((event.type === 'first_audio' || event.type === 'audio') && event.audioBase64 && !hasStartedAudio && activeTurnIdRef.current === turnId) {
+                
+                if (event.type === 'tool_call' || event.type === 'searching') {
+                  updateVoiceState('searching', 'TOOL_SEARCH');
+                } else if (event.type === 'preparing') {
+                  updateVoiceState('preparing', 'PREPARING');
+                } else if ((event.type === 'first_audio' || event.type === 'audio') && event.audioBase64 && !hasStartedAudio && activeTurnIdRef.current === turnId) {
                   hasStartedAudio = true;
                   const timeToAudio = Math.round(performance.now() - reqStartTime);
-                  console.log(`[VOICE TURN ${turnId}] 3. Audio payload received (${timeToAudio}ms ⚡)`, event.metrics);
                   setDebugHUD(prev => ({
                     ...prev,
                     apiStatus: '200 OK (Stream)',
                     latencyMs: timeToAudio,
                     audioStatus: 'Playing ⚡'
                   }));
-                  if (isMountedRef.current && !isAudioMutedRef.current) {
-                    playDirectAudio(event.audioBase64, turnId).catch(err => console.error('[AICoachVoiceModal] Audio play error:', err));
+                  if (isMountedRef.current) {
+                    await playDirectAudio(event.audioBase64, turnId);
                   }
                 } else if (event.type === 'done') {
                   replyText = event.fullText;
                   const serverDuration = Math.round(performance.now() - reqStartTime);
-                  console.log(`[VOICE TURN ${turnId}] 4. Complete turn finished in ${serverDuration}ms:`, event.metrics);
                   if (event.audioBase64 && !hasStartedAudio && activeTurnIdRef.current === turnId) {
                     hasStartedAudio = true;
                     setDebugHUD(prev => ({
@@ -513,8 +571,8 @@ export default function AICoachVoiceModal({
                       latencyMs: serverDuration,
                       audioStatus: 'Playing ⚡'
                     }));
-                    if (isMountedRef.current && !isAudioMutedRef.current) {
-                      playDirectAudio(event.audioBase64, turnId).catch(err => console.error('[AICoachVoiceModal] Audio play error:', err));
+                    if (isMountedRef.current) {
+                      await playDirectAudio(event.audioBase64, turnId);
                     }
                   }
                 }
@@ -523,7 +581,6 @@ export default function AICoachVoiceModal({
           }
         }
       } else {
-        // Fallback for standard JSON response
         const data = await coachRes.json();
         const timeToAudio = Math.round(performance.now() - reqStartTime);
         setDebugHUD(prev => ({
@@ -531,60 +588,47 @@ export default function AICoachVoiceModal({
           apiStatus: '200 OK (JSON)',
           latencyMs: timeToAudio
         }));
-        replyText = data.content || data.replyText || data.message || `I hear you, ${resolvedUserName}. How can I best guide your health goals today?`;
-        if (data.audioBase64 && isMountedRef.current && !isAudioMutedRef.current && activeTurnIdRef.current === turnId) {
-          console.log(`[VOICE TURN ${turnId}] 3. Audio payload received (${timeToAudio}ms ⚡)`, data.metrics);
+        replyText = data.content || data.replyText || `I hear you, ${resolvedUserName}. How can I best guide your health goals today?`;
+        if (data.audioBase64 && isMountedRef.current && activeTurnIdRef.current === turnId) {
           await playDirectAudio(data.audioBase64, turnId);
           hasStartedAudio = true;
         }
       }
 
-      if (!replyText) {
-        replyText = `I hear you, ${resolvedUserName}. How can I best guide your health goals today?`;
-      }
-
-      // Clean spoken text: strip asterisks, bullets, markdown headers
-      replyText = replyText.replace(/[*#_~`>]/g, '').trim();
-
-      sessionTurnsRef.current.push({
-        role: 'assistant',
-        content: replyText,
-        created_at: new Date().toISOString(),
-      });
-
       if (!hasStartedAudio && activeTurnIdRef.current === turnId) {
-        await speakText(replyText, turnId);
+        turnInProgressRef.current = false;
+        activeTurnIdRef.current = null;
+        updateVoiceState('idle');
       }
 
     } catch (err: any) {
-      if (err?.name === 'AbortError') {
-        console.log(`[VOICE] Turn ${turnId} aborted cleanly`);
-        return;
-      }
+      if (err?.name === 'AbortError') return;
       console.error('[AICoachVoiceModal] AI processing error:', err);
       if (activeTurnIdRef.current === turnId) {
+        turnInProgressRef.current = false;
         activeTurnIdRef.current = null;
-        updateVoiceState('idle', 'API_ERROR_STOP');
+        updateVoiceState('idle', 'API_ERROR_RESET');
       }
     }
-  }, [conversationId, userId, resolvedUserName, voiceLang, speakText, playDirectAudio, updateVoiceState]);
+  }, [conversationId, userId, resolvedUserName, voiceLang, playDirectAudio, speakText, updateVoiceState, unlockAudioContext]);
 
-  // Snappy turn-taking continuous speech recognition
+  // STT speech recognition starter with snappy VAD cadence
   const startListening = useCallback(() => {
     if (
-      voiceStateRef.current === 'processing' ||
+      turnInProgressRef.current ||
+      voiceStateRef.current === 'thinking' ||
+      voiceStateRef.current === 'searching' ||
+      voiceStateRef.current === 'preparing' ||
       voiceStateRef.current === 'speaking' ||
-      activeTurnIdRef.current !== null ||
       isMutedRef.current ||
       !isMountedRef.current
     ) {
-      console.log(`[STT] startListening ignored: state=${voiceStateRef.current}, activeTurn=${activeTurnIdRef.current}`);
       return;
     }
 
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      toast.error('Speech recognition not supported in this browser. Please use Chrome or Edge.');
+      toast.error('Speech recognition not supported in this browser.');
       updateVoiceState('idle');
       return;
     }
@@ -597,37 +641,23 @@ export default function AICoachVoiceModal({
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 
       const recognition = new SpeechRecognition();
-      // Explicitly configure STT language from user setting (default 'en-US', never derived from IP)
       recognition.lang = voiceLang;
       recognition.interimResults = true;
       recognition.continuous = true;
 
-      recognition.onstart = () => {
-        if (
-          isMountedRef.current &&
-          voiceStateRef.current === 'listening' &&
-          activeTurnIdRef.current === null
-        ) {
-          console.log('[STT] Speech recognizer active & listening');
-        }
-      };
+      recognition.onstart = () => {};
 
       recognition.onresult = (event: any) => {
-        if (voiceStateRef.current === 'processing' || voiceStateRef.current === 'speaking' || activeTurnIdRef.current !== null) {
+        if (turnInProgressRef.current || voiceStateRef.current !== 'listening') {
           return;
         }
 
         let fullTranscript = '';
         let interimTranscript = '';
-        let confidenceScore = 0.95;
 
-        // Process ALL result segments from index 0 so earlier finalized sentences are never dropped
         for (let i = 0; i < event.results.length; ++i) {
           const res = event.results[i];
           const part = res[0]?.transcript || '';
-          if (res[0]?.confidence) {
-            confidenceScore = res[0].confidence;
-          }
           if (res.isFinal) {
             fullTranscript += (fullTranscript ? ' ' : '') + part.trim();
           } else {
@@ -639,78 +669,59 @@ export default function AICoachVoiceModal({
         if (currentText) {
           pendingSpokenTextRef.current = currentText;
           setLiveInterim(currentText);
-          console.log(`[VOICE turn_${turnIdRef.current}] Lang: ${voiceLang} | Live: "${currentText}" (${Math.round(confidenceScore * 100)}%)`);
         }
 
         if (isMountedRef.current && currentText.length >= 2) {
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 
-          // 1400ms natural breathing cadence VAD silence detection to allow multi-part questions
           silenceTimerRef.current = setTimeout(() => {
             if (
               voiceStateRef.current === 'listening' &&
-              activeTurnIdRef.current === null &&
+              !turnInProgressRef.current &&
               isMountedRef.current
             ) {
+              turnInProgressRef.current = true;
               try { recognition.abort(); } catch (e) {}
               const toProcess = pendingSpokenTextRef.current || currentText;
               pendingSpokenTextRef.current = '';
               const normalized = normalizeSpokenInput(toProcess);
-              console.log(`[VOICE turn_${turnIdRef.current}] Finalized: "${normalized}" (${voiceLang})`);
               processUserSpeech(normalized);
             }
-          }, 1400);
+          }, 800);
         }
       };
 
       recognition.onerror = (event: any) => {
-        // If turn is active (processing or speaking), completely ignore STT errors (standard mobile audio focus switches)
-        if (activeTurnIdRef.current !== null || voiceStateRef.current === 'processing' || voiceStateRef.current === 'speaking') {
-          console.log(`[STT] Ignoring onerror '${event.error}' during active turn (state=${voiceStateRef.current}, turn=${activeTurnIdRef.current})`);
+        if (turnInProgressRef.current || voiceStateRef.current !== 'listening') {
           return;
         }
 
         if (event.error === 'not-allowed') {
-          if (voiceStateRef.current === 'listening' && activeTurnIdRef.current === null) {
-            setHasMicPermission(false);
-            toast.error('Microphone permission blocked. Please enable mic access.');
-            updateVoiceState('idle', 'MIC_PERMISSION_BLOCKED');
-          }
-        } else if (event.error !== 'no-speech' && event.error !== 'aborted') {
-          console.warn('[AICoachVoiceModal] STT Error:', event.error);
-          if (isMountedRef.current && activeTurnIdRef.current === null) {
-            updateVoiceState('idle', `STT_ERROR_${event.error}`);
-          }
+          setHasMicPermission(false);
+          setPermissionBlocked(true);
+          toast.error('Microphone access blocked.');
+          updateVoiceState('idle');
         }
       };
 
       recognition.onend = () => {
         if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 
+        if (turnInProgressRef.current || voiceStateRef.current !== 'listening') {
+          return;
+        }
+
         const pendingText = pendingSpokenTextRef.current.trim();
-        if (
-          pendingText.length >= 2 &&
-          voiceStateRef.current === 'listening' &&
-          activeTurnIdRef.current === null &&
-          isMountedRef.current
-        ) {
+        if (pendingText.length >= 2 && isMountedRef.current) {
+          turnInProgressRef.current = true;
           pendingSpokenTextRef.current = '';
           const normalized = normalizeSpokenInput(pendingText);
-          console.log(`[VOICE turn_${turnIdRef.current}] Finalized on recognition.onend: "${normalized}"`);
           processUserSpeech(normalized);
           return;
         }
 
-        if (
-          isMountedRef.current &&
-          voiceStateRef.current === 'listening' &&
-          activeTurnIdRef.current === null &&
-          !isMutedRef.current
-        ) {
-          console.log('[STT] Starting because: IDLE_LISTENING_LOOP');
-          setTimeout(startListening, 300);
-        } else {
-          console.log(`[STT] Not restarting onend (state: ${voiceStateRef.current} | activeTurn: ${activeTurnIdRef.current})`);
+        if (isMountedRef.current && !isMutedRef.current && !turnInProgressRef.current) {
+          setTimeout(startListening, 80);
         }
       };
 
@@ -719,60 +730,40 @@ export default function AICoachVoiceModal({
       recognition.start();
     } catch (e) {
       console.error('[AICoachVoiceModal] Start listening error:', e);
-      updateVoiceState('idle', 'START_LISTENING_FAILED');
+      updateVoiceState('idle');
     }
   }, [voiceLang, processUserSpeech, updateVoiceState]);
 
   startListeningRef.current = startListening;
 
-  // Request Microphone Permission with echo cancellation and noise suppression
   const requestMicPermission = async () => {
     await unlockAudioContext();
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1
-        }
-      });
-      stream.getTracks().forEach(track => track.stop());
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('has_granted_mic', 'true');
-        localStorage.setItem('permission_microphone', 'granted');
-      }
+      const stream = await permissionManager.requestPermission('microphone', undefined, userId);
+      micStreamRef.current = stream;
+      setupMicAnalyser(stream);
       setHasMicPermission(true);
-      setTimeout(() => {
-        if (isMountedRef.current && voiceStateRef.current === 'idle' && activeTurnIdRef.current === null) {
-          startListening();
-        }
-      }, 200);
-    } catch (err) {
-      console.error('[AICoachVoiceModal] Microphone access denied:', err);
-      toast.error('Microphone permission is required to talk with Vee.');
-      setHasMicPermission(false);
-    }
-  };
+      setPermissionBlocked(false);
 
-  const toggleMute = () => {
-    if (isMuted) {
-      setIsMuted(false);
-      isMutedRef.current = false;
-      updateVoiceState('listening');
-      startListening();
-    } else {
-      setIsMuted(true);
-      isMutedRef.current = true;
-      interruptAgent();
-      if (recognitionRef.current) {
-        try { recognitionRef.current.abort(); } catch (e) {}
+      if (!hasGreetedRef.current) {
+        triggerAutoGreeting();
+      } else {
+        setTimeout(() => {
+          if (isMountedRef.current && voiceStateRef.current === 'idle' && !turnInProgressRef.current) {
+            startListening();
+          }
+        }, 80);
       }
-      updateVoiceState('idle');
+    } catch (err: any) {
+      console.error('[AICoachVoiceModal] Microphone access denied:', err);
+      setHasMicPermission(false);
+      if (err.code === 'PERMISSION_DENIED_BROWSER') {
+        setPermissionBlocked(true);
+      }
+      toast.error('Microphone permission is required to talk with Vee.');
     }
   };
 
-  // Exit voice mode and sync thread
   const handleClose = () => {
     interruptAgent();
     if (recognitionRef.current) {
@@ -783,19 +774,21 @@ export default function AICoachVoiceModal({
     onClose();
   };
 
-  // Compute clean status label
   const getStatusLabel = () => {
     switch (state) {
       case 'listening':
         return 'Listening...';
-      case 'transcribing':
-      case 'processing':
+      case 'thinking':
         return 'Thinking...';
+      case 'searching':
+        return 'Searching...';
+      case 'preparing':
+        return 'Preparing...';
       case 'speaking':
-        return 'Vee Speaking...';
+        return 'Speaking...';
       case 'idle':
       default:
-        return isMuted ? 'Muted' : 'Tap blob to speak';
+        return isMuted ? 'Muted' : 'Listening...';
     }
   };
 
@@ -805,145 +798,101 @@ export default function AICoachVoiceModal({
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        className="fixed inset-0 z-[120] bg-slate-950/95 backdrop-blur-3xl flex flex-col justify-between items-center p-6 select-none text-white overflow-hidden font-display"
+        className="fixed inset-0 z-[120] bg-white flex flex-col justify-between items-center p-6 select-none text-slate-900 overflow-hidden font-display"
       >
-        {/* Clean Top Header with Language Selector & Live Diagnostic HUD */}
-        <div className="relative z-10 flex items-center justify-between w-full max-w-md pt-2 px-1">
-          <div className="flex items-center gap-2">
-            <h3 className="font-bold text-base text-slate-100">Health Coach</h3>
-            
-            {/* Language Selector Badge */}
-            <div className="flex items-center bg-white/10 rounded-full px-2 py-0.5 text-xs font-semibold border border-white/10">
-              <select
-                value={voiceLang}
-                onChange={(e) => {
-                  const newLang = e.target.value as any;
-                  setVoiceLang(newLang);
-                  if (recognitionRef.current) {
-                    try { recognitionRef.current.abort(); } catch (err) {}
-                  }
-                  setTimeout(startListening, 150);
-                }}
-                className="bg-transparent text-emerald-400 outline-none cursor-pointer py-0.5 pr-1 font-mono text-[11px]"
-                title="Select Speech Recognition Language"
-              >
-                <option value="en-US" className="bg-slate-900 text-white">🇺🇸 English (en-US)</option>
-                <option value="id-ID" className="bg-slate-900 text-white">🇮🇩 Indonesian (id-ID)</option>
-                <option value="es-ES" className="bg-slate-900 text-white">🇪🇸 Spanish (es-ES)</option>
-                <option value="ar-SA" className="bg-slate-900 text-white">🇸🇦 Arabic (ar-SA)</option>
-                <option value="fr-FR" className="bg-slate-900 text-white">🇫🇷 French (fr-FR)</option>
-              </select>
-            </div>
-
-          </div>
-        </div>
-
-        {/* Center Main Stage - 3D Organic Morphing Blob */}
+        {/* Clean Center Stage: Minimalist Primary Green Avatar with Unpredictable Eye Movement */}
         {hasMicPermission === false ? (
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="relative z-10 flex flex-col items-center justify-center gap-6 w-full max-w-sm my-auto text-center px-6 py-8 rounded-3xl bg-white/5 border border-white/10 backdrop-blur-xl shadow-2xl"
+            className="relative z-10 flex flex-col items-center justify-center gap-6 w-full max-w-sm my-auto text-center px-6 py-8 rounded-3xl bg-slate-50 border border-slate-200 shadow-xl"
           >
-            <div className="w-16 h-16 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-lg shadow-emerald-500/20 animate-pulse">
-              <Mic size={32} />
+            <div className="w-16 h-16 rounded-full bg-emerald-100 border border-emerald-300 flex items-center justify-center text-emerald-600 shadow-md animate-pulse">
+              {permissionBlocked ? <AlertCircle size={32} className="text-amber-500" /> : <Mic size={32} />}
             </div>
 
             <div className="space-y-2">
-              <h4 className="text-lg font-bold text-slate-100">Enable Microphone</h4>
-              <p className="text-sm text-slate-300 leading-relaxed">
-                Allow microphone access to talk directly with Vee with instant voice response.
+              <h4 className="text-lg font-bold text-slate-900">
+                {permissionBlocked ? 'Microphone Blocked' : 'Enable Microphone'}
+              </h4>
+              <p className="text-sm text-slate-600 leading-relaxed">
+                {permissionBlocked
+                  ? 'Microphone permission has been blocked. Please click the lock/settings icon in your browser address bar to enable access.'
+                  : 'Allow microphone access to talk directly with Vee.'
+                }
               </p>
             </div>
 
-            <button
-              onClick={requestMicPermission}
-              className="w-full py-3.5 px-6 rounded-2xl bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-slate-950 font-bold text-sm shadow-xl shadow-emerald-500/30 transition-all duration-200 flex items-center justify-center gap-2"
-            >
-              <ShieldCheck size={18} />
-              <span>Allow Microphone & Start</span>
-            </button>
+            {!permissionBlocked && (
+              <button
+                onClick={requestMicPermission}
+                className="w-full py-3.5 px-6 rounded-2xl bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white font-bold text-sm shadow-lg shadow-emerald-500/20 transition-all duration-200 flex items-center justify-center gap-2"
+              >
+                <span>Allow Microphone & Start</span>
+              </button>
+            )}
           </motion.div>
         ) : (
           <div className="relative z-10 flex flex-col items-center justify-center gap-4 w-full max-w-md my-auto text-center px-4">
-            <div className="relative flex items-center justify-center">
-              {/* Ambient Aura Glow */}
-              <motion.div
-                animate={{
-                  scale: state === 'speaking' ? [1, 1.35, 1] : (state === 'processing' || state === 'transcribing') ? [1, 1.25, 1] : [1, 1.1, 1],
-                  opacity: state === 'speaking' ? [0.45, 0.75, 0.45] : [0.2, 0.4, 0.2]
-                }}
-                transition={{ repeat: Infinity, duration: 2.2, ease: "easeInOut" }}
-                className={`absolute inset-0 rounded-full blur-3xl ${
-                  (state === 'processing' || state === 'transcribing') ? 'bg-purple-500/40' : 'bg-emerald-500/40'
-                }`}
-              />
+            
+            {/* Minimalist Primary Green Avatar with Unpredictable 360° Eye Gaze */}
+            <HealthCoachAvatar
+              state={state}
+              micLevel={micLevel}
+              audioLevel={audioLevel}
+              size={220}
+              onClick={interruptAgent}
+            />
 
-              {/* 3D Morphing Blob */}
-              <div onClick={interruptAgent} className="cursor-pointer z-10 active:scale-95 transition-transform" title="Tap to interrupt">
-                <HealthCoachSphere
-                  state={state === 'processing' || state === 'transcribing' ? 'thinking' : (state === 'error' ? 'idle' : state)}
-                  size={240}
-                  className="shadow-2xl shadow-emerald-950/80"
-                />
-              </div>
-            </div>
-
-            {/* Minimalist Status Text */}
-            <p className="text-xs uppercase tracking-widest font-black text-emerald-400 transition-all">
+            {/* Status Label (Never displays 'Tap avatar to speak') */}
+            <p className="text-xs uppercase tracking-widest font-black text-emerald-600 transition-all mt-3">
               {getStatusLabel()}
             </p>
 
-            {/* Live Interim Transcript Feedback */}
+            {/* Live Interim Transcript */}
             {liveInterim && (
               <motion.div
                 initial={{ opacity: 0, y: 5 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="max-w-xs px-4 py-2 rounded-2xl bg-white/10 backdrop-blur-md border border-white/10 text-xs text-slate-200 shadow-lg text-center"
+                className="max-w-xs px-4 py-2 rounded-2xl bg-slate-100 border border-slate-200 text-xs text-slate-700 shadow-sm text-center"
               >
-                <span className="text-slate-400 mr-1.5 font-medium">Heard:</span>
-                <span className="italic font-semibold text-white">"{liveInterim}"</span>
+                <span className="text-slate-500 mr-1.5 font-medium">Heard:</span>
+                <span className="italic font-semibold text-slate-900">"{liveInterim}"</span>
               </motion.div>
             )}
 
-            {/* Real-Time Mobile Diagnostic HUD */}
+            {/* Diagnostic HUD */}
             {showDebugHUD && (
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 8 }}
-                className="w-full max-w-sm px-3.5 py-2.5 rounded-2xl bg-black/75 backdrop-blur-xl border border-white/15 text-[11px] font-mono text-slate-300 space-y-1.5 shadow-2xl text-left"
+                className="w-full max-w-sm px-3.5 py-2.5 rounded-2xl bg-slate-900 text-white border border-slate-700 text-[11px] font-mono space-y-1.5 shadow-2xl text-left"
               >
-                <div className="flex justify-between items-center text-emerald-400 font-bold border-b border-white/10 pb-1">
+                <div className="flex justify-between items-center text-emerald-400 font-bold border-b border-slate-700 pb-1">
                   <span className="flex items-center gap-1.5">
                     <Activity size={12} className="text-emerald-400 animate-pulse" />
-                    <span>MOBILE DIAGNOSTICS</span>
+                    <span>DIAGNOSTICS</span>
                   </span>
                   <span className="uppercase text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-bold">
                     {debugHUD.state}
                   </span>
                 </div>
                 <div className="grid grid-cols-2 gap-x-2 gap-y-1 pt-0.5 text-[10.5px]">
-                  <div><span className="text-slate-500">Turn:</span> <span className="text-slate-200 font-bold">{debugHUD.turnId || 'none'}</span></div>
-                  <div><span className="text-slate-500">API:</span> <span className="text-emerald-300 font-bold">{debugHUD.apiStatus}</span></div>
-                  <div><span className="text-slate-500">TTS:</span> <span className="text-cyan-300 font-bold">{debugHUD.audioStatus}</span></div>
-                  <div><span className="text-slate-500">Latency:</span> <span className="text-amber-300 font-bold">{debugHUD.latencyMs ? `${debugHUD.latencyMs}ms` : '--'}</span></div>
+                  <div><span className="text-slate-400">Turn:</span> <span className="text-slate-200 font-bold">{debugHUD.turnId || 'none'}</span></div>
+                  <div><span className="text-slate-400">API:</span> <span className="text-emerald-300 font-bold">{debugHUD.apiStatus}</span></div>
+                  <div><span className="text-slate-400">TTS:</span> <span className="text-cyan-300 font-bold">{debugHUD.audioStatus}</span></div>
+                  <div><span className="text-slate-400">Latency:</span> <span className="text-amber-300 font-bold">{debugHUD.latencyMs ? `${debugHUD.latencyMs}ms` : '--'}</span></div>
                 </div>
-                {debugHUD.heard && (
-                  <div className="truncate text-slate-200 border-t border-white/10 pt-1 text-[10.5px]">
-                    <span className="text-slate-500">Last Utterance:</span> <span className="italic">"{debugHUD.heard}"</span>
-                  </div>
-                )}
               </motion.div>
             )}
           </div>
         )}
 
-        {/* Minimalist Bottom Control Pill */}
-        <div className="relative z-10 w-full max-w-xs flex items-center justify-center gap-4 pb-4">
+        {/* Minimalist Bottom Close Button */}
+        <div className="relative z-10 w-full max-w-xs flex items-center justify-center pb-4">
           <button
             onClick={handleClose}
-            className="p-4 bg-white/10 hover:bg-white/20 active:scale-95 rounded-full text-slate-300 hover:text-white transition-all shadow-xl backdrop-blur-xl border border-white/10"
+            className="p-4 bg-slate-100 hover:bg-slate-200 active:scale-95 rounded-full text-slate-700 transition-all shadow-md border border-slate-200"
             title="Close voice mode"
             aria-label="Close voice mode"
           >

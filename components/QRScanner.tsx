@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { X, RefreshCw, ArrowLeft } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { toast } from 'sonner';
+import { permissionManager } from '@/lib/services/PermissionManager';
 
 interface QRScannerProps {
     onScan: (data: string) => void;
@@ -72,10 +73,7 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
                     },
                     () => {}
                 );
-                if (typeof window !== 'undefined') {
-                    localStorage.setItem('has_granted_camera', 'true');
-                    localStorage.setItem('permission_camera', 'granted');
-                }
+                await permissionManager.markOnboarded('camera');
             } catch (err: any) {
                 if (isMounted) {
                     console.error("Camera startup error in QRScanner:", err);
