@@ -1,532 +1,669 @@
 "use client"
+import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { AlertCircle, ShoppingCart, Scale, MessageSquare, Check, Globe, Pill, TriangleAlert, Dna, HeartPulse, ChevronLeft } from "lucide-react";
-import { useCurrency } from "@/lib/CurrencyContext";
+import { ArrowLeft, AlertCircle, ShoppingCart, MessageSquare, Check, Globe, Pill, TriangleAlert, Dna, HeartPulse, ExternalLink, ShieldCheck, Scale, Info, Sparkles } from "lucide-react";
 import { useAnalysisStore } from '@/store/analysisStore';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
-import { useState, useEffect } from 'react';
-import { saveFoodAnalysis, checkBudgetStatus } from '@/lib/api/food';
+import { saveFoodAnalysis } from '@/lib/api/food';
 import { toast } from 'sonner';
 import { CrowdsourceForm } from '@/components/CrowdsourceForm';
+import { useQueryClient } from '@tanstack/react-query';
+import { getOrCreateCoachConversation } from '@/lib/api/chat';
 
-interface ProductDetailsProps {
-    productImage: string;
-    productName: string;
-    servingSize?: string;
-    description?: string;
-    vitamins_and_nutrition?: string;
-    recommendation?: string;
-    recommended_pairings?: string;
-    healthStatus?: string;
-    calories?: number;
-    protein?: number;
-    carbs?: number;
-    fat?: number;
-    sugar?: number;
-    fiber?: number;
-    origin_country?: string;
-    brand?: string;
-    manufacturer?: string;
-    estimated_price?: string | number;
-    is_compliant?: boolean;
-    user_alignment_boolean?: boolean;
-    political_warning?: string;
-    needs_crowdsourcing?: boolean;
-    cheaper_alternatives?: Array<{ name: string; price: string | number; reason: string }>;
-    usage_instructions?: string;
-    factory_ingredients?: string;
-    suitability_analysis?: string;
-    country_origin_details?: string;
-    // Medication-specific fields
-    type?: string;
-    generic_name?: string;
-    purpose?: string;
-    side_effects?: string;
-    warnings?: string;
-    interactions?: string;
-    onClose: () => void;
-    onAddToDiary: () => void;
+export interface ProductDetailsProps {
+  productImage?: string;
+  productName: string;
+  barcode?: string;
+  servingSize?: string;
+  category?: string;
+  description?: string;
+  vitamins_and_nutrition?: string;
+  recommendation?: string;
+  recommended_pairings?: string;
+  healthStatus?: string;
+  calories?: number | null;
+  protein?: number | null;
+  carbs?: number | null;
+  fat?: number | null;
+  sugar?: number | null;
+  fiber?: number | null;
+  sodium_mg?: number | null;
+  vitamins?: string[];
+  minerals?: string[];
+  serving_basis?: string;
+  origin_country?: string;
+  brand?: string;
+  manufacturer?: string;
+  price?: number | null;
+  estimated_price?: string | null;
+  price_metadata?: {
+    amount?: number;
+    currency?: string;
+    source?: string;
+    retrievedAt?: string;
+    retailer?: string;
+  } | null;
+  is_compliant?: boolean;
+  status?: 'FLAGGED' | 'APPROVED' | string;
+  boycott?: {
+    flagged: boolean;
+    campaignName?: string;
+    companyName?: string;
+    parentCompany?: string;
+    relationshipType?: string;
+    reason?: string;
+    sourceUrl?: string;
+    verifiedAt?: string;
+  } | null;
+  political_warning?: string;
+  needs_crowdsourcing?: boolean;
+  cheaper_alternatives?: Array<{ name: string; price: string | number; reason: string }>;
+  type?: string;
+  // Medication-specific fields
+  generic_name?: string;
+  purpose?: string;
+  side_effects?: string;
+  warnings?: string;
+  interactions?: string;
+  onClose: () => void;
+  onAddToDiary?: () => void;
 }
 
-
 export function ProductDetails({
-    productImage,
-    productName,
-    servingSize,
-    description,
-    vitamins_and_nutrition,
-    recommendation,
-    recommended_pairings,
-    healthStatus,
-    calories = 0,
-    protein = 0,
-    carbs = 0,
-    fat = 0,
-    sugar,
-    fiber,
-    origin_country,
-    brand,
-    manufacturer,
-    estimated_price,
-    is_compliant,
-    user_alignment_boolean,
-    political_warning,
-    needs_crowdsourcing,
-    cheaper_alternatives,
-    usage_instructions,
-    factory_ingredients,
-    suitability_analysis,
-    country_origin_details,
-    type,
-    generic_name,
-    purpose,
-    side_effects,
-    warnings,
-    interactions,
-    onClose,
-    onAddToDiary,
+  productImage,
+  productName,
+  barcode,
+  servingSize,
+  category,
+  description,
+  vitamins_and_nutrition,
+  recommendation,
+  healthStatus = "GOOD",
+  calories,
+  protein,
+  carbs,
+  fat,
+  sugar,
+  fiber,
+  sodium_mg,
+  vitamins = [],
+  minerals = [],
+  serving_basis = "serving",
+  origin_country,
+  brand,
+  manufacturer,
+  price,
+  estimated_price,
+  price_metadata,
+  is_compliant = true,
+  status = "APPROVED",
+  boycott,
+  political_warning,
+  needs_crowdsourcing = false,
+  cheaper_alternatives = [],
+  type = "FOOD",
+  generic_name,
+  purpose,
+  side_effects,
+  warnings,
+  interactions,
+  onClose,
+  onAddToDiary,
 }: ProductDetailsProps) {
-    const router = useRouter();
-    const { formatCurrency } = useCurrency();
-    const { user } = useAuth();
-    const setPendingAnalysisContext = useAnalysisStore(state => state.setPendingAnalysisContext);
-    const [isNavigating, setIsNavigating] = useState(false);
-    const [showCrowdsourceForm, setShowCrowdsourceForm] = useState(false);
-    const [budgetStatus, setBudgetStatus] = useState<{ isOver: boolean; budget: number } | null>(null);
-    const isMedication = type === 'medication';
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const setPendingAnalysisContext = useAnalysisStore(state => state.setPendingAnalysisContext);
+  const setNavbarHidden = useAnalysisStore(state => state.setNavbarHidden);
+  const [isLogging, setIsLogging] = useState(false);
+  const [isNavigatingCoach, setIsNavigatingCoach] = useState(false);
+  const [showCrowdsourceForm, setShowCrowdsourceForm] = useState(false);
 
-    // Immediate Persistence on mount for barcode/analysis results
-    useEffect(() => {
-        if (!user?.id || type === 'medication') return;
+  // STRICT RULE: Hide bottom navigation while viewing Product Details
+  useEffect(() => {
+    setNavbarHidden(true);
+    return () => setNavbarHidden(false);
+  }, [setNavbarHidden]);
 
-        const persistResult = async () => {
-            try {
-                // Prepare analysis object for storage
-                const analysisToSave = {
-                    name: productName,
-                    calories,
-                    protein,
-                    carbs,
-                    fat,
-                    sugar,
-                    fiber,
-                    healthRating: healthStatus === 'Healthy' || healthStatus === 'Healty' ? 8 : 4,
-                    description,
-                    image_url: productImage,
-                    barcode: (productName + (brand || '')).substring(0, 20), // Fallback if no barcode prop
-                    brand,
-                    manufacturer,
-                    origin_country,
-                    price: Number(estimated_price || 0),
-                    political_warning,
-                    is_compliant,
-                    user_alignment_boolean
-                };
+  const isMedication = type === 'MEDICATION' || type === 'medication';
+  const isFlagged = status === 'FLAGGED' || is_compliant === false || boycott?.flagged === true;
 
-                await saveFoodAnalysis(user.id, analysisToSave);
+  // STRICT RULE: No auto-save on mount!
+  // Only explicitly save and create purchase transaction when user taps "Log Product"
+  const handleConfirmLog = async () => {
+    if (!user?.id) {
+      toast.error("Please sign in to log items");
+      return;
+    }
 
-                // Budget check
-                if (estimated_price) {
-                    const status = await checkBudgetStatus(user.id, Number(estimated_price));
-                    setBudgetStatus(status);
+    try {
+      setIsLogging(true);
+      const analysisToSave = {
+        name: productName,
+        calories: calories ?? 0,
+        protein: protein ?? 0,
+        carbs: carbs ?? 0,
+        fat: fat ?? 0,
+        sugar: sugar ?? 0,
+        fiber: fiber ?? 0,
+        sodium_mg: sodium_mg ?? 0,
+        healthRating: healthStatus === 'GOOD' ? 8 : 4,
+        description,
+        image_url: productImage,
+        barcode: barcode || (productName + (brand || '')).substring(0, 20),
+        brand,
+        manufacturer,
+        origin_country,
+        price: price ?? (typeof estimated_price === 'number' ? estimated_price : 0),
+        estimated_price,
+        political_warning,
+        is_compliant: !isFlagged
+      };
 
-                    if (status.isOver) {
-                        toast.warning(`Budget Alert: This item represents a significant portion of your monthly budget (${formatCurrency(status.budget)}).`);
-                    }
-                }
-            } catch (err) {
-                console.error("Auto-save failed:", err);
-            }
-        };
+      // save with isPurchaseConfirmed = true -> creates financial_transactions budget entry
+      await saveFoodAnalysis(user.id, analysisToSave, true);
+      queryClient.invalidateQueries({ queryKey: ['daily-progress'] });
+      queryClient.invalidateQueries({ queryKey: ['progress'] });
+      queryClient.invalidateQueries({ queryKey: ['food-history'] });
+      queryClient.invalidateQueries({ queryKey: ['daily-plan'] });
+      queryClient.invalidateQueries({ queryKey: ['daily-summary'] });
 
-        persistResult();
-    }, [user?.id]);
+      toast.success(`${productName} logged! Viewing Today's Progress.`);
 
-    const handleConsultCoach = async () => {
-        if (!user?.id) return;
-        setIsNavigating(true);
+      if (onAddToDiary) {
+        onAddToDiary();
+      } else {
+        router.push("/dashboard");
+      }
+    } catch (err: any) {
+      console.error("Log error:", err);
+      toast.error(err.message || "Failed to log product");
+    } finally {
+      setIsLogging(false);
+    }
+  };
 
-        try {
-            // Ensure chats exist and grab the Coach ID
-            const { data, error } = await (supabase as any).rpc('provision_user_system_chats', { p_user_id: user.id });
-            if (error) throw error;
+  const handleConsultCoach = async () => {
+    if (!user?.id) return;
+    setIsNavigatingCoach(true);
+    try {
+      const coachConvId = await getOrCreateCoachConversation(user.id);
+      if (!coachConvId) throw new Error("Coach conversation not found");
 
-            const coachConvId = (data as any)?.coach_conversation_id;
-            if (!coachConvId) throw new Error("Could not find Health Coach conversation");
+      const imageToUse = productImage || "https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&q=80&w=600";
 
-            // Save complete context globally using structured pendingAnalysisContext
-            setPendingAnalysisContext({
-                productImage,
-                productName,
-                brand,
-                calories,
-                protein,
-                carbs,
-                fat,
-                sugar,
-                price: Number(estimated_price || 0),
-                currency: 'USD',
-                political_warning,
-                healthStatus,
-                ingredients: factory_ingredients || vitamins_and_nutrition,
-                suitability_analysis,
-                manufacturer,
-                is_compliant,
-                type: 'scan_handoff'
-            });
+      setPendingAnalysisContext({
+        productName,
+        brand,
+        productImage: imageToUse,
+        image: imageToUse,
+        mealImage: imageToUse,
+        calories: calories ?? 0,
+        protein: protein ?? 0,
+        carbs: carbs ?? 0,
+        fat: fat ?? 0,
+        sugar: sugar ?? 0,
+        price: price ?? 0,
+        country: origin_country,
+        political_warning,
+        is_compliant: !isFlagged,
+        healthStatus,
+        type: isMedication ? 'MEDICATION' : 'FOOD',
+        description
+      });
 
-            let initialMessage = '';
+      let initialMessage = '';
+      if (isMedication) {
+        initialMessage = `I just scanned ${productName} (${generic_name || 'Medication'}). Can you tell me more about its mechanism, safety precautions, and interactions with my health profile?`;
+      } else if (isFlagged) {
+        initialMessage = `I scanned ${productName} (${brand || 'Brand'}), which is flagged for corporate/political ties (${boycott?.reason || political_warning}). Can you suggest healthy and ethical alternatives that fit my goals?`;
+      } else {
+        const priceStr = estimated_price ? ` costing ${estimated_price}` : '';
+        initialMessage = `I scanned ${productName} by ${brand || 'brand'}${priceStr} (${calories ?? 0} kcal). How does this fit my daily diet and budget? Please explain its nutritional value and recommendations.`;
+      }
 
-            if (isMedication) {
-                initialMessage = `I just scanned ${productName} (${generic_name}). Can you tell me more and whether it's safe given my health profile?`;
-            } else {
-                const priceStr = estimated_price ? ` (${formatCurrency(estimated_price)})` : '';
-                const originStr = origin_country ? `, manufactured in ${origin_country}` : '';
-                const ethicalStr = political_warning ? ` and the manufacturer has flagged ethical/political concerns` : '';
-                const budgetStr = budgetStatus?.isOver ? `. This purchase slightly exceeds my typical budget threshold` : '';
+      sessionStorage.setItem('chatInitialMessage', initialMessage);
+      router.push(`/chat/${coachConvId}`);
+    } catch (e: any) {
+      console.error("Coach navigation error:", e);
+      toast.error(e.message || "Failed to connect to Health Coach.");
+    } finally {
+      setIsNavigatingCoach(false);
+    }
+  };
 
-                initialMessage = `I scanned ${productName}${priceStr}${originStr}. The analysis shows it contains ${sugar || 0}g of sugar per serving${ethicalStr}${budgetStr}. Can you recommend a healthy alternative that fits my budget and goals?`;
-            }
+  return (
+    <div className="fixed inset-0 z-[9999] bg-white dark:bg-[#0b141a] text-slate-900 dark:text-white flex flex-col h-[100dvh] overflow-hidden">
+      {/* Top Header Sticky with back button */}
+      <header className="h-16 shrink-0 z-30 flex items-center justify-between px-5 bg-white/95 dark:bg-[#0b141a]/95 backdrop-blur-xl border-b border-slate-200 dark:border-slate-800">
+        <button
+          onClick={onClose}
+          aria-label="Return to Scanner"
+          className="size-10 rounded-full bg-slate-100 dark:bg-white/10 border border-slate-200 dark:border-white/10 flex items-center justify-center text-slate-900 dark:text-white hover:bg-slate-200 dark:hover:bg-white/20 active:scale-95 transition-all"
+        >
+          <ArrowLeft className="w-5 h-5" />
+        </button>
 
-            sessionStorage.setItem('chatInitialMessage', initialMessage);
-            router.push(`/chat/${coachConvId}`);
-        } catch (error) {
-            console.error("Failed to navigate to Coach:", error);
-            setIsNavigating(false);
-        }
-    };
-
-    const renderParagraphs = (text: string | undefined) => {
-        if (!text) return null;
-        return text.split('\n\n').filter(p => p.trim()).map((para, i) => (
-            <p key={i} className="text-[15px] leading-relaxed text-slate-700 dark:text-slate-300">
-                {para}
-            </p>
-        ));
-    };
-
-    return (
-        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-xl p-0 sm:p-4">
-            <div className="w-full max-w-md sm:rounded-[2.5rem] overflow-hidden shadow-2xl flex flex-col bg-white dark:bg-[#0a0f14] max-h-screen sm:max-h-[92vh] rounded-t-[2.5rem]">
-
-                {/* POLITICAL ALERT / ETHICAL CONFIRMATION Banner */}
-                {political_warning && (
-                    <div className={`${!is_compliant ? 'bg-rose-600' : 'bg-emerald-600'} py-4 px-6 flex items-start gap-3 shrink-0`}>
-                        {!is_compliant ? (
-                            <AlertCircle className="w-5 h-5 text-white shrink-0 mt-0.5" />
-                        ) : (
-                            <Check className="w-5 h-5 text-white shrink-0 mt-0.5" strokeWidth={3} />
-                        )}
-                        <div>
-                            <p className="text-white text-[12px] font-black uppercase tracking-wider mb-1">
-                                {!is_compliant ? '⚠️ Ethical Responsibility Alert' : 'Ethically Clear'}
-                            </p>
-                            <p className="text-white/90 text-[12px] leading-relaxed">
-                                {political_warning}
-                            </p>
-                        </div>
-                    </div>
-                )}
-
-                {/* USER ALIGNMENT Banner (If cleared and aligns with health) */}
-                {is_compliant && user_alignment_boolean && (
-                    <div className="bg-[#0a2e52] py-3 px-6 flex items-center justify-center gap-2 shrink-0">
-                        <HeartPulse className="w-4 h-4 text-white" strokeWidth={3} />
-                        <span className="text-white text-[11px] font-black uppercase tracking-[0.2em]">
-                            Personalized Match
-                        </span>
-                    </div>
-                )}
-
-                {/* Header Image */}
-                <div className="relative h-52 shrink-0">
-                    <img src={productImage} className="w-full h-full object-cover" alt={productName} />
-                    <div className="absolute inset-0 bg-gradient-to-t from-white dark:from-[#0a0f14] via-black/20 to-transparent" />
-                    <button
-                        onClick={onClose}
-                        className="absolute top-5 left-5 p-2.5 bg-black/40 backdrop-blur-md rounded-full border border-white/10 hover:bg-black/60 transition-all"
-                    >
-                        <ChevronLeft className="w-5 h-5 text-white" />
-                    </button>
-
-                    {/* Country & Brand Badges */}
-                    <div className="absolute bottom-4 left-4 flex flex-wrap gap-2">
-                        {origin_country && (
-                            <span className="px-3 py-1 bg-black/60 backdrop-blur-md text-white text-[10px] font-bold rounded-full border border-white/10 flex items-center gap-1">
-                                <Globe className="w-3 h-3" /> {origin_country}
-                            </span>
-                        )}
-                        {brand && (
-                            <span className="px-3 py-1 bg-black/60 backdrop-blur-md text-white text-[10px] font-bold rounded-full border border-white/10">
-                                {brand}
-                            </span>
-                        )}
-                    </div>
-                </div>
-
-                {/* Scrollable Content */}
-                <main className="flex-1 overflow-y-auto px-7 pb-4 space-y-8 -mt-8 relative z-10 custom-scrollbar">
-
-                    {/* 1. Product Name & Manufacturer */}
-                    <div>
-                        <h2 className="text-[26px] font-black text-slate-900 dark:text-white leading-tight tracking-tight">
-                            {productName}
-                        </h2>
-                        {manufacturer && (
-                            <p className="text-slate-400 text-sm mt-0.5 flex items-center gap-1.5">
-                                <ShoppingCart className="w-3.5 h-3.5" />
-                                {manufacturer}
-                            </p>
-                        )}
-                    </div>
-                    
-                    {!is_compliant ? (
-                        <div className="space-y-6">
-                            <h2 className="text-xl font-black text-rose-600 dark:text-rose-400">This product is flagged.</h2>
-                            <p className="text-slate-600 dark:text-slate-400">
-                                This brand or company has been flagged by your active boycott campaigns. We recommend choosing an alternative.
-                            </p>
-                            
-                            {cheaper_alternatives && cheaper_alternatives.length > 0 && (
-                                <div className="space-y-4">
-                                    <h3 className="font-bold text-slate-800 dark:text-white">Recommended Alternatives</h3>
-                                    {cheaper_alternatives.map((alt: any, idx: number) => (
-                                        <div key={idx} className="bg-slate-100 dark:bg-white/5 p-4 rounded-xl">
-                                            <p className="font-bold">{alt.name}</p>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    ) : (
-                    <>
-                    {/* 2. Description Paragraphs */}
-                    {description && (
-                        <div className="space-y-4">
-                            {renderParagraphs(description)}
-                        </div>
-                    )}
-
-                    {/* Factory Analysis Blocks */}
-                    {country_origin_details && (
-                        <div className="space-y-3 p-4 bg-blue-500/5 border border-blue-500/10 rounded-2xl">
-                            <h3 className="text-[13px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider flex items-center gap-2">
-                                <Globe className="w-4 h-4" /> Country of Origin
-                            </h3>
-                            <p className="text-[14px] text-slate-700 dark:text-slate-300 leading-relaxed">{country_origin_details}</p>
-                        </div>
-                    )}
-
-                    {usage_instructions && (
-                        <div className="space-y-3 p-4 bg-amber-500/5 border border-amber-500/10 rounded-2xl">
-                            <h3 className="text-[13px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider">
-                                Description & Usage
-                            </h3>
-                            <p className="text-[14px] text-slate-700 dark:text-slate-300 leading-relaxed">{usage_instructions}</p>
-                        </div>
-                    )}
-
-                    {factory_ingredients && (
-                        <div className="space-y-3 p-4 bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-2xl">
-                            <h3 className="text-[13px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-                                Factory Ingredients
-                            </h3>
-                            <p className="text-[14px] text-slate-700 dark:text-slate-300 leading-relaxed">{factory_ingredients}</p>
-                        </div>
-                    )}
-
-                    {suitability_analysis && (
-                        <div className="space-y-3 p-4 bg-emerald-500/5 border border-emerald-500/10 rounded-2xl">
-                            <h3 className="text-[13px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider flex items-center gap-2">
-                                <Check className="w-4 h-4" /> Suitability for You
-                            </h3>
-                            <p className="text-[14px] text-slate-700 dark:text-slate-300 leading-relaxed">{suitability_analysis}</p>
-                        </div>
-                    )}
-
-                    {/* 3. Vitamins and Nutrition */}
-                    {vitamins_and_nutrition && (
-                        <div className="space-y-4">
-                            <h3 className="text-[17px] font-black text-slate-900 dark:text-white tracking-tight border-b border-slate-100 dark:border-white/8 pb-2">
-                                Vitamins and Nutrition
-                            </h3>
-                            <div className="space-y-4">
-                                {renderParagraphs(vitamins_and_nutrition)}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* 4. Recommended Enhancements */}
-                    {recommended_pairings && (
-                        <div className="space-y-4">
-                            <h3 className="text-[17px] font-black text-slate-900 dark:text-white tracking-tight border-b border-slate-100 dark:border-white/8 pb-2">
-                                Recommended
-                            </h3>
-                            <div className="space-y-4">
-                                {renderParagraphs(recommended_pairings)}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* MEDICATION ANALYSIS SECTION */}
-                    {isMedication ? (
-                        <div className="space-y-5">
-                            {generic_name && (
-                                <div className="flex items-center gap-3 p-4 bg-purple-500/10 border border-purple-500/20 rounded-2xl">
-                                    <Pill className="w-5 h-5 text-purple-400 shrink-0" />
-                                    <p className="text-sm text-slate-300">Generic Name: <span className="font-bold text-white">{generic_name}</span></p>
-                                </div>
-                            )}
-                            {purpose && (
-                                <div className="space-y-2">
-                                    <h3 className="text-[14px] font-black text-purple-400 uppercase tracking-wider flex items-center gap-2"><Dna className="w-4 h-4" /> Purpose</h3>
-                                    <p className="text-sm text-slate-300 leading-relaxed">{purpose}</p>
-                                </div>
-                            )}
-                            {warnings && (
-                                <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl">
-                                    <h3 className="text-[13px] font-bold text-amber-300 uppercase tracking-wider mb-1 flex items-center gap-2"><TriangleAlert className="w-4 h-4" /> Warnings</h3>
-                                    <p className="text-sm text-amber-200/80 leading-relaxed">{warnings}</p>
-                                </div>
-                            )}
-                            {side_effects && (
-                                <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl">
-                                    <h3 className="text-[13px] font-bold text-rose-300 uppercase tracking-wider mb-1 flex items-center gap-2"><AlertCircle className="w-4 h-4" /> Side Effects</h3>
-                                    <p className="text-sm text-slate-300 leading-relaxed">{side_effects}</p>
-                                </div>
-                            )}
-                            {interactions && (
-                                <div className="p-4 bg-slate-800/60 border border-white/10 rounded-2xl">
-                                    <h3 className="text-[13px] font-bold text-slate-300 uppercase tracking-wider mb-1 flex items-center gap-2"><HeartPulse className="w-4 h-4" /> Drug Interactions</h3>
-                                    <p className="text-sm text-slate-400 leading-relaxed">{interactions}</p>
-                                </div>
-                            )}
-                        </div>
-                    ) : (
-                        /* 5. Calorie & Macro Summary — Food Products */
-                        <div className="bg-slate-900 dark:bg-white/5 rounded-3xl p-6 text-center border border-slate-800 dark:border-white/10">
-                            <div className="text-4xl font-black text-white mb-1">~{calories} kcal</div>
-                            <div className="grid grid-cols-3 gap-3 mt-4">
-                                <div className="bg-white/5 rounded-2xl py-3 px-2 border border-white/5">
-                                    <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Protein</div>
-                                    <div className="text-sm font-black text-white">{Math.round(Number(protein || 0))}g</div>
-                                </div>
-                                <div className="bg-white/5 rounded-2xl py-3 px-2 border border-white/5">
-                                    <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Carbs</div>
-                                    <div className="text-sm font-black text-white">{Math.round(Number(carbs || 0))}g</div>
-                                </div>
-                                <div className="bg-white/5 rounded-2xl py-3 px-2 border border-white/5">
-                                    <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Fat</div>
-                                    <div className="text-sm font-black text-white">{Math.round(Number(fat || 0))}g</div>
-                                </div>
-                            </div>
-                            <div className="flex justify-center flex-wrap gap-2 mt-4">
-                                {estimated_price && (
-                                    <span className="px-3 py-1 bg-blue-500/10 text-blue-400 text-xs font-bold rounded-full flex items-center gap-1">
-                                        <ShoppingCart className="w-3 h-3" />
-                                        {formatCurrency(estimated_price)} (market est.)
-                                    </span>
-                                )}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Personalized Recommendation */}
-                    {recommendation && (
-                        <div className="p-5 bg-[#0a2e52]/10 dark:bg-[#0a2e52]/20 border border-[#0a2e52]/20 rounded-2xl">
-                            <p className="text-[14px] leading-relaxed text-slate-600 dark:text-slate-300 italic">
-                                {recommendation}
-                            </p>
-                        </div>
-                    )}
-
-                    {/* Smart Alternatives (when political warning) */}
-                    {cheaper_alternatives && cheaper_alternatives.length > 0 && (
-                        <div className="space-y-3">
-                            <h3 className="text-[13px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest">
-                                {political_warning ? '🔄 Ethical Alternatives' : 'Smart Alternatives'}
-                            </h3>
-                            <div className="space-y-2">
-                                {cheaper_alternatives.map((alt, i) => (
-                                    <div key={i} className="flex items-center justify-between p-4 bg-emerald-500/5 rounded-2xl border border-emerald-500/10">
-                                        <div>
-                                            <p className="text-[14px] font-black text-slate-900 dark:text-white">{alt.name}</p>
-                                            <p className="text-[11px] text-slate-500">{alt.reason}</p>
-                                        </div>
-                                        <span className="text-[13px] font-black text-emerald-500">{formatCurrency(alt.price)}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-                    </>
-                    )}
-                </main>
-
-                {/* Footer Actions */}
-                <div className="px-7 py-6 shrink-0 bg-white dark:bg-[#0a0f14] border-t border-slate-100 dark:border-white/5 space-y-3">
-                    <div className="flex gap-3">
-                        {!isMedication && is_compliant && (
-                            <button
-                                onClick={onAddToDiary}
-                                className="flex-1 py-4 bg-[#0a2e52] text-white rounded-[1.5rem] font-black text-[15px] active:scale-[0.98] transition-all shadow-xl flex items-center justify-center gap-2"
-                            >
-                                <Scale className="w-5 h-5" />
-                                Log Product
-                            </button>
-                        )}
-                        {!isMedication && !is_compliant && (
-                            <button
-                                onClick={onClose}
-                                className="flex-1 py-4 bg-rose-600 text-white rounded-[1.5rem] font-black text-[15px] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
-                            >
-                                <AlertCircle className="w-5 h-5" />
-                                Avoid Product
-                            </button>
-                        )}
-                        <button
-                            onClick={handleConsultCoach}
-                            disabled={isNavigating}
-                            className={`flex-1 py-4 rounded-[1.5rem] font-black text-[15px] active:scale-[0.98] transition-all flex items-center justify-center gap-2 ${isNavigating ? 'opacity-70 cursor-not-allowed' : ''} ${isMedication ? 'bg-purple-600 text-white hover:bg-purple-700' : 'bg-slate-100 dark:bg-white/5 text-slate-700 dark:text-white'}`}
-                        >
-                            {isNavigating ? (
-                                <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                            ) : (
-                                <MessageSquare className="w-5 h-5" />
-                            )}
-                            {isMedication ? 'Ask Health Coach' : 'Ask Coach'}
-                        </button>
-                    </div>
-                    {needs_crowdsourcing && (
-                        <div className="pt-2">
-                            <button
-                                onClick={() => setShowCrowdsourceForm(true)}
-                                className="w-full py-3.5 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-[1.5rem] font-bold text-sm hover:bg-blue-500/20 transition-all flex items-center justify-center gap-2"
-                            >
-                                <MessageSquare className="w-4 h-4" />
-                                Product missing? Report to our Database
-                            </button>
-                        </div>
-                    )}
-                </div>
-
-                {showCrowdsourceForm && (
-                    <CrowdsourceForm 
-                        barcode={(productName + (brand || '')).substring(0, 20)} // Fallback if no barcode
-                        productName={productName}
-                        brandName={brand || manufacturer}
-                        onClose={() => setShowCrowdsourceForm(false)}
-                    />
-                )}
-
-                <style>{`
-                    .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-                    .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-                    .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
-                    .dark\\:border-white\\/8 { border-color: rgba(255,255,255,0.08); }
-                `}</style>
-            </div>
+        <div className="flex items-center gap-2">
+          <span className={`px-3 py-1 rounded-full text-xs font-black tracking-wider uppercase shadow-sm ${
+            isFlagged ? 'bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/30' :
+            healthStatus === 'MODERATE' ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30' :
+            'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30'
+          }`}>
+            {isFlagged ? 'Avoid' : healthStatus === 'MODERATE' ? 'Moderate' : 'Good'}
+          </span>
         </div>
-    );
+        <div className="size-10" /> {/* Spacer */}
+      </header>
+
+      {/* Main Vertically Scrollable Content */}
+      <main className="flex-1 w-full max-w-2xl mx-auto px-5 py-6 space-y-6 overflow-y-auto">
+        {/* Product Photograph Banner */}
+        <div className="relative w-full h-64 sm:h-72 rounded-[2rem] overflow-hidden border border-white/10 shadow-2xl bg-slate-900 shrink-0">
+          <img
+            src={productImage || "https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&q=80&w=600"}
+            alt={productName}
+            className="w-full h-full object-cover"
+          />
+          <div className="absolute inset-0 bg-gradient-to-t from-[#0a0f14] via-transparent to-transparent opacity-95" />
+
+          {/* Badges */}
+          <div className="absolute top-4 right-4 flex flex-wrap gap-2">
+            {origin_country && (
+              <span className="px-3 py-1 bg-black/70 backdrop-blur-md text-white text-[11px] font-bold rounded-full border border-white/10 flex items-center gap-1.5">
+                <Globe className="w-3.5 h-3.5 text-vic-blue" /> {origin_country}
+              </span>
+            )}
+            {category && (
+              <span className="px-3 py-1 bg-black/70 backdrop-blur-md text-white text-[11px] font-bold rounded-full border border-white/10">
+                {category}
+              </span>
+            )}
+          </div>
+
+          <div className="absolute bottom-5 left-5 right-5">
+            <h1 className="text-3xl sm:text-4xl font-black text-white tracking-tight drop-shadow-md">
+              {productName}
+            </h1>
+            {brand && (
+              <p className="text-sm text-slate-300 font-semibold mt-1 flex items-center gap-1.5">
+                <ShoppingCart className="w-4 h-4 text-emerald-400" /> Brand: {brand}
+                {manufacturer && manufacturer !== brand && ` (${manufacturer})`}
+              </p>
+            )}
+          </div>
+        </div>
+
+        {/* ─── MEDICATION BRANCH ─── */}
+        {isMedication ? (
+          <div className="space-y-6">
+            {/* Generic & Purpose */}
+            <section className="bg-white/5 border border-white/10 rounded-[2rem] p-6 sm:p-7 shadow-lg space-y-4">
+              <div className="flex items-center gap-2">
+                <div className="size-8 rounded-xl bg-purple-500/20 flex items-center justify-center text-purple-400 border border-purple-500/30">
+                  <Pill className="w-4 h-4" />
+                </div>
+                <div>
+                  <h2 className="text-xs font-black text-white uppercase tracking-wider">Medication Details</h2>
+                  {generic_name && <span className="text-xs text-purple-300 font-semibold">Generic: {generic_name}</span>}
+                </div>
+              </div>
+
+              {purpose && (
+                <div className="p-4 bg-purple-500/10 border border-purple-500/20 rounded-2xl">
+                  <h3 className="text-xs font-bold text-purple-300 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                    <Dna className="w-3.5 h-3.5" /> Mechanism & Purpose
+                  </h3>
+                  <p className="text-slate-300 text-sm leading-relaxed">{purpose}</p>
+                </div>
+              )}
+
+              {description && (
+                <div className="text-slate-300 text-sm leading-relaxed space-y-3 pt-1">
+                  {description.split('\n\n').map((p: string, i: number) => <p key={i}>{p}</p>)}
+                </div>
+              )}
+            </section>
+
+            {/* Warnings & Precautions */}
+            {warnings && (
+              <section className="bg-amber-500/10 border border-amber-500/20 rounded-[2rem] p-6 shadow-lg">
+                <div className="flex items-center gap-2 mb-2 text-amber-300 font-bold text-xs uppercase tracking-wider">
+                  <TriangleAlert className="w-4 h-4 text-amber-400" /> Warnings & Precautions
+                </div>
+                <p className="text-amber-200/90 text-sm leading-relaxed">{warnings}</p>
+              </section>
+            )}
+
+            {/* Side Effects */}
+            {side_effects && (
+              <section className="bg-rose-500/10 border border-rose-500/20 rounded-[2rem] p-6 shadow-lg">
+                <div className="flex items-center gap-2 mb-2 text-rose-300 font-bold text-xs uppercase tracking-wider">
+                  <AlertCircle className="w-4 h-4 text-rose-400" /> Common Side Effects
+                </div>
+                <p className="text-slate-300 text-sm leading-relaxed">{side_effects}</p>
+              </section>
+            )}
+
+            {/* Drug Interactions */}
+            {interactions && (
+              <section className="bg-white/5 border border-white/10 rounded-[2rem] p-6 shadow-lg">
+                <div className="flex items-center gap-2 mb-2 text-slate-300 font-bold text-xs uppercase tracking-wider">
+                  <HeartPulse className="w-4 h-4 text-vic-blue" /> Drug Interactions
+                </div>
+                <p className="text-slate-300 text-sm leading-relaxed">{interactions}</p>
+              </section>
+            )}
+
+            {/* Verified Price */}
+            <section className="bg-white/5 border border-white/10 rounded-2xl p-5 flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Verified Retail Price</span>
+              <span className="text-base font-black text-white">
+                {estimated_price || "Price unavailable"}
+              </span>
+            </section>
+          </div>
+        ) : (
+          /* ─── FOOD PRODUCT BRANCH ─── */
+          <>
+            {/* 1. BOYCOTT GATE (BEFORE normal recommendation) */}
+            {isFlagged ? (
+              <section className="bg-rose-500/15 border-2 border-rose-500/40 rounded-[2rem] p-6 sm:p-7 shadow-2xl space-y-5">
+                <div className="flex items-start gap-3">
+                  <div className="size-10 rounded-2xl bg-rose-500/20 flex items-center justify-center text-rose-400 border border-rose-500/30 shrink-0 mt-0.5">
+                    <AlertCircle className="w-5 h-5 text-rose-400" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-black text-rose-400 uppercase tracking-wider">
+                      Ethical Responsibility Alert — Flagged
+                    </h2>
+                    <p className="text-xs text-slate-300 mt-1 font-medium">
+                      Normal purchase recommendation is suspended at this safety gate.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="p-5 bg-black/40 border border-rose-500/20 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-400 uppercase font-bold tracking-wider">Campaign</span>
+                    <span className="text-rose-300 font-black">{boycott?.campaignName || 'Corporate Responsibility Watch'}</span>
+                  </div>
+
+                  {boycott?.parentCompany && (
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-400 uppercase font-bold tracking-wider">Parent Company</span>
+                      <span className="text-white font-bold">{boycott.parentCompany}</span>
+                    </div>
+                  )}
+
+                  <div className="pt-2 border-t border-white/10 text-xs text-slate-300 leading-relaxed">
+                    <span className="font-bold text-white block mb-1">Documented Reason:</span>
+                    {boycott?.reason || political_warning || 'Documented political affiliation or corporate relationship under active campaign boycott.'}
+                  </div>
+
+                  {boycott?.sourceUrl && (
+                    <div className="pt-2">
+                      <a
+                        href={boycott.sourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 text-xs font-bold text-vic-blue hover:underline"
+                      >
+                        Inspect Supporting Evidence & Provenance <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    </div>
+                  )}
+                </div>
+
+                {cheaper_alternatives && cheaper_alternatives.length > 0 && (
+                  <div className="space-y-3">
+                    <h3 className="text-xs font-black text-slate-300 uppercase tracking-wider">
+                      Recommended Ethical Alternatives
+                    </h3>
+                    <div className="space-y-2">
+                      {cheaper_alternatives.map((alt, i) => (
+                        <div key={i} className="flex items-center justify-between p-3.5 bg-black/30 rounded-xl border border-white/5">
+                          <p className="text-sm font-bold text-white">{alt.name}</p>
+                          <span className="text-xs text-emerald-400 font-semibold">{alt.reason}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </section>
+            ) : (
+              /* PASSED GATE: Cleared Banner */
+              <div className="flex items-center gap-2 p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl">
+                <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
+                <p className="text-xs font-bold text-emerald-300 uppercase tracking-wider">
+                  Ethically Cleared — No active boycott or conflict flags on record
+                </p>
+              </div>
+            )}
+
+            {/* If NOT flagged, proceed to Section 1, 2, 3, 4 */}
+            {!isFlagged && (
+              <>
+                {/* SECTION 1: PRODUCT DESCRIPTION */}
+                <section className="bg-white/5 border border-white/10 rounded-[2rem] p-6 sm:p-7 shadow-lg">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="size-8 rounded-xl bg-vic-blue/20 flex items-center justify-center text-vic-blue border border-vic-blue/30">
+                      <ShoppingCart className="w-4 h-4" />
+                    </div>
+                    <h2 className="text-xs font-black text-white uppercase tracking-wider">
+                      Product Description
+                    </h2>
+                  </div>
+                  <div className="text-slate-300 text-sm sm:text-[15px] leading-relaxed space-y-3">
+                    {description ? (
+                      description.split('\n\n').map((para: string, i: number) => <p key={i}>{para}</p>)
+                    ) : (
+                      <p>{productName} is an authentic packaged food product registered under brand {brand || 'unspecified'}.</p>
+                    )}
+                  </div>
+                </section>
+
+                {/* SECTION 2: VITAMINS & NUTRITION */}
+                <section className="bg-white/5 border border-white/10 rounded-[2rem] p-6 sm:p-7 shadow-lg space-y-6">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="size-8 rounded-xl bg-emerald-500/20 flex items-center justify-center text-emerald-400 border border-emerald-500/30">
+                        <Scale className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h2 className="text-xs font-black text-white uppercase tracking-wider">
+                          Vitamins & Nutrition
+                        </h2>
+                        <span className="text-[11px] text-slate-400">
+                          {servingSize ? `Basis: ${servingSize}` : (serving_basis === 'serving' ? 'Per Serving' : 'Per 100g')}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Calories Card */}
+                  <div className="bg-gradient-to-br from-white/10 to-white/5 border border-white/10 rounded-2xl p-5 text-center shadow-inner">
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-1">
+                      Nutritional Energy
+                    </span>
+                    <div className="text-4xl sm:text-5xl font-black text-white tracking-tight my-1">
+                      {calories !== null && calories !== undefined ? (
+                        <>~{calories} <span className="text-2xl font-bold text-slate-400">kcal</span></>
+                      ) : (
+                        <span className="text-2xl font-bold text-slate-400">Calorie Data Pending</span>
+                      )}
+                    </div>
+                    {servingSize && (
+                      <p className="text-xs text-slate-300 font-medium">Serving Size: {servingSize}</p>
+                    )}
+                  </div>
+
+                  {/* Macros Grid */}
+                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-2.5">
+                    <div className="bg-black/30 rounded-2xl p-3 border border-white/5 text-center">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Protein</span>
+                      <p className="text-base font-black text-white mt-0.5">{protein !== null && protein !== undefined ? `${protein}g` : '–'}</p>
+                    </div>
+                    <div className="bg-black/30 rounded-2xl p-3 border border-white/5 text-center">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Carbs</span>
+                      <p className="text-base font-black text-white mt-0.5">{carbs !== null && carbs !== undefined ? `${carbs}g` : '–'}</p>
+                    </div>
+                    <div className="bg-black/30 rounded-2xl p-3 border border-white/5 text-center">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Fat</span>
+                      <p className="text-base font-black text-white mt-0.5">{fat !== null && fat !== undefined ? `${fat}g` : '–'}</p>
+                    </div>
+                    <div className="bg-black/30 rounded-2xl p-3 border border-white/5 text-center">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Sugar</span>
+                      <p className="text-base font-black text-white mt-0.5">{sugar !== null && sugar !== undefined ? `${sugar}g` : '–'}</p>
+                    </div>
+                    <div className="bg-black/30 rounded-2xl p-3 border border-white/5 text-center">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Fiber</span>
+                      <p className="text-base font-black text-white mt-0.5">{fiber !== null && fiber !== undefined ? `${fiber}g` : '–'}</p>
+                    </div>
+                    <div className="bg-black/30 rounded-2xl p-3 border border-white/5 text-center">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Sodium</span>
+                      <p className="text-base font-black text-white mt-0.5">{sodium_mg !== null && sodium_mg !== undefined ? `${sodium_mg}mg` : '–'}</p>
+                    </div>
+                  </div>
+
+                  {/* Vitamins & Minerals */}
+                  {(vitamins.length > 0 || minerals.length > 0) && (
+                    <div className="space-y-2 pt-1">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
+                        Documented Vitamins & Minerals
+                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        {vitamins.map((v, i) => (
+                          <span key={i} className="px-3 py-1.5 bg-vic-blue/15 border border-vic-blue/30 rounded-xl text-xs font-semibold text-vic-blue">
+                            {v}
+                          </span>
+                        ))}
+                        {minerals.map((m, i) => (
+                          <span key={i} className="px-3 py-1.5 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-xs font-semibold text-emerald-300">
+                            {m}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Nutrition Narrative Paragraph */}
+                  {vitamins_and_nutrition && (
+                    <div className="pt-2 border-t border-white/10 text-slate-300 text-sm sm:text-[15px] leading-relaxed space-y-3">
+                      {vitamins_and_nutrition.split('\n\n').map((p: string, i: number) => <p key={i}>{p}</p>)}
+                    </div>
+                  )}
+                </section>
+
+                {/* SECTION 3: RECOMMENDED FOR YOUR PLAN */}
+                <section className="bg-vic-blue/10 border border-vic-blue/20 rounded-[2rem] p-6 sm:p-7 shadow-lg space-y-4">
+                  <div className="flex items-center gap-2">
+                    <div className="size-8 rounded-xl bg-vic-blue/20 flex items-center justify-center text-vic-blue border border-vic-blue/30">
+                      <Check className="w-4 h-4" />
+                    </div>
+                    <h2 className="text-xs font-black text-white uppercase tracking-wider">
+                      Recommended for Your Plan
+                    </h2>
+                  </div>
+                  <div className="text-slate-200 text-sm sm:text-[15px] leading-relaxed space-y-3">
+                    {recommendation ? (
+                      recommendation.split('\n\n').map((p: string, i: number) => <p key={i}>{p}</p>)
+                    ) : (
+                      <p>Evaluated against your active objective and dietary constraints.</p>
+                    )}
+                  </div>
+                </section>
+
+                {/* SECTION 4: LOCALIZED PRICE (No artificial hallucinated prices) */}
+                <section className="bg-white/5 border border-white/10 rounded-2xl p-5 flex items-center justify-between shadow-lg">
+                  <div>
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-400 block">Verified Local Price</span>
+                    {price_metadata?.source && (
+                      <span className="text-[11px] text-slate-400">Source: {price_metadata.source}</span>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <span className="text-lg font-black text-white">
+                      {estimated_price || "Price unavailable"}
+                    </span>
+                    {!estimated_price && (
+                      <span className="text-[10px] text-slate-400 block">No verified retailer cache</span>
+                    )}
+                  </div>
+                </section>
+              </>
+            )}
+          </>
+        )}
+
+      </main>
+
+      {/* Sticky Bottom Action Dock: ALWAYS VISIBLE AND HORIZONTALLY PROPORTIONED */}
+      <footer className="shrink-0 z-30 bg-white/95 dark:bg-[#0b141a]/95 backdrop-blur-xl border-t border-slate-200 dark:border-slate-800 px-5 py-3.5 shadow-lg max-w-2xl mx-auto w-full">
+        <div className="flex flex-row items-center gap-3 w-full">
+          {!isFlagged ? (
+            <button
+              onClick={handleConfirmLog}
+              disabled={isLogging}
+              className="flex-1 h-14 px-4 bg-vic-green hover:bg-vic-green/90 active:scale-[0.98] text-slate-900 rounded-2xl font-black text-sm shadow-md flex items-center justify-center gap-2.5 transition-all disabled:opacity-50 whitespace-nowrap cursor-pointer"
+            >
+              {isLogging ? (
+                <div className="w-5 h-5 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Check className="w-5 h-5 text-slate-900" strokeWidth={3} />
+              )}
+              <span>Log Product</span>
+            </button>
+          ) : (
+            <button
+              onClick={onClose}
+              className="flex-1 h-14 px-4 bg-rose-600 hover:bg-rose-500 active:scale-[0.98] text-white rounded-2xl font-black text-sm shadow-md flex items-center justify-center gap-2.5 transition-all whitespace-nowrap cursor-pointer"
+            >
+              <AlertCircle className="w-5 h-5" />
+              <span>Avoid Product</span>
+            </button>
+          )}
+
+          <button
+            onClick={handleConsultCoach}
+            disabled={isNavigatingCoach}
+            className="flex-1 h-14 px-4 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 active:scale-[0.98] text-white rounded-2xl font-black text-sm shadow-lg shadow-blue-500/25 flex items-center justify-center gap-2.5 transition-all disabled:opacity-50 whitespace-nowrap cursor-pointer border border-blue-400/30"
+          >
+            {isNavigatingCoach ? (
+              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <img
+                src="/app-logo.png"
+                alt="Application Logo"
+                className="w-8 h-8 rounded-full object-cover shrink-0 ring-2 ring-white/80 shadow-md"
+                onError={(e) => {
+                  (e.target as HTMLElement).setAttribute('src', '/icon.png');
+                }}
+              />
+            )}
+            <span className="tracking-wide">Health Coach</span>
+          </button>
+        </div>
+
+        {needs_crowdsourcing && (
+          <button
+            onClick={() => setShowCrowdsourceForm(true)}
+            className="w-full mt-2 py-2 bg-blue-500/10 text-blue-500 dark:text-blue-400 rounded-xl text-xs font-bold hover:bg-blue-500/20 transition-all"
+          >
+            Report Product Info to Database
+          </button>
+        )}
+      </footer>
+
+      {showCrowdsourceForm && (
+        <CrowdsourceForm
+          barcode={barcode || ''}
+          productName={productName}
+          brandName={brand || manufacturer}
+          onClose={() => setShowCrowdsourceForm(false)}
+        />
+      )}
+    </div>
+  );
 }

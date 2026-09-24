@@ -380,9 +380,9 @@ export default function ChatConversation() {
                 
                 <div className="flex gap-4 relative z-0">
                     <div className="w-16 h-16 rounded-2xl overflow-hidden shrink-0 border border-white/10 shadow-lg bg-emerald-500/10 flex items-center justify-center">
-                        {sanitizeMediaUrl(ctx.productImage) ? (
+                        {sanitizeMediaUrl(ctx.productImage || (ctx as any).image || (ctx as any).mealImage) ? (
                             <img 
-                                src={sanitizeMediaUrl(ctx.productImage)!} 
+                                src={sanitizeMediaUrl(ctx.productImage || (ctx as any).image || (ctx as any).mealImage)!} 
                                 className="w-full h-full object-cover" 
                                 alt="" 
                                 onError={(e) => {
@@ -1500,30 +1500,32 @@ export default function ChatConversation() {
         let autoSendMessage = initialMsg;
         
         if (initialMsg) {
-            console.log("[Chat] Auto-sending initial context message...");
+            console.log("[Chat] Auto-sending initial context message to Health Coach...");
             sessionStorage.removeItem('chatInitialMessage');
-        } else if (pendingAnalysisContext && isAI) {
+        } else if (pendingAnalysisContext) {
             const ctx = pendingAnalysisContext;
-            autoSendMessage = `I just analyzed ${ctx.productName} (${ctx.calories} kcal). ${ctx.political_warning ? 'It has an ethical warning.' : ''} How does this look for me?`;
+            autoSendMessage = `I just analyzed my meal: ${ctx.productName} (${ctx.calories} kcal). ${ctx.political_warning ? 'It has an ethical warning.' : ''} Please explain this meal to me in detail, its health impact, and recommendations.`;
         }
 
         if (autoSendMessage) {
             setHasSentInitial(true);
             
-            const contextMetadata = isAI && pendingAnalysisContext
-                ? { 
-                    scannedProductContext: pendingAnalysisContext,
-                    url: pendingAnalysisContext.productImage
-                  }
-                : undefined;
+            const pCtx = pendingAnalysisContext as any;
+            const imageUrl = pCtx?.productImage || pCtx?.image || pCtx?.mealImage;
+            const contextMetadata = pendingAnalysisContext ? { 
+                scannedProductContext: {
+                    ...pendingAnalysisContext,
+                    productImage: imageUrl
+                },
+                url: imageUrl,
+                image: imageUrl
+            } : undefined;
 
-            if (isAI && pendingAnalysisContext) {
+            if (pendingAnalysisContext) {
                 clearPendingAnalysisContext();
             }
 
-            if (isAI) {
-                setOtherUserTyping(true);
-            }
+            setOtherUserTyping(true);
 
             sendMutation.mutate({ content: autoSendMessage, metadata: contextMetadata });
         }

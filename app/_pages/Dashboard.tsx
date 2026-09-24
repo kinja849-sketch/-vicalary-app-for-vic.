@@ -31,6 +31,7 @@ import { DashboardSkeleton } from "@/components/DashboardSkeleton";
 import { requestCameraAccess } from "@/lib/api/permissions";
 import { useNotificationStore } from "@/store/notificationStore";
 import { useCoachInjectionStore } from "@/store/coachInjectionStore";
+import { useAnalysisStore } from "@/store/analysisStore";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -71,6 +72,12 @@ export default function Dashboard() {
     currency_symbol: globalCurrencySymbol
   };
   const [selectedProgressDate, setSelectedProgressDate] = useState<Date>(new Date());
+  const setNavbarHidden = useAnalysisStore(state => state.setNavbarHidden);
+
+  const isAnyModalActive = showCameraModal || showScannerModal || showMealAnalysis || showProductDetails;
+  useEffect(() => {
+    setNavbarHidden(isAnyModalActive);
+  }, [isAnyModalActive, setNavbarHidden]);
 
   const cameraVideoRef = useRef<HTMLVideoElement>(null);
   const scannerVideoRef = useRef<HTMLVideoElement>(null);
@@ -172,38 +179,13 @@ export default function Dashboard() {
     }
   };
 
-  // Camera functions
-  const openCamera = async () => {
-    try {
-      const stream = await requestCameraAccess({
-        video: {
-          facingMode: facingMode,
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-          frameRate: { ideal: 60 },
-          advanced: [
-            { exposureMode: 'continuous' } as any,
-            { whiteBalanceMode: 'continuous' } as any,
-            { focusMode: 'continuous' } as any,
-            { brightness: 100 } as any,
-            { contrast: 100 } as any
-          ]
-        }
-      });
-      if (cameraVideoRef.current) {
-        cameraVideoRef.current.srcObject = stream;
-        cameraStreamRef.current = stream;
-        try {
-          await cameraVideoRef.current.play();
-        } catch (e) {
-          console.error("Video auto-play failed:", e);
-        }
-      }
-      setShowCameraModal(true);
-    } catch (err) {
-      console.error("Camera access failed in Dashboard.tsx:", err);
-      // Detailed error is already handled by requestCameraAccess toast
-    }
+  // Camera and Scanner direct navigation to dedicated full-screen experiences
+  const openCamera = () => {
+    router.push('/camera');
+  };
+
+  const openScanner = () => {
+    router.push('/scanner');
   };
 
   const switchCamera = async () => {
@@ -436,9 +418,6 @@ export default function Dashboard() {
       closeCamera();
       setShowMealAnalysis(true);
       addNotification('success', "Image analyzed successfully");
-
-      // Immediate Persistence
-      saveFoodAnalysis(user.id, analysis).catch(e => console.error("Auto-save failed:", e));
     } catch (err: any) {
       console.error("Gallery Upload Error:", err);
       toast.error(`Analysis failed: ${err.message}`);
@@ -454,7 +433,6 @@ export default function Dashboard() {
     try {
       await logMeal(user.id, analysisData);
       addNotification('success', `Meal ${analysisData.name || ''} logged successfully!`);
-      // toast.success("Meal logged!"); // Removing separate toast to avoid redundancy
       setShowMealAnalysis(false);
       queryClient.invalidateQueries({ queryKey: ['daily-progress', user.id, today] });
       queryClient.invalidateQueries({ queryKey: ['daily-summary', user.id, today] });
@@ -462,10 +440,6 @@ export default function Dashboard() {
     } catch (err: any) {
       toast.error(`Failed to log meal: ${err.message}`);
     }
-  };
-
-  const openScanner = () => {
-    setShowScannerModal(true);
   };
 
   const handleQRManualCapture = async (blob: Blob) => {
@@ -521,9 +495,6 @@ export default function Dashboard() {
       setShowScannerModal(false);
       setShowProductDetails(true);
       addNotification('success', "Product analyzed visually!");
-
-      // Immediate Persistence
-      saveFoodAnalysis(user.id, analysis).catch(e => console.error("Auto-save failed:", e));
     } catch (err: any) {
       console.error("Manual QR Capture Error:", err);
       toast.error(`Visual analysis failed: ${err.message}`);
@@ -584,9 +555,6 @@ export default function Dashboard() {
       setShowScannerModal(false);
       setShowProductDetails(true);
       addNotification('success', "Product identified via Barcode!");
-
-      // Immediate Persistence
-      saveFoodAnalysis(user.id, data).catch(e => console.error("Auto-save failed:", e));
     } catch (err: any) {
       console.error("Barcode Scan Error:", err);
       toast.error(`Barcode scan failed: ${err.message}`);
@@ -598,6 +566,7 @@ export default function Dashboard() {
   const handleLogProduct = async () => {
     if (!user || !productData) return;
     try {
+      await saveFoodAnalysis(user.id, productData, true);
       const mealToLog = {
         mealImage: productData.productImage,
         totalCalories: productData.calories,
@@ -658,7 +627,7 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="relative mx-auto flex h-auto min-h-screen w-full max-w-md flex-col bg-background-light dark:bg-[#0d1418] overflow-x-hidden font-display">
+    <div className="relative mx-auto flex h-auto min-h-screen w-full max-w-md flex-col bg-background-light dark:bg-[#0d1418] [overflow-x:clip] font-display">
       {/* Modals */}
       <div className={`modal-overlay !bg-black ${showCameraModal ? "active" : ""}`}>
         <div className="modal-content !p-0 bg-black w-screen h-[100dvh] flex flex-col overflow-hidden">
@@ -752,6 +721,7 @@ export default function Dashboard() {
           totalCalories={analysisData.totalCalories}
           dailyCalorieGoal={onboarding?.daily_calorie_goal}
           foodItems={analysisData.foodItems}
+          analysis={analysisData}
           onClose={() => setShowMealAnalysis(false)}
           onLog={handleLogMeal}
         />
@@ -765,7 +735,7 @@ export default function Dashboard() {
         />
       )}
 
-      <header className="flex items-center bg-background-light dark:bg-[#0d1418] p-4 pb-2 justify-between sticky top-0 z-10">
+      <header className="flex items-center bg-background-light dark:bg-[#0d1418] p-4 pb-2 justify-between relative z-10">
         <Link href="/settings" className="relative group block">
           <div
             className="bg-center bg-no-repeat aspect-square bg-cover rounded-full size-11 border-[1.5px] border-vic-green/40 shadow-sm transition-transform group-hover:scale-105"
@@ -774,7 +744,7 @@ export default function Dashboard() {
           {countryFlag && (
             <div 
               className="absolute -bottom-0.5 -right-0.5 size-5 rounded-full overflow-hidden border-2 border-background-light dark:border-[#0d1418] shadow-[0_2px_6px_rgba(0,0,0,0.15)] dark:shadow-[0_2px_6px_rgba(255,255,255,0.08)] group-hover:shadow-[0_0_8px_rgba(19,236,55,0.3)] transition-all bg-slate-100 dark:bg-slate-800 flex items-center justify-center z-10"
-              title={`${country} â€¢ ${lang.toUpperCase()}`}
+              title={`${country} • ${lang.toUpperCase()}`}
             >
               <img src={countryFlag} alt={country} className="w-full h-full object-cover" />
             </div>

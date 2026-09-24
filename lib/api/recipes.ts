@@ -460,8 +460,7 @@ export const getDailyMealSuggestions = async (userId?: string, forceRefresh = fa
 
             if (existingError) {
                 if (existingError.code !== 'PGRST116') {
-                    console.error("[Recipes] Database error fetching daily plan:", JSON.stringify(existingError, null, 2));
-                    throw existingError;
+                    console.warn("[Recipes] Database warning fetching daily plan:", existingError);
                 }
             }
 

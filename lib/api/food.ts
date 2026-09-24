@@ -62,33 +62,40 @@ export const analyzeFoodImage = async (userId: string, file: File, options?: any
     try {
         console.log("Analyzing image with backend Edge Function...");
 
-        // 1. Upload to storage
+        // 1. Upload to storage & convert to base64 in parallel for speed
         const fileExt = file.name.split('.').pop();
         const fileName = `${userId}-${Date.now()}.${fileExt}`;
         const filePath = `${userId}/${fileName}`;
 
-        const { error: uploadError } = await supabase.storage
+        const uploadPromise = supabase.storage
             .from('food-images')
-            .upload(filePath, file);
+            .upload(filePath, file)
+            .then(res => {
+                if (res.error) throw res.error;
+                const { data: { publicUrl } } = supabase.storage
+                    .from('food-images')
+                    .getPublicUrl(filePath);
+                return publicUrl;
+            });
 
-        if (uploadError) throw uploadError;
-
-        const { data: { publicUrl } } = supabase.storage
-            .from('food-images')
-            .getPublicUrl(filePath);
-
-        // Convert file to base64 for direct AI processing (faster & avoids download timeouts)
-        const reader = new FileReader();
-        const base64Promise = new Promise((resolve) => {
+        // Convert file to base64 for direct AI processing
+        const base64Promise = new Promise<string | null>((resolve) => {
+            const reader = new FileReader();
             reader.onload = () => {
                 const base64 = typeof reader.result === 'string' ? reader.result.split(',')[1] : null;
                 resolve(base64);
             };
+            reader.onerror = () => resolve(null);
             reader.readAsDataURL(file);
         });
-        const base64Data = await base64Promise;
-        
-        const loc = await getUserLocation();
+
+        const locationPromise = getUserLocation().catch(() => null);
+
+        const [publicUrl, base64Data, loc] = await Promise.all([
+            uploadPromise,
+            base64Promise,
+            locationPromise
+        ]);
 
         // 2. Call Next.js API route
         const res = await fetch('/api/analyze-food-image', {
@@ -120,6 +127,65 @@ export const analyzeFoodImage = async (userId: string, file: File, options?: any
     } catch (error: any) {
         logError(userId, 'food_analysis_failed', { error: error.message || error });
         console.error("AI analysis failed:", error);
+        throw error;
+    }
+}
+
+export const analyzeMedication = async (userId: string, file: File, options?: any) => {
+    try {
+        const fileExt = file.name.split('.').pop();
+        const fileName = `med-${userId}-${Date.now()}.${fileExt}`;
+        const filePath = `${userId}/${fileName}`;
+
+        const uploadPromise = supabase.storage
+            .from('food-images')
+            .upload(filePath, file)
+            .then(res => {
+                if (res.error) return null;
+                const { data: { publicUrl } } = supabase.storage
+                    .from('food-images')
+                    .getPublicUrl(filePath);
+                return publicUrl;
+            }).catch(() => null);
+
+        const base64Promise = new Promise<string | null>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                const base64 = typeof reader.result === 'string' ? reader.result.split(',')[1] : null;
+                resolve(base64);
+            };
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(file);
+        });
+
+        const locationPromise = getUserLocation().catch(() => null);
+
+        const [publicUrl, base64Data, loc] = await Promise.all([
+            uploadPromise,
+            base64Promise,
+            locationPromise
+        ]);
+
+        const res = await fetch('/api/analyze-medication', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                imageUrl: publicUrl,
+                imageBase64: base64Data,
+                userId,
+                locationContext: loc,
+                ...options
+            })
+        });
+
+        const data = await res.json();
+        if (!res.ok || (data && data.error)) {
+            throw new Error(data?.error || 'Medication analysis failed');
+        }
+
+        return { ...data, image_url: publicUrl || data.image_url };
+    } catch (error: any) {
+        console.error("Medication analysis failed:", error);
         throw error;
     }
 }
@@ -164,8 +230,8 @@ export const scanProduct = async (userId: string, barcode: string, options?: any
     return data
 }
 
-export const saveFoodAnalysis = async (userId: string, analysis: any) => {
-    if (analysis.is_already_saved) return null;
+export const saveFoodAnalysis = async (userId: string, analysis: any, isPurchaseConfirmed: boolean = false) => {
+    if (analysis.is_already_saved && !isPurchaseConfirmed) return null;
 
     // 1. Save food item
     const { data: foodItemRows, error: foodError } = await (supabase
@@ -235,50 +301,62 @@ export const saveFoodAnalysis = async (userId: string, analysis: any) => {
         }
     }
 
-    // 3. PHASE 8: Standardized PurchaseEvent (Record Expense)
-    const price = Number(analysis.price || analysis.estimated_price || 0);
-    if (price > 0) {
-        try {
-            // Resolve user's currency dynamically instead of hardcoding
-            let expenseCurrency = 'USD';
+    // Update daily_progress table automatically for Today's Progress
+    await updateDailyProgress(
+        userId,
+        Number(analysis.calories || 0),
+        Number(analysis.protein || 0),
+        Number(analysis.carbs || 0),
+        Number(analysis.fat || 0),
+        Number(analysis.fiber || 0),
+        Number(analysis.sugar || 0)
+    ).catch(err => console.warn("[Food] Failed to sync daily progress:", err));
+
+    // 3. PHASE 8: Standardized PurchaseEvent (Record Expense) - STRICTLY ONLY UPON USER LOG CONFIRMATION
+    if (isPurchaseConfirmed) {
+        const price = Number(analysis.price || (typeof analysis.estimated_price === 'number' ? analysis.estimated_price : 0) || 0);
+        if (price > 0) {
             try {
-                const { data: userSettings } = await supabase
-                    .from('user_settings')
-                    .select('currency')
-                    .eq('user_id', userId)
-                    .single();
-                if (userSettings?.currency) {
-                    expenseCurrency = userSettings.currency;
-                } else {
-                    // Fallback: check budget profile currency
-                    const { data: budgetProfile } = await supabase
-                        .from('user_budget_profiles')
+                // Resolve user's currency dynamically instead of hardcoding
+                let expenseCurrency = 'USD';
+                try {
+                    const { data: userSettings } = await supabase
+                        .from('user_settings')
                         .select('currency')
                         .eq('user_id', userId)
-                        .limit(1)
-                        .maybeSingle();
-                    if (budgetProfile?.currency) {
-                        expenseCurrency = budgetProfile.currency;
+                        .single();
+                    if (userSettings?.currency) {
+                        expenseCurrency = userSettings.currency;
+                    } else {
+                        const { data: budgetProfile } = await supabase
+                            .from('user_budget_profiles')
+                            .select('currency')
+                            .eq('user_id', userId)
+                            .limit(1)
+                            .maybeSingle();
+                        if (budgetProfile?.currency) {
+                            expenseCurrency = budgetProfile.currency;
+                        }
                     }
+                } catch (currErr) {
+                    console.warn("[Food] Could not resolve user currency, defaulting to USD:", currErr);
                 }
-            } catch (currErr) {
-                console.warn("[Food] Could not resolve user currency, defaulting to USD:", currErr);
-            }
 
-            await supabase.from('financial_transactions').insert({
-                user_id: userId,
-                transaction_date: new Date().toISOString(),
-                amount: price,
-                currency: expenseCurrency,
-                category: 'Food & Dining',
-                merchant_name: analysis.name || 'Scanned Item',
-                description: `Purchase: ${analysis.name}`,
-                source: 'barcode_scan',
-                reconciliation_status: 'pending',
-            } as any);
-            console.log(`[Food] Recorded scanner expense: ${expenseCurrency} ${price}`);
-        } catch (txErr) {
-            console.error("Failed to record scanner expense:", txErr);
+                await supabase.from('financial_transactions').insert({
+                    user_id: userId,
+                    transaction_date: new Date().toISOString(),
+                    amount: price,
+                    currency: expenseCurrency,
+                    category: 'Food & Dining',
+                    merchant_name: analysis.name || 'Scanned Item',
+                    description: `Purchase: ${analysis.name}`,
+                    source: 'barcode_scan',
+                    reconciliation_status: 'pending',
+                } as any);
+                console.log(`[Food] Confirmed scanner expense recorded: ${expenseCurrency} ${price}`);
+            } catch (txErr) {
+                console.error("Failed to record scanner expense:", txErr);
+            }
         }
     }
 
@@ -337,31 +415,37 @@ export const getRecentMeals = async (userId: string, limit = 10) => {
 // DAILY PROGRESS UPDATE
 // ============================================================================
 
-const updateDailyProgress = async (userId: string, calories: number) => {
-    const today = new Date().toISOString().split('T')[0]
+export const updateDailyProgress = async (userId: string, calories: number, protein: number = 0, carbs: number = 0, fat: number = 0, fiber: number = 0, sugar: number = 0) => {
+    const today = new Date().toISOString().split('T')[0];
 
     const { data: existingProgress } = await supabase
         .from('daily_progress')
         .select('*')
         .eq('user_id', userId)
         .eq('progress_date', today)
-        .maybeSingle()
+        .maybeSingle();
 
     if (existingProgress) {
         await supabase
             .from('daily_progress')
             .update({
-                calories_consumed: (existingProgress.calories_consumed || 0) + calories,
+                calories_consumed: Number(existingProgress.calories_consumed || 0) + calories,
+                protein_consumed: Number(existingProgress.protein_consumed || 0) + protein,
+                carbs_consumed: Number(existingProgress.carbs_consumed || 0) + carbs,
+                fat_consumed: Number(existingProgress.fat_consumed || 0) + fat,
+                fiber_consumed: Number(existingProgress.fiber_consumed || 0) + fiber,
+                sugar_consumed: Number(existingProgress.sugar_consumed || 0) + sugar,
                 meals_logged: (existingProgress.meals_logged || 0) + 1,
+                updated_at: new Date().toISOString()
             })
-            .eq('id', existingProgress.id)
+            .eq('id', existingProgress.id);
     } else {
         // Get user calorie goal
         const { data: onboarding } = await supabase
             .from('onboarding_responses')
-            .select('daily_calorie_goal')
+            .select('daily_calorie_goal, protein_goal, carbs_goal, fat_goal')
             .eq('user_id', userId)
-            .maybeSingle()
+            .maybeSingle();
 
         await supabase
             .from('daily_progress')
@@ -369,8 +453,16 @@ const updateDailyProgress = async (userId: string, calories: number) => {
                 user_id: userId,
                 progress_date: today,
                 calories_consumed: calories,
+                protein_consumed: protein,
+                carbs_consumed: carbs,
+                fat_consumed: fat,
+                fiber_consumed: fiber,
+                sugar_consumed: sugar,
                 calories_goal: onboarding?.daily_calorie_goal || 2000,
+                protein_goal: Number(onboarding?.protein_goal || 50),
+                carbs_goal: Number(onboarding?.carbs_goal || 250),
+                fat_goal: Number(onboarding?.fat_goal || 70),
                 meals_logged: 1,
-            })
+            });
     }
 }

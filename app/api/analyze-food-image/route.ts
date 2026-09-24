@@ -1,397 +1,302 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { createServerSupabaseClient } from '@/lib/supabase-server'
-import { calculateEconomicPrice } from '@/lib/pricing'
-
-// Static checkPoliticalAffiliation removed. Strict Audit Protocol handles this dynamically.
+import { NextRequest, NextResponse } from 'next/server';
+import { createServerSupabaseClient } from '@/lib/supabase-server';
+import { NutritionNormalizer, IdentifiedFoodItem } from '@/lib/nutrition/NutritionNormalizer';
+import { SafetyEngine } from '@/lib/services/SafetyEngine';
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json()
-    const { imageUrl, imageBase64, userId, locationContext, isProductScan } = body
+    const body = await req.json();
+    const { imageUrl, imageBase64, userId, locationContext, isProductScan } = body;
 
-    if (!imageUrl && !imageBase64) throw new Error('Image URL or base64 data is required')
-
-    const supabase = createServerSupabaseClient()
-    const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY
-
-    let profileContext = 'USER PROFILE: General healthy adult. No specific dietary restrictions on file.'
-    let userGoalSummary = 'maintain a healthy lifestyle'
-
-    if (userId) {
-      const { data: onboarding } = await supabase
-        .from('onboarding_responses')
-        .select('*')
-        .eq('user_id', userId)
-        .maybeSingle()
-
-      if (onboarding) {
-        const goal = onboarding.goal || 'maintain a healthy lifestyle'
-        const restrictions = (onboarding.dietary_lifestyle || []).join(', ') || 'none'
-        const medical = onboarding.medical_conditions || 'None reported'
-        const health = onboarding.health_conditions || 'None reported'
-        const calorieTarget = onboarding.daily_calorie_goal || 2000
-        userGoalSummary = goal
-
-        profileContext = `USER PROFILE & CONSTRAINTS:
-- PRIMARY GOAL: ${goal}
-- DIETARY LIFESTYLE / RESTRICTIONS: ${restrictions}
-- MEDICAL CONDITIONS: ${medical}
-- HEALTH CONCERNS: ${health}
-- DAILY CALORIE TARGET: ${calorieTarget} kcal/day
-- ASSESSMENT RULE: Based on the above profile, explicitly state whether this meal is GOOD, MODERATE, or POOR for this user and why.`
-      }
-      
-      const { data: userSettings } = await supabase
-        .from('user_settings')
-        .select('language')
-        .eq('user_id', userId)
-        .maybeSingle()
-      
-      var explicitUserLang = userSettings?.language || locationContext?.language;
-
-      const { data: budgetData } = await supabase
-        .from('user_budgets')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('is_active', true)
-        .maybeSingle();
-
-      if (budgetData) {
-        const today = new Date();
-        const end = new Date(budgetData.period_end);
-        if (today <= end) {
-            const diffTime = Math.abs(end.getTime() - today.getTime());
-            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-            const remaining = budgetData.remaining_budget ?? budgetData.total_budget ?? 0;
-            const dailyAllocation = diffDays > 0 ? remaining / diffDays : remaining;
-            profileContext += `\n- FINANCIAL CONTEXT: Remaining Daily Budget is ${locationContext?.currency_symbol || '$'}${dailyAllocation.toFixed(2)}. Evaluate affordability based on this limit.`;
-        }
-      }
+    if (!imageUrl && !imageBase64) {
+      return NextResponse.json({ error: 'Image URL or base64 data is required' }, { status: 400 });
     }
 
-    const identificationPrompt = isProductScan
-      ? `Identify the packaged product in this image. VERY IMPORTANT: Visually scan the image for a barcode and extract the exact EAN/UPC digits printed beneath the barcode lines. Return ONLY a JSON object with "name", "brand", "barcode" (string of digits, or null if absolutely not visible), and "type" ("food", "medication", or "unknown"). Example: {"name": "Instant Noodle Cup", "brand": "Nissin", "barcode": "0123456789012", "type": "food"}`
-      : `Identify the food in this image. Return ONLY a JSON object with a "name" field. Example: {"name": "Apple"}`
+    const supabase = createServerSupabaseClient();
+    const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
 
-    const idResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'text', text: identificationPrompt },
-            { type: 'image_url', image_url: { url: imageBase64 ? `data:image/jpeg;base64,${imageBase64}` : imageUrl, detail: 'low' } },
-          ],
-        }],
-        response_format: { type: 'json_object' },
-      }),
-    })
+    if (!apiKey) {
+      return NextResponse.json({ error: 'OpenAI API key not configured' }, { status: 500 });
+    }
 
-    const idData = await idResponse.json()
-    const idContent = JSON.parse(idData.choices[0].message.content)
-    let identifiedName = idContent.name
-    let identifiedBrand = idContent.brand || ''
-    const identifiedType = idContent.type || 'food'
-    const extractedBarcode = idContent.barcode
+    // ─── 1. FETCH USER PROFILE, ONBOARDING, AND TODAY'S CANONICAL MEAL PLAN ───
+    let userGoal = 'maintain a healthy lifestyle';
+    let dailyCalorieGoal = 2000;
+    let dietaryRestrictions: string[] = [];
+    let allergies: string[] = [];
+    let healthConditions = 'None reported';
+    let userLanguage = 'en';
+    let todaySuggestedMeals: Array<{ name: string; calories: number; image?: string; session?: string }> = [];
 
-    let dbVerifiedContext = ''
-    let isHallucinated = true
-    let verifiedFood: any = null
+    if (userId) {
+      const todayDateStr = new Date().toISOString().split('T')[0];
+      const [
+        { data: onboarding },
+        { data: userSettings },
+        { data: profile },
+        { data: dailyPlan }
+      ] = await Promise.all([
+        supabase.from('onboarding_responses').select('*').eq('user_id', userId).maybeSingle(),
+        supabase.from('user_settings').select('language').eq('user_id', userId).maybeSingle(),
+        supabase.from('user_profiles').select('*').eq('id', userId).maybeSingle(),
+        supabase.from('user_daily_meal_plans')
+          .select('breakfast, lunch, dinner, snacks')
+          .eq('user_id', userId)
+          .eq('plan_date', todayDateStr)
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      ]);
 
-    if (isProductScan && extractedBarcode && extractedBarcode.length >= 8) {
-      try {
-        const offRes = await fetch(`https://world.openfoodfacts.org/api/v0/product/${extractedBarcode}.json`)
-        if (offRes.ok) {
-          const offData = await offRes.json()
-          if (offData.status === 1 && offData.product) {
-            const p = offData.product
-            identifiedName = p.product_name || p.product_name_en || identifiedName
-            identifiedBrand = p.brands || identifiedBrand
-            const nutriments = p.nutriments
-            if (nutriments) {
-              verifiedFood = {
-                calories: Math.round(nutriments['energy-kcal_100g'] || nutriments['energy-kcal'] || nutriments['energy_100g'] / 4.184 || 0),
-                protein: Math.round((nutriments['proteins_100g'] || nutriments['proteins'] || 0) * 10) / 10,
-                carbs: Math.round((nutriments['carbohydrates_100g'] || nutriments['carbohydrates'] || 0) * 10) / 10,
-                fat: Math.round((nutriments['fat_100g'] || nutriments['fat'] || 0) * 10) / 10,
-                fiber: Math.round((nutriments['fiber_100g'] || nutriments['fiber'] || 0) * 10) / 10,
-                sugar: Math.round((nutriments['sugars_100g'] || nutriments['sugars'] || 0) * 10) / 10,
+      if (onboarding) {
+        userGoal = onboarding.goal || userGoal;
+        dailyCalorieGoal = onboarding.daily_calorie_goal || dailyCalorieGoal;
+        dietaryRestrictions = onboarding.dietary_lifestyle || [];
+        healthConditions = onboarding.health_conditions || onboarding.medical_conditions || healthConditions;
+      }
+
+      if (profile && (profile as any).allergies) {
+        allergies = Array.isArray((profile as any).allergies) ? (profile as any).allergies : [(profile as any).allergies];
+      } else if (onboarding && (onboarding as any).allergies) {
+        allergies = Array.isArray((onboarding as any).allergies) ? (onboarding as any).allergies : [(onboarding as any).allergies];
+      }
+
+      userLanguage = userSettings?.language || locationContext?.language || (locationContext?.languages?.[0]) || 'en';
+
+      if (dailyPlan) {
+        const sessions = ['breakfast', 'lunch', 'dinner', 'snacks'];
+        for (const s of sessions) {
+          const mealList = (dailyPlan as any)[s];
+          if (Array.isArray(mealList)) {
+            for (const m of mealList) {
+              if (m && m.name) {
+                todaySuggestedMeals.push({
+                  name: m.name,
+                  calories: m.calories || m.total_calories || 400,
+                  image: m.image_url || m.image || '',
+                  session: s
+                });
               }
-              isHallucinated = false
-              dbVerifiedContext = `
-VERIFIED NUTRITIONAL DATA FOUND IN MASTER DATABASE (BARCODE: ${extractedBarcode}):
-- Calories: ${verifiedFood.calories} kcal
-- Protein: ${verifiedFood.protein}g
-- Carbs: ${verifiedFood.carbs}g
-- Fat: ${verifiedFood.fat}g
-- Fiber: ${verifiedFood.fiber}g
-- Sugar: ${verifiedFood.sugar}g
-
-MANDATORY: You MUST use these exact verified numbers in your output. Do not hallucinate.`
             }
           }
         }
-      } catch (e) {
-        console.warn('Open Food Facts lookup failed during image scan', e)
       }
     }
 
-    if (!verifiedFood) {
-        const { data: dbFood } = await supabase
-          .from('food_items')
-          .select('*')
-          .ilike('name', `%${identifiedName}%`)
-          .order('calories', { ascending: false })
-          .limit(1)
-          .maybeSingle()
+    // ─── 2. STEP 1: VISION IDENTIFICATION OF INDIVIDUAL FOODS & PORTIONS ───
+    const visionSystemPrompt = `You are a professional clinical dietitian and food vision analyst.
+Analyze the entire visible meal in the image with precision.
+Identify each individual food item present on the plate or in the photo.
+Estimate realistic portion weights in grams (g) for each food.
+Note any visual ambiguities or uncertainties (e.g. preparation method, type of oil, seasoning, meat blend).
 
-        if (dbFood) {
-          verifiedFood = dbFood
-          isHallucinated = false
-          dbVerifiedContext = `
-VERIFIED NUTRITIONAL DATA FOUND IN DATABASE:
-- Calories: ${verifiedFood.calories} kcal
-- Protein: ${verifiedFood.protein}g
-- Carbs: ${verifiedFood.carbs}g
-- Fat: ${verifiedFood.fat}g
-- Fiber: ${verifiedFood.fiber}g
-- Sugar: ${verifiedFood.sugar}g
-
-MANDATORY: You MUST use these exact verified numbers in your output.`
-        }
+Return ONLY a valid JSON object matching this schema:
+{
+  "meal_title": "Primary name for this meal combination",
+  "visual_uncertainties": "Specific notes on what cannot be verified visually (e.g., hidden oils, seasoning, meat blend)",
+  "foods": [
+    {
+      "name": "Food item name (e.g. French Fries, Chicken Sausage)",
+      "estimated_portion_g": 150,
+      "portion_description": "Approximate human-readable portion (e.g. 1 medium bowl, 2 links)"
     }
+  ]
+}`;
 
-    const clientIp =
-      req.headers.get('x-real-ip') ||
-      req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-      req.headers.get('cf-connecting-ip') ||
-      '8.8.8.8';
-
-    let geoInfo = {
-      country_code: locationContext?.country_code || 'US',
-      country_name: locationContext?.country_name || locationContext?.country || 'Unknown',
-      city: locationContext?.city || 'Unknown',
-      currency_code: locationContext?.currency || locationContext?.currency_code || 'USD',
-      currency_symbol: locationContext?.currency_symbol || '$',
-    }
-
-    if (geoInfo.country_name === 'Unknown') {
-      try {
-        const geoRes = await fetch(`https://ipapi.co/${clientIp}/json/`);
-        if (geoRes.ok) {
-          const g = await geoRes.json();
-          geoInfo = {
-            country_code: g.country_code || 'US',
-            country_name: g.country_name || 'United States',
-            city: g.city || 'Unknown',
-            currency_code: g.currency || 'USD',
-            currency_symbol: g.currency_symbol || '$',
-          };
-        }
-      } catch (e) {
-        console.warn('[Food-AI] Geo lookup failed, using fallbacks');
-      }
-    }
-
-    let productCategory = 'General';
-    const lowerName = (identifiedName || '').toLowerCase();
-    if (lowerName.includes('milk') || lowerName.includes('cheese') || lowerName.includes('susu')) productCategory = 'Dairy';
-    else if (lowerName.includes('drink') || lowerName.includes('juice') || lowerName.includes('water')) productCategory = 'Beverages';
-    else if (lowerName.includes('snack') || lowerName.includes('chip')) productCategory = 'Snacks';
-    else if (lowerName.includes('cereal') || lowerName.includes('oat')) productCategory = 'Cereals';
-    else if (lowerName.includes('meat') || lowerName.includes('beef')) productCategory = 'Meat';
-    else if (lowerName.includes('fruit') || lowerName.includes('veg')) productCategory = 'Produce';
-    
-    const deterministicPriceRaw = await calculateEconomicPrice(supabase, geoInfo, productCategory);
-
-    const { data: userSettings } = await supabase
-        .from('user_settings')
-        .select('language')
-        .eq('user_id', userId)
-        .maybeSingle()
-      
-    var explicitUserLang = userSettings?.language || (locationContext?.languages?.[0] || 'en');
-
-    let aiPrompt = ''
-    let responseFormat: any = { type: 'json_object' }
-
-    if (isProductScan && identifiedType === 'medication') {
-      aiPrompt = `You are a Medical Search and Retrieval Tool. Your ONLY job is to search the provided context, affirm the medication found, and return exact factual data. Do not act as an analyst.
-NAME: ${identifiedName}
-BRAND: ${identifiedBrand}
-USER PROFILE: Location ${geoInfo.country_name} (${geoInfo.currency_symbol})
-
-STRICT AUDIT PROTOCOL:
-1. Identify the parent company and its political alignment based on your knowledge base.
-2. Highlight any affiliations with companies, institutions, or investment firms (e.g., BlackRock, Vanguard) that invest heavily in the US and Israel.
-3. If affiliated, set affiliationType to 'affiliated'. If clear of such ties, set to 'approved'.
-4. Provide a concise summary of these affiliations in 'affiliationDetails'.
-
-Provide a DEEP, ACTUAL, FACTUAL JSON response with all fields. Be extremely concise (1-2 sentences max per field):
-{"name":"${identifiedName}","brand":"${identifiedBrand}","generic_name":"Generic Name","description":"A brief, 1-2 sentence factual affirmation of the medication searched and found.","purpose":"Concise mechanism of action","side_effects":"Concise side effects","interactions":"Concise interactions","warnings":"Concise warnings","storage":"Concise storage","healthStatus":"SAFE","politicalAlignment":"...","affiliationType":"approved","affiliationDetails":"..."}
-
-LANGUAGE MANDATE: You MUST write your entire response fluently in this language code ('${explicitUserLang}'). Do NOT reply in English unless their language code is 'en' or similar.`
-    } else if (isProductScan) {
-      aiPrompt = `You are a Search and Retrieval Tool. Your ONLY job is to search the provided context, affirm the product found, and return the exact factual data. Do not hallucinate or act as a verbose analyst.
-PRODUCT NAME: ${identifiedName}
-BRAND: ${identifiedBrand}
-USER PROFILE: ${profileContext}
-${dbVerifiedContext}
-REGIONAL STANDARDS: Use ${['US', 'UK', 'CA', 'AU'].includes(geoInfo.country_name) ? 'Imperial (oz/lbs)' : 'Metric (g/kg)'} units. Factor in ${geoInfo.country_name} food safety regulations.
-
-STRICT AUDIT PROTOCOL:
-1. Identify the parent company and its political alignment based on your knowledge base.
-2. Highlight any affiliations with companies, institutions, or investment firms (e.g., BlackRock, Vanguard) that invest heavily in the US and Israel.
-3. If affiliated, set affiliationType to 'affiliated'. If clear of such ties, set to 'approved'.
-4. Provide a concise summary of these affiliations in 'affiliationDetails'.
-
-RULES:
-1. ${verifiedFood ? 'USE THE VERIFIED NUTRITION NUMBERS EXACTLY.' : 'Use the provided product details to estimate macros concisely.'}
-2. Be extremely concise. Do NOT write paragraphs.
-3. In the description, explicitly affirm the search result (e.g., "Found: [Brand] [Product].").
-
-Respond with ONLY JSON:
-{"name":"${identifiedName}","brand":"${identifiedBrand}","description":"A brief, 1-2 sentence factual affirmation of the exact product searched and found.","usage_instructions":"Concise usage","ingredients_analysis":"Concise summary of ingredients","dietary_suitability":"Concise dietary notes","vitamins_and_nutrition":"Concise nutrition overview","recommendation":"One sentence recommendation","recommended_pairings":"One sentence pairing","cheaper_alternatives":[],"calories":${verifiedFood ? verifiedFood.calories : 0},"protein":${verifiedFood ? verifiedFood.protein : 0},"carbs":${verifiedFood ? verifiedFood.carbs : 0},"fat":${verifiedFood ? verifiedFood.fat : 0},"sugar":${verifiedFood ? verifiedFood.sugar : 0},"fiber":${verifiedFood ? verifiedFood.fiber : 0},"verdict":"GOOD","user_alignment_boolean":true,"politicalAlignment":"...","affiliationType":"approved","affiliationDetails":"..."}
-
-LANGUAGE MANDATE: You MUST write your entire response fluently in this language code ('${explicitUserLang}'). Do NOT reply in English unless their language code is 'en' or similar.`
-    } else {
-      aiPrompt = `You are a Visual Search and Retrieval Tool. Your ONLY job is to search the provided context, affirm the dish found, and return the exact factual data. Do not act as a verbose analyst.
-Analyze the provided food image with precision and deep factual details. Be concise.
-
-${profileContext}
-${dbVerifiedContext}
-LOCATION CONTEXT: ${geoInfo.city}, ${geoInfo.country_name}
-REGIONAL STANDARDS: Use ${['US', 'UK', 'CA', 'AU'].includes(geoInfo.country_name) ? 'Imperial' : 'Metric'} units. 
-
-STRICT AUDIT PROTOCOL:
-1. Identify the parent company and its political alignment based on your knowledge base.
-2. Highlight any affiliations with companies, institutions, or investment firms (e.g., BlackRock, Vanguard) that invest heavily in the US and Israel.
-3. If affiliated, set affiliationType to 'affiliated'. If clear of such ties, set to 'approved'.
-4. Provide a concise summary of these affiliations in 'affiliationDetails'.
-
-Write a concise nutritional report (1-2 sentences max per field):
-- description: A brief, 1-2 sentence factual affirmation of the exact dish found.
-- vitamins_and_nutrition: Concise list of vitamins and minerals.
-- recommended_pairings: Concise suggested enhancements.
-- recommendation: ONE sentence tailored to the user's goal (${userGoalSummary}).
-
-${verifiedFood ? 'MANDATORY: Use the VERIFIED NUTRITIONAL DATA provided above.' : 'ESTIMATION RULE: Provide your best nutritional estimate based on portion size.'}
-
-JSON OUTPUT:
-{"name":"${identifiedName}","description":"...","vitamins_and_nutrition":"...","recommended_pairings":"...","recommendation":"...","verdict":"GOOD|MODERATE|POOR","user_alignment_boolean":true,"calories":${verifiedFood?.calories || 0},"protein":${verifiedFood?.protein || 0},"carbs":${verifiedFood?.carbs || 0},"fat":${verifiedFood?.fat || 0},"sugar":${verifiedFood?.sugar || 0},"fiber":${verifiedFood?.fiber || 0},"confidence_interval":${verifiedFood ? 1.0 : 0.8},"is_verified":${!isHallucinated},"politicalAlignment":"...","affiliationType":"approved","affiliationDetails":"..."}`
-
-      responseFormat = {
-        type: 'json_schema',
-        json_schema: {
-          name: 'food_analysis',
-          strict: true,
-          schema: {
-            type: 'object',
-            properties: {
-              name: { type: 'string' }, description: { type: 'string' },
-              vitamins_and_nutrition: { type: 'string' }, recommended_pairings: { type: 'string' },
-              recommendation: { type: 'string' }, verdict: { type: 'string', enum: ['GOOD', 'MODERATE', 'POOR'] },
-              user_alignment_boolean: { type: 'boolean' }, calories: { type: 'number' },
-              protein: { type: 'number' }, carbs: { type: 'number' }, fat: { type: 'number' },
-              sugar: { type: 'number' }, fiber: { type: 'number' },
-              confidence_interval: { type: 'number' }, is_verified: { type: 'boolean' },
-              politicalAlignment: { type: 'string' }, affiliationType: { type: 'string' }, affiliationDetails: { type: 'string' }
-            },
-            required: ['name', 'description', 'vitamins_and_nutrition', 'recommended_pairings', 'recommendation', 'verdict', 'user_alignment_boolean', 'calories', 'protein', 'carbs', 'fat', 'sugar', 'fiber', 'confidence_interval', 'is_verified', 'politicalAlignment', 'affiliationType', 'affiliationDetails'],
-            additionalProperties: false,
-          },
-        },
-      }
-    }
-
-    const aiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+    const visionResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
       body: JSON.stringify({
         model: 'gpt-4o',
-        messages: [{ role: 'user', content: [
-          { type: 'text', text: aiPrompt },
-          { type: 'image_url', image_url: { url: imageBase64 ? `data:image/jpeg;base64,${imageBase64}` : imageUrl, detail: 'high' } },
-        ]}],
-        response_format: responseFormat,
-      }),
-    })
-
-    if (!aiResponse.ok) throw new Error(`OpenAI error: ${await aiResponse.text()}`)
-    const aiResult = await aiResponse.json()
-    
-    let parsed: any = {};
-    const aiContent = aiResult.choices[0].message.content;
-    if (!aiContent || aiContent.trim() === "null" || aiResult.choices[0].message.refusal) {
-        console.warn("AI Refused or returned null content. Falling back to default object.");
-        parsed = {
-            name: identifiedName || "Unknown Food",
-            brand: identifiedBrand || "",
-            description: "Analysis unavailable due to AI safety filters.",
-            vitamins_and_nutrition: "Unavailable",
-            recommended_pairings: "Unavailable",
-            recommendation: "Unavailable",
-            verdict: "MODERATE",
-            user_alignment_boolean: true,
-            calories: verifiedFood ? verifiedFood.calories : 0,
-            protein: verifiedFood ? verifiedFood.protein : 0,
-            carbs: verifiedFood ? verifiedFood.carbs : 0,
-            fat: verifiedFood ? verifiedFood.fat : 0,
-            sugar: verifiedFood ? verifiedFood.sugar : 0,
-            fiber: verifiedFood ? verifiedFood.fiber : 0,
-            political_warning: 'Check unavailable.',
-            is_compliant: true,
-            needs_crowdsourcing: false,
-            estimated_price: isProductScan ? deterministicPriceRaw : undefined
-        };
-    } else {
-        try {
-            parsed = JSON.parse(aiContent);
-            const stripSymbols = (obj: any) => {
-                for (const key in obj) {
-                    if (typeof obj[key] === 'string') {
-                        obj[key] = obj[key].replace(/[*#]/g, '');
-                    } else if (typeof obj[key] === 'object' && obj[key] !== null) {
-                        stripSymbols(obj[key]);
-                    }
-                }
-            };
-            stripSymbols(parsed);
-
-            // Map the new structured affiliation properties back into the expected UI format
-            parsed.political_warning = parsed.affiliationType === 'affiliated' ? `🔴 ETHICAL ALERT: ${parsed.affiliationDetails}` : 'Ethically cleared (LLM Grounded).';
-            parsed.is_compliant = parsed.affiliationType !== 'affiliated';
-            if (isProductScan) {
-              parsed.estimated_price = deterministicPriceRaw;
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: visionSystemPrompt },
+            {
+              type: 'image_url',
+              image_url: {
+                url: imageBase64 ? `data:image/jpeg;base64,${imageBase64}` : imageUrl,
+                detail: 'auto'
+              }
             }
-            parsed.needs_crowdsourcing = false;
-        } catch (e) {
-            console.error("Failed to parse AI JSON output", e);
-            throw new Error("AI returned malformed JSON");
-        }
+          ]
+        }],
+        response_format: { type: 'json_object' }
+      })
+    });
+
+    if (!visionResponse.ok) {
+      const errText = await visionResponse.text();
+      console.error('[analyze-food-image] Vision OpenAI error:', errText);
+      throw new Error(`OpenAI Vision analysis failed: ${errText}`);
     }
 
-    if (verifiedFood && identifiedType !== 'medication') {
-      parsed.calories = verifiedFood.calories
-      parsed.protein = verifiedFood.protein
-      parsed.carbs = verifiedFood.carbs
-      parsed.fat = verifiedFood.fat
-      parsed.sugar = verifiedFood.sugar ?? parsed.sugar
-      parsed.fiber = verifiedFood.fiber ?? parsed.fiber
+    const visionJson = await visionResponse.json();
+    const visionParsed = JSON.parse(visionJson.choices[0].message.content || '{}');
+    const mealTitle = visionParsed.meal_title || 'Meal Analysis';
+    const visualUncertainties = visionParsed.visual_uncertainties || 'Portion sizes and preparation fats estimated from visual appearance.';
+    const identifiedFoods: IdentifiedFoodItem[] = Array.isArray(visionParsed.foods) && visionParsed.foods.length > 0
+      ? visionParsed.foods
+      : [{ name: mealTitle, estimated_portion_g: 250, portion_description: '1 standard serving (~250g)' }];
+
+    // ─── 3. STEP 2: AUTHORITATIVE NUTRITION NORMALIZATION ───
+    const nutritionCalculation = await NutritionNormalizer.calculateMealNutrition(identifiedFoods, supabase);
+
+    // ─── 4. STEP 3: USER PLAN ALIGNMENT & DEEP PARAGRAPH SYNTHESIS ───
+    const canonicalMealsContext = todaySuggestedMeals.length > 0
+      ? `TODAY'S SUGGESTED MEALS IN USER'S PLAN (Canonical Source):
+${todaySuggestedMeals.slice(0, 8).map(m => `- ${m.name} (~${m.calories} kcal, ${m.session})`).join('\n')}`
+      : `NO PRE-EXISTING MEAL PLAN FOUND FOR TODAY.`;
+
+    const synthesisPrompt = `You are the lead nutritional intelligence engine for VicCalary.
+You write detailed, comprehensive, clinical-grade nutritional explanations in natural paragraphs.
+
+USER HEALTH CONTEXT:
+- Primary Goal: ${userGoal}
+- Daily Calorie Target: ${dailyCalorieGoal} kcal/day
+- Dietary Restrictions: ${dietaryRestrictions.length ? dietaryRestrictions.join(', ') : 'None'}
+- Allergies / Dislikes: ${allergies.length ? allergies.join(', ') : 'None'}
+- Health Conditions: ${healthConditions}
+
+AUTHENTICATED NUTRITIONAL FACTS (DO NOT INVENT NUMBERS, USE THESE EXACT TOTALS):
+- Identified Dish: ${mealTitle}
+- Identified Items & Portions: ${nutritionCalculation.normalized_items.map(i => `${i.name} (${i.portion_description}): ${i.calories} kcal, ${i.protein}g protein, ${i.carbs}g carbs, ${i.fat}g fat`).join('; ')}
+- Total Estimated Calories: ${nutritionCalculation.total_calories} kcal (sensible range: ${nutritionCalculation.calorie_range.min} - ${nutritionCalculation.calorie_range.max} kcal)
+- Total Protein: ${nutritionCalculation.total_protein}g
+- Total Carbohydrates: ${nutritionCalculation.total_carbs}g
+- Total Fat: ${nutritionCalculation.total_fat}g
+- Total Fiber: ${nutritionCalculation.total_fiber}g
+- Total Sugar: ${nutritionCalculation.total_sugar}g
+- Total Sodium: ${nutritionCalculation.total_sodium_mg}mg
+- Key Vitamins & Minerals present: ${[...nutritionCalculation.prominent_vitamins, ...nutritionCalculation.prominent_minerals].join(', ')}
+- Visual Uncertainties: ${visualUncertainties}
+
+${canonicalMealsContext}
+
+TASK: Write three substantial, clinical, readable PARAGRAPHS in language code '${userLanguage}':
+
+1. "meal_description":
+   A thorough, articulate paragraph explaining what you observe in the image. Describe each distinct component, their estimated portion volumes or piece counts, and explicitly acknowledge visual uncertainties (such as whether fries are deep-fried or air-fried, or sausage meat blends). Do NOT use brief one-liners.
+
+2. "vitamins_and_nutrition":
+   A substantial nutritional narrative paragraph. Explain what the macronutrient balance means for sustained energy, satiety, and blood sugar. Discuss the specific micronutrients identified (e.g. Potassium and Vitamin C in potatoes, B vitamins and Iron in sausages/meats) and note relevant considerations such as sodium or saturated fat content.
+
+3. "recommendation":
+   A thorough paragraph assessing whether this meal fits the user's current plan and objective (${userGoal}, ${dailyCalorieGoal} kcal/day). 
+   - State clearly if it is recommended (verdict GOOD/MODERATE) or not recommended (verdict POOR).
+   - Explain WHY based on calorie density, macronutrients, and declared restrictions/allergies.
+   - Suggest sensible portion adjustments or side modifications that would improve suitability.
+   - CRITICAL RULE IF NOT RECOMMENDED: You MUST NOT invent a fictional alternative meal! Look at "TODAY'S SUGGESTED MEALS IN USER'S PLAN" provided above, pick the most appropriate canonical meal from that list, name it explicitly, and explain why that exact alternative better serves their goal today.
+
+Return ONLY a JSON object:
+{
+  "meal_description": "Thorough paragraph...",
+  "vitamins_and_nutrition": "Substantial paragraph...",
+  "recommendation": "Thorough paragraph...",
+  "verdict": "GOOD" | "MODERATE" | "POOR",
+  "is_recommended": true | false,
+  "alternative_meal_name": "Exact canonical meal name from today's plan if not recommended, or null if recommended"
+}`;
+
+    const synthesisResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: synthesisPrompt }],
+        response_format: { type: 'json_object' }
+      })
+    });
+
+    if (!synthesisResponse.ok) {
+      const errText = await synthesisResponse.text();
+      console.error('[analyze-food-image] Synthesis OpenAI error:', errText);
+      throw new Error(`OpenAI Synthesis failed: ${errText}`);
+    }
+
+    const synthesisJson = await synthesisResponse.json();
+    const synthesisData = JSON.parse(synthesisJson.choices[0].message.content || '{}');
+
+    // ─── 5. DETERMINISTIC SAFETY GATE (ALLERGIES & MEDICAL CONDITIONS) ───
+    const userSafetyProfile = userId 
+      ? await SafetyEngine.getUserSafetyProfile(userId, supabase, userLanguage)
+      : { userId: 'anon', userGoal, dailyCalorieGoal, allergies, medicalConditions: [healthConditions], dietaryLifestyle: dietaryRestrictions, isDiabetic: false, hasHypertension: false, language: userLanguage };
+
+    const safetyEvaluation = SafetyEngine.evaluateMealSafety(identifiedFoods, nutritionCalculation, userSafetyProfile);
+
+    let finalVerdict = synthesisData.verdict || (synthesisData.is_recommended ? 'GOOD' : 'MODERATE');
+    let finalIsRecommended = synthesisData.is_recommended ?? (finalVerdict !== 'POOR');
+    let finalRecommendation = synthesisData.recommendation || '';
+
+    if (!safetyEvaluation.isSafe) {
+      finalVerdict = 'POOR';
+      finalIsRecommended = false;
+      if (safetyEvaluation.warningMessage) {
+        finalRecommendation = `${safetyEvaluation.warningMessage}\n\n${finalRecommendation}`;
+      }
+    }
+
+    // Link alternative meal details if recommended or if safety gate failed
+    let alternativeMealObj = null;
+    let targetAltName = synthesisData.alternative_meal_name;
+
+    if (!targetAltName && !finalIsRecommended && todaySuggestedMeals.length > 0) {
+      targetAltName = todaySuggestedMeals[0].name;
+    }
+
+    if (targetAltName) {
+      const matchedCanonical = todaySuggestedMeals.find(
+        m => m.name.toLowerCase().includes(targetAltName.toLowerCase()) ||
+             targetAltName.toLowerCase().includes(m.name.toLowerCase())
+      ) || todaySuggestedMeals[0];
+
+      if (matchedCanonical) {
+        alternativeMealObj = {
+          name: matchedCanonical.name,
+          calories: matchedCanonical.calories,
+          image: matchedCanonical.image,
+          session: matchedCanonical.session
+        };
+      }
     }
 
     return NextResponse.json({
-      ...parsed,
-      type: identifiedType === 'medication' ? 'medication' : 'food',
-      healthStatus: parsed.verdict || parsed.healthStatus,
-      confidence_interval: verifiedFood ? 1.0 : 0.8,
-      is_verified: !isHallucinated,
+      name: mealTitle,
+      type: 'FOOD',
+      description: synthesisData.meal_description || visualUncertainties,
+      vitamins_and_nutrition: synthesisData.vitamins_and_nutrition,
+      recommendation: finalRecommendation,
+      verdict: finalVerdict,
+      is_recommended: finalIsRecommended,
+      user_alignment_boolean: finalIsRecommended,
+      healthStatus: finalVerdict,
+      
+      // Authoritative deterministic nutrition
+      calories: nutritionCalculation.total_calories,
+      calorie_range: nutritionCalculation.calorie_range,
+      protein: nutritionCalculation.total_protein,
+      carbs: nutritionCalculation.total_carbs,
+      fat: nutritionCalculation.total_fat,
+      fiber: nutritionCalculation.total_fiber,
+      sugar: nutritionCalculation.total_sugar,
+      sodium_mg: nutritionCalculation.total_sodium_mg,
+      vitamins: nutritionCalculation.prominent_vitamins,
+      minerals: nutritionCalculation.prominent_minerals,
+      
+      alternative_meal: alternativeMealObj,
+      items: nutritionCalculation.normalized_items,
+      is_verified: true,
       needs_crowdsourcing: false
-    })
+    });
+
   } catch (error: any) {
-    console.error('analyze-food-image error:', error.message)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    console.error('[analyze-food-image] Error:', error.message || error);
+    return NextResponse.json({ error: error.message || 'Analysis failed' }, { status: 500 });
   }
 }

@@ -25,12 +25,16 @@ interface AnalysisStore {
         warnings?: string;
         interactions?: string;
     } | null;
+    isNavbarHidden: boolean;
     setPendingAnalysisContext: (data: any) => void;
     clearPendingAnalysisContext: () => void;
+    setNavbarHidden: (hidden: boolean) => void;
 }
 
 export const useAnalysisStore = create<AnalysisStore>((set) => ({
     pendingAnalysisContext: null,
+    isNavbarHidden: false,
     setPendingAnalysisContext: (data) => set({ pendingAnalysisContext: data }),
     clearPendingAnalysisContext: () => set({ pendingAnalysisContext: null }),
+    setNavbarHidden: (hidden) => set({ isNavbarHidden: hidden }),
 }))

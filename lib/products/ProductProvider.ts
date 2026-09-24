@@ -1,3 +1,16 @@
+export interface NormalizedProductNutrition {
+  calories?: number;
+  protein?: number;
+  carbohydrates?: number;
+  fat?: number;
+  fiber?: number;
+  sugar?: number;
+  sodium_mg?: number;
+  vitamins?: string[];
+  minerals?: string[];
+  basis?: 'serving' | '100g';
+}
+
 export interface NormalizedProduct {
   barcode: string;
   name: string;
@@ -6,12 +19,10 @@ export interface NormalizedProduct {
   unit?: string;
   category?: string;
   image?: string;
-  nutrition?: {
-    calories?: number;
-    protein?: number;
-    carbohydrates?: number;
-    fat?: number;
-  };
+  serving_size?: string;
+  ingredients?: string;
+  allergens?: string[];
+  nutrition?: NormalizedProductNutrition;
 }
 
 export interface ProductPrice {

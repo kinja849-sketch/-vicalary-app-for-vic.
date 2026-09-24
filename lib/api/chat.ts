@@ -1,7 +1,56 @@
-import { supabase } from '../supabase'
-import type { RealtimeChannel } from '@supabase/supabase-js'
+import { supabase } from '../supabase';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 
 const COACH_ID = '00000000-0000-0000-0000-000000000001';
+
+export const getOrCreateCoachConversation = async (userId: string): Promise<string> => {
+    try {
+        const { data: rpcData, error } = await (supabase as any).rpc('provision_user_system_chats', { p_user_id: userId });
+        if (!error && rpcData) {
+            const convId = (rpcData as any)?.coach_conversation_id || (rpcData as any)?.coach_id;
+            if (convId) return String(convId);
+        }
+    } catch (e) {
+        console.warn('[getOrCreateCoachConversation] RPC call failed, trying fallback:', e);
+    }
+
+    try {
+        const { data: parts, error: queryErr } = await (supabase
+            .from('conversation_participants') as any)
+            .select('conversation_id, conversations!inner(id, conversation_type)')
+            .eq('user_id', userId)
+            .eq('conversations.conversation_type', 'ai')
+            .limit(1);
+
+        if (!queryErr && parts && parts.length > 0 && parts[0].conversation_id) {
+            return String(parts[0].conversation_id);
+        }
+    } catch (e) {
+        console.warn('[getOrCreateCoachConversation] Participant query failed:', e);
+    }
+
+    try {
+        const { data: newConv, error: createErr } = await (supabase
+            .from('conversations') as any)
+            .insert({ conversation_type: 'ai', name: 'Health Coach' })
+            .select('id')
+            .single();
+
+        if (createErr || !newConv?.id) {
+            throw new Error(createErr?.message || 'Failed to create Health Coach conversation');
+        }
+
+        await (supabase.from('conversation_participants') as any).insert([
+            { conversation_id: newConv.id, user_id: userId },
+            { conversation_id: newConv.id, user_id: COACH_ID }
+        ]);
+
+        return String(newConv.id);
+    } catch (err: any) {
+        console.error('[getOrCreateCoachConversation] Final fallback failed:', err);
+        throw err;
+    }
+};
 
 export const getConversationsV2 = async (userId: string) => {
     console.log(`[API] getConversationsV2 for user: ${userId}`);
@@ -661,7 +710,11 @@ export const subscribeToUserConversations = (userId: string, callback: (payload:
             table: 'calls',
             filter: `receiver_id=eq.${userId}`,
         }, (payload) => callback({ ...payload, table: 'calls' }))
-        .subscribe()
+        .subscribe((status, err) => {
+            if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                console.warn(`[Realtime] User conversations subscription ${status}:`, err || 'Host unreachable');
+            }
+        })
 }
 
 export const sendTypingIndicator = async (channel: RealtimeChannel, userId: string, conversationId: string, isTyping: boolean) => {

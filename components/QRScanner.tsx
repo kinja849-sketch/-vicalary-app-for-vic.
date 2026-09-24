@@ -192,32 +192,33 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
                         </span>
                     </div>
                 ) : (
-                    <div className="flex flex-col items-center gap-6">
-                        <button 
-                            onClick={handleManualCapture}
-                            aria-label="Capture barcode photo"
-                            className="w-20 h-20 rounded-full border-4 border-white flex items-center justify-center bg-transparent active:scale-95 transition-all shadow-2xl z-50"
-                        >
-                            <div className="w-16 h-16 rounded-full bg-white opacity-80 hover:opacity-100 transition-opacity shadow-inner" />
-                        </button>
-                        
+                    <div className="flex flex-col items-center gap-4">
                         <div className="pointer-events-none">
                             {status === 'barcode_detected' ? (
-                                <div className="flex items-center gap-2 px-6 py-3 bg-emerald-500 rounded-full shadow-2xl">
+                                <div className="flex items-center gap-2 px-6 py-2.5 bg-emerald-500 rounded-full shadow-2xl">
                                     <div className="w-2.5 h-2.5 rounded-full bg-white animate-ping" />
-                                    <span className="text-white font-black text-sm tracking-widest uppercase">
-                                        Barcode Detected
+                                    <span className="text-white font-black text-xs tracking-widest uppercase">
+                                        Barcode Detected — Locking...
                                     </span>
                                 </div>
                             ) : (
-                                <div className="flex items-center gap-2 px-6 py-3 bg-black/50 backdrop-blur-md rounded-full border border-white/10 shadow-xl">
-                                    <div className="w-2.5 h-2.5 rounded-full bg-vic-green animate-pulse" />
-                                    <span className="text-white/90 text-xs font-bold tracking-widest uppercase">
-                                        Scanning Product...
+                                <div className="flex items-center gap-2 px-6 py-2 bg-black/60 backdrop-blur-md rounded-full border border-white/10 shadow-xl">
+                                    <div className="w-2 h-2 rounded-full bg-vic-green animate-pulse" />
+                                    <span className="text-white/90 text-[11px] font-bold tracking-widest uppercase">
+                                        Auto-Detecting Barcode...
                                     </span>
                                 </div>
                             )}
                         </div>
+
+                        {/* Secondary manual photo button specifically for medication labels & packaging */}
+                        <button 
+                            onClick={handleManualCapture}
+                            aria-label="Capture medication package"
+                            className="px-5 py-2.5 bg-white/15 hover:bg-white/25 active:scale-95 backdrop-blur-md border border-white/20 rounded-full text-xs font-bold uppercase tracking-wider text-slate-200 transition-all flex items-center gap-2 shadow-xl"
+                        >
+                            <span>Photo Package / Medication</span>
+                        </button>
                     </div>
                 )}
             </div>

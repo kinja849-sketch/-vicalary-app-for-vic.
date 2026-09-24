@@ -1,4 +1,4 @@
-﻿export interface ScannedProduct {
+export interface ScannedProduct {
   barcode: string;
   name: string;
   brand?: string;
@@ -8,10 +8,12 @@
 
 export interface BoycottStatus {
   flagged: boolean;
+  companyName?: string;
+  parentCompany?: string;
   campaignId?: string;
   campaignName?: string;
   reason?: string;
-  relationshipType?: 'parent' | 'subsidiary' | 'direct';
+  relationshipType?: 'parent' | 'subsidiary' | 'direct' | string;
   sourceUrl?: string;
   verifiedAt?: string;
 }
@@ -65,4 +67,3 @@ export interface ScannerResult {
     verifiedAt?: string;
   };
 }
-

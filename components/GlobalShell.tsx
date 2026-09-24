@@ -6,12 +6,14 @@ import { useAuth } from "@/lib/AuthContext";
 import { subscribeToUserConversations, unsubscribeFromMessages } from "@/lib/api/chat";
 import { useTranslation } from "@/lib/api/translation";
 import { useQueryClient } from "@tanstack/react-query";
+import { useAnalysisStore } from "@/store/analysisStore";
 
 export function GlobalShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { user, loading } = useAuth();
   const { lang } = useTranslation();
   const queryClient = useQueryClient();
+  const isNavbarHidden = useAnalysisStore(state => state.isNavbarHidden);
   const isChatConversation = pathname.startsWith('/chat/') && pathname !== '/chat';
 
   useEffect(() => {
@@ -89,16 +91,17 @@ export function GlobalShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  const allowedPaths = ['/dashboard', '/notifications', '/chat', '/settings'];
-  const isNavbarVisible = allowedPaths.includes(pathname);
+  // STRICT USER CONTRACT: Bottom navigation strictly only appears on the main dashboard and nowhere else.
+  const allowedPaths = ['/dashboard'];
+  const isNavbarVisible = allowedPaths.includes(pathname) && !isNavbarHidden;
 
   return (
     <div className="min-h-[100dvh] w-full bg-slate-100 dark:bg-slate-950 flex justify-center items-stretch">
-      <div className="w-full max-w-[480px] min-h-[100dvh] bg-white dark:bg-[#0b141a] flex flex-col relative shadow-2xl overflow-x-hidden">
+      <div className="w-full max-w-[480px] min-h-[100dvh] bg-white dark:bg-[#0b141a] flex flex-col relative shadow-2xl [overflow-x:clip]">
         <main className={`flex-1 flex flex-col ${isNavbarVisible ? 'pb-20' : ''}`}>
           {children}
         </main>
-        <BottomNavbar />
+        {isNavbarVisible && <BottomNavbar />}
       </div>
     </div>
   );

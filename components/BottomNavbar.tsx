@@ -1,19 +1,30 @@
 "use client"
 import React from 'react';
 import Link from 'next/link'
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from '@/lib/api/translation';
 import { useAuth } from '@/lib/AuthContext';
 import { supabase } from '@/lib/supabase';
 import { useNotificationStore } from '@/store/notificationStore';
+import { useAnalysisStore } from '@/store/analysisStore';
 import { Home, Bell, MessageSquare, UserCircle } from 'lucide-react';
 
 export const BottomNavbar: React.FC = () => {
     const { t } = useTranslation();
     const pathname = usePathname();
+    const router = useRouter();
+    const isNavbarHidden = useAnalysisStore(state => state.isNavbarHidden);
 
     const { user } = useAuth();
+
+    // Eagerly prefetch all bottom navigation routes for instant single-click rendering
+    React.useEffect(() => {
+        router.prefetch('/dashboard');
+        router.prefetch('/notifications');
+        router.prefetch('/chat');
+        router.prefetch('/settings');
+    }, [router]);
 
     // Fetch unread count using the efficient RPC fix (V10)
     const { data: unreadCount = 0, refetch } = useQuery({
@@ -35,9 +46,10 @@ export const BottomNavbar: React.FC = () => {
     const { notifications } = useNotificationStore();
     const unreadNotificationsCount = notifications.filter(n => !n.isRead).length;
 
-    // Only show navbar on specific main pages
-    const allowedPaths = ['/dashboard', '/notifications', '/chat', '/settings'];
-    if (!allowedPaths.includes(pathname)) {
+    // STRICT USER CONTRACT: Bottom navigation strictly only appears on the main dashboard and nowhere else.
+    // Also suppressed if any modal or analysis view is open.
+    const allowedPaths = ['/dashboard'];
+    if (isNavbarHidden || !allowedPaths.includes(pathname)) {
         return null;
     }
 
@@ -66,6 +78,12 @@ export const BottomNavbar: React.FC = () => {
         },
     ];
 
+    const handleNavigation = (e: React.MouseEvent<HTMLAnchorElement>, path: string) => {
+        if (pathname === path) {
+            e.preventDefault();
+        }
+    };
+
     return (
         <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[480px] z-[999] bg-white/95 dark:bg-[#0d1418]/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 safe-area-bottom shadow-[0_-4px_16px_rgba(0,0,0,0.08)] select-none">
             <div className="flex items-center justify-around h-16 w-full px-1">
@@ -75,8 +93,9 @@ export const BottomNavbar: React.FC = () => {
                         <Link
                             key={item.path}
                             href={item.path}
+                            onClick={(e) => handleNavigation(e, item.path)}
                             className={`
-                                flex-1 flex flex-col items-center justify-center h-full py-1 gap-1 transition-colors duration-150 relative touch-manipulation cursor-pointer select-none min-w-0
+                                flex-1 flex flex-col items-center justify-center h-full py-1 gap-1 transition-all duration-100 relative cursor-pointer select-none min-w-0 active:scale-95
                                 ${isActive ? 'text-vic-green font-bold' : 'text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300'}
                             `}
                         >
