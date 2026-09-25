@@ -56,11 +56,62 @@ export default function Camera({ initialMode }: CameraProps = {}) {
     setCapturedImage(imageUrl);
 
     try {
-      const result = await analyzeFoodImage(userId, file);
-      const fullResult = { ...result, type: 'FOOD' as const };
-      setAnalysisResult(fullResult);
-      setLatestAnalysis(fullResult);
-      addNotification('success', "Food analysis complete!");
+      if (scanMode === "BARCODE" || isScanner) {
+        // In Scanner mode, attempt barcode detection from uploaded image canvas
+        const img = new Image();
+        img.src = imageUrl;
+        await new Promise((resolve) => { img.onload = resolve; });
+
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext("2d");
+        let detectedBarcode: string | null = null;
+
+        if (ctx) {
+          ctx.drawImage(img, 0, 0);
+          if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
+            try {
+              const detector = new (window as any).BarcodeDetector({
+                formats: ['ean_13', 'upc_a', 'upc_e', 'ean_8', 'code_128', 'code_39', 'code_93', 'itf', 'qr_code', 'data_matrix']
+              });
+              const barcodes = await detector.detect(canvas);
+              if (barcodes.length > 0 && barcodes[0]?.rawValue) {
+                detectedBarcode = barcodes[0].rawValue;
+              }
+            } catch (e) {}
+          }
+
+          if (!detectedBarcode) {
+            try {
+              const { BrowserMultiFormatReader } = await import("@zxing/browser");
+              const reader = new BrowserMultiFormatReader();
+              const result = reader.decodeFromCanvas(canvas);
+              if (result && result.getText()) {
+                detectedBarcode = result.getText();
+              }
+            } catch (e) {}
+          }
+        }
+
+        if (detectedBarcode) {
+          await handleBarcodeDetected(detectedBarcode);
+          return;
+        }
+
+        // Fallback: analyze medication / product image directly if barcode not readable in photo
+        const result = await analyzeMedication(userId, file);
+        const fullResult = { ...result, type: result.type || 'BARCODE' as const };
+        setAnalysisResult(fullResult);
+        setLatestAnalysis(fullResult);
+        addNotification('success', "Product analysis complete!");
+      } else {
+        const result = await analyzeFoodImage(userId, file);
+        const fullResult = { ...result, type: 'FOOD' as const };
+        setAnalysisResult(fullResult);
+        setLatestAnalysis(fullResult);
+        addNotification('success', "Food analysis complete!");
+      }
     } catch (err: any) {
       console.error("Gallery analysis failed:", err);
       toast.error(err.message || "Failed to analyze uploaded image.");
@@ -333,15 +384,17 @@ export default function Camera({ initialMode }: CameraProps = {}) {
               <ArrowLeft className="w-6 h-6" />
             </Link>
 
-            {/* Top Right Switch Camera */}
-            <button
-              onClick={switchCamera}
-              disabled={isSwitching}
-              aria-label={facingMode === 'environment' ? 'Switch to front camera' : 'Switch to back camera'}
-              className="absolute top-8 right-6 p-3 bg-black/40 backdrop-blur-xl rounded-full border border-white/20 hover:bg-black/60 transition-all active:scale-90 z-20 disabled:opacity-50"
-            >
-              <SwitchCamera className={`w-6 h-6 transition-transform duration-300 ${isSwitching ? 'animate-spin' : ''}`} />
-            </button>
+            {/* Top Right Switch Camera - Hidden in Scanner Mode */}
+            {!isScanner && scanMode !== "BARCODE" && (
+              <button
+                onClick={switchCamera}
+                disabled={isSwitching}
+                aria-label={facingMode === 'environment' ? 'Switch to front camera' : 'Switch to back camera'}
+                className="absolute top-8 right-6 p-3 bg-black/40 backdrop-blur-xl rounded-full border border-white/20 hover:bg-black/60 transition-all active:scale-90 z-20 disabled:opacity-50"
+              >
+                <SwitchCamera className={`w-6 h-6 transition-transform duration-300 ${isSwitching ? 'animate-spin' : ''}`} />
+              </button>
+            )}
 
             {/* Scanning Frame for Barcode */}
             {scanMode === "BARCODE" && (
@@ -365,15 +418,18 @@ export default function Camera({ initialMode }: CameraProps = {}) {
 
             {/* Bottom Controls */}
             <div className="absolute bottom-12 left-1/2 -translate-x-1/2 flex items-center justify-center gap-6 z-20 w-full px-6 max-w-md">
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isAnalyzing}
-                className="size-14 rounded-full bg-black/40 backdrop-blur-xl border border-white/20 text-white flex items-center justify-center hover:bg-black/60 transition-all active:scale-90 shadow-2xl shrink-0 cursor-pointer"
-                title="Upload image from gallery"
-                aria-label="Upload image from gallery"
-              >
-                <Images className="w-6 h-6 text-white pointer-events-none" />
-              </button>
+              {/* Upload option available only in Food mode, removed from scanner */}
+              {!isScanner && scanMode !== "BARCODE" ? (
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isAnalyzing}
+                  className="size-14 rounded-full bg-black/40 backdrop-blur-xl border border-white/20 text-white flex items-center justify-center hover:bg-black/60 transition-all active:scale-90 shadow-2xl shrink-0 cursor-pointer"
+                  title="Upload image from gallery"
+                  aria-label="Upload image from gallery"
+                >
+                  <Images className="w-6 h-6 text-white pointer-events-none" />
+                </button>
+              ) : null}
 
               {scanMode === "FOOD" ? (
                 <button
@@ -384,16 +440,20 @@ export default function Camera({ initialMode }: CameraProps = {}) {
                   <div className="w-16 h-16 rounded-full border-2 border-white/50 pointer-events-none" />
                 </button>
               ) : (
-                /* For scanner: manual capture available for medication package photos */
                 <button
                   onClick={takePhoto}
-                  className="px-6 py-3 bg-black/60 backdrop-blur-md border border-white/20 rounded-full text-xs font-bold uppercase tracking-wider text-slate-300 hover:text-white hover:bg-black/80 flex items-center gap-2 transition-all cursor-pointer"
+                  className="w-20 h-20 bg-vic-green rounded-full flex items-center justify-center border-4 border-white/30 shadow-lg shadow-vic-green/50 hover:scale-105 active:scale-95 transition-all shrink-0 cursor-pointer"
+                  aria-label="Capture barcode photo"
                 >
-                  <CameraIcon className="w-4 h-4 pointer-events-none" /> Photo Package / Medication
+                  <div className="w-16 h-16 rounded-full border-2 border-slate-900/60 flex items-center justify-center pointer-events-none">
+                    <CameraIcon className="w-6 h-6 text-slate-900" />
+                  </div>
                 </button>
               )}
 
-              <div className="size-14 invisible shrink-0" />
+              {!isScanner && scanMode !== "BARCODE" && (
+                <div className="size-14 invisible shrink-0" />
+              )}
             </div>
 
             <input

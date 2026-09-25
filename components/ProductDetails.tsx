@@ -155,7 +155,7 @@ export function ProductDetails({
         brand,
         manufacturer,
         origin_country,
-        price: price ?? (typeof estimated_price === 'number' ? estimated_price : 0),
+        price: price ?? (typeof estimated_price === 'number' ? estimated_price : (estimated_price ? parseFloat(String(estimated_price).replace(/[^0-9.]/g, '')) || 0 : 0)),
         estimated_price,
         political_warning,
         is_compliant: !isFlagged
@@ -168,14 +168,12 @@ export function ProductDetails({
       queryClient.invalidateQueries({ queryKey: ['food-history'] });
       queryClient.invalidateQueries({ queryKey: ['daily-plan'] });
       queryClient.invalidateQueries({ queryKey: ['daily-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['budget'] });
+      queryClient.invalidateQueries({ queryKey: ['financial-transactions'] });
 
-      toast.success(`${productName} logged! Viewing Today's Progress.`);
+      toast.success(`${productName} logged! Deducted from your budget.`);
 
-      if (onAddToDiary) {
-        onAddToDiary();
-      } else {
-        router.push("/dashboard");
-      }
+      router.push("/budget");
     } catch (err: any) {
       console.error("Log error:", err);
       toast.error(err.message || "Failed to log product");
@@ -234,13 +232,13 @@ export function ProductDetails({
   };
 
   return (
-    <div className="fixed inset-0 z-[9999] bg-white dark:bg-[#0b141a] text-slate-900 dark:text-white flex flex-col h-[100dvh] overflow-hidden">
+    <div className="fixed inset-0 z-[9999] bg-[#0b141a] text-white flex flex-col h-[100dvh] overflow-hidden">
       {/* Top Header Sticky with back button */}
-      <header className="h-16 shrink-0 z-30 flex items-center justify-between px-5 bg-white/95 dark:bg-[#0b141a]/95 backdrop-blur-xl border-b border-slate-200 dark:border-slate-800">
+      <header className="h-16 shrink-0 z-30 flex items-center justify-between px-5 bg-[#0b141a]/95 backdrop-blur-xl border-b border-white/10">
         <button
           onClick={onClose}
           aria-label="Return to Scanner"
-          className="size-10 rounded-full bg-slate-100 dark:bg-white/10 border border-slate-200 dark:border-white/10 flex items-center justify-center text-slate-900 dark:text-white hover:bg-slate-200 dark:hover:bg-white/20 active:scale-95 transition-all"
+          className="size-10 rounded-full bg-white/10 border border-white/10 flex items-center justify-center text-white hover:bg-white/20 active:scale-95 transition-all"
         >
           <ArrowLeft className="w-5 h-5" />
         </button>
@@ -446,7 +444,7 @@ export function ProductDetails({
             {!isFlagged && (
               <>
                 {/* SECTION 1: PRODUCT DESCRIPTION */}
-                <section className="bg-white/5 border border-white/10 rounded-[2rem] p-6 sm:p-7 shadow-lg">
+                <section className="bg-slate-900/90 border border-white/15 rounded-[2rem] p-6 sm:p-7 shadow-lg">
                   <div className="flex items-center gap-2 mb-3">
                     <div className="size-8 rounded-xl bg-vic-blue/20 flex items-center justify-center text-vic-blue border border-vic-blue/30">
                       <ShoppingCart className="w-4 h-4" />
@@ -455,7 +453,7 @@ export function ProductDetails({
                       Product Description
                     </h2>
                   </div>
-                  <div className="text-slate-300 text-sm sm:text-[15px] leading-relaxed space-y-3">
+                  <div className="text-slate-100 text-sm sm:text-[15px] leading-relaxed space-y-3 font-medium">
                     {description ? (
                       description.split('\n\n').map((para: string, i: number) => <p key={i}>{para}</p>)
                     ) : (
@@ -465,7 +463,7 @@ export function ProductDetails({
                 </section>
 
                 {/* SECTION 2: VITAMINS & NUTRITION */}
-                <section className="bg-white/5 border border-white/10 rounded-[2rem] p-6 sm:p-7 shadow-lg space-y-6">
+                <section className="bg-slate-900/90 border border-white/15 rounded-[2rem] p-6 sm:p-7 shadow-lg space-y-6">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <div className="size-8 rounded-xl bg-emerald-500/20 flex items-center justify-center text-emerald-400 border border-emerald-500/30">
@@ -475,7 +473,7 @@ export function ProductDetails({
                         <h2 className="text-xs font-black text-white uppercase tracking-wider">
                           Vitamins & Nutrition
                         </h2>
-                        <span className="text-[11px] text-slate-400">
+                        <span className="text-[11px] text-slate-300 font-semibold">
                           {servingSize ? `Basis: ${servingSize}` : (serving_basis === 'serving' ? 'Per Serving' : 'Per 100g')}
                         </span>
                       </div>
@@ -483,15 +481,15 @@ export function ProductDetails({
                   </div>
 
                   {/* Calories Card */}
-                  <div className="bg-gradient-to-br from-white/10 to-white/5 border border-white/10 rounded-2xl p-5 text-center shadow-inner">
-                    <span className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-1">
+                  <div className="bg-slate-950/80 border border-white/15 rounded-2xl p-5 text-center shadow-inner">
+                    <span className="text-xs font-bold text-slate-300 uppercase tracking-widest block mb-1">
                       Nutritional Energy
                     </span>
                     <div className="text-4xl sm:text-5xl font-black text-white tracking-tight my-1">
                       {calories !== null && calories !== undefined ? (
-                        <>~{calories} <span className="text-2xl font-bold text-slate-400">kcal</span></>
+                        <><span className="text-[#21ff64]">~{calories}</span> <span className="text-2xl font-bold text-slate-300">kcal</span></>
                       ) : (
-                        <span className="text-2xl font-bold text-slate-400">Calorie Data Pending</span>
+                        <span className="text-2xl font-bold text-amber-400">Calorie Data Pending</span>
                       )}
                     </div>
                     {servingSize && (
@@ -501,28 +499,28 @@ export function ProductDetails({
 
                   {/* Macros Grid */}
                   <div className="grid grid-cols-3 sm:grid-cols-6 gap-2.5">
-                    <div className="bg-black/30 rounded-2xl p-3 border border-white/5 text-center">
-                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Protein</span>
+                    <div className="bg-black/60 rounded-2xl p-3 border border-white/10 text-center">
+                      <span className="text-[10px] uppercase font-bold text-slate-300 tracking-wider">Protein</span>
                       <p className="text-base font-black text-white mt-0.5">{protein !== null && protein !== undefined ? `${protein}g` : '–'}</p>
                     </div>
-                    <div className="bg-black/30 rounded-2xl p-3 border border-white/5 text-center">
-                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Carbs</span>
+                    <div className="bg-black/60 rounded-2xl p-3 border border-white/10 text-center">
+                      <span className="text-[10px] uppercase font-bold text-slate-300 tracking-wider">Carbs</span>
                       <p className="text-base font-black text-white mt-0.5">{carbs !== null && carbs !== undefined ? `${carbs}g` : '–'}</p>
                     </div>
-                    <div className="bg-black/30 rounded-2xl p-3 border border-white/5 text-center">
-                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Fat</span>
+                    <div className="bg-black/60 rounded-2xl p-3 border border-white/10 text-center">
+                      <span className="text-[10px] uppercase font-bold text-slate-300 tracking-wider">Fat</span>
                       <p className="text-base font-black text-white mt-0.5">{fat !== null && fat !== undefined ? `${fat}g` : '–'}</p>
                     </div>
-                    <div className="bg-black/30 rounded-2xl p-3 border border-white/5 text-center">
-                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Sugar</span>
+                    <div className="bg-black/60 rounded-2xl p-3 border border-white/10 text-center">
+                      <span className="text-[10px] uppercase font-bold text-slate-300 tracking-wider">Sugar</span>
                       <p className="text-base font-black text-white mt-0.5">{sugar !== null && sugar !== undefined ? `${sugar}g` : '–'}</p>
                     </div>
-                    <div className="bg-black/30 rounded-2xl p-3 border border-white/5 text-center">
-                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Fiber</span>
+                    <div className="bg-black/60 rounded-2xl p-3 border border-white/10 text-center">
+                      <span className="text-[10px] uppercase font-bold text-slate-300 tracking-wider">Fiber</span>
                       <p className="text-base font-black text-white mt-0.5">{fiber !== null && fiber !== undefined ? `${fiber}g` : '–'}</p>
                     </div>
-                    <div className="bg-black/30 rounded-2xl p-3 border border-white/5 text-center">
-                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Sodium</span>
+                    <div className="bg-black/60 rounded-2xl p-3 border border-white/10 text-center">
+                      <span className="text-[10px] uppercase font-bold text-slate-300 tracking-wider">Sodium</span>
                       <p className="text-base font-black text-white mt-0.5">{sodium_mg !== null && sodium_mg !== undefined ? `${sodium_mg}mg` : '–'}</p>
                     </div>
                   </div>
@@ -530,17 +528,17 @@ export function ProductDetails({
                   {/* Vitamins & Minerals */}
                   {(vitamins.length > 0 || minerals.length > 0) && (
                     <div className="space-y-2 pt-1">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-300 block">
                         Documented Vitamins & Minerals
                       </span>
                       <div className="flex flex-wrap gap-2">
                         {vitamins.map((v, i) => (
-                          <span key={i} className="px-3 py-1.5 bg-vic-blue/15 border border-vic-blue/30 rounded-xl text-xs font-semibold text-vic-blue">
+                          <span key={i} className="px-3 py-1.5 bg-vic-blue/20 border border-vic-blue/40 rounded-xl text-xs font-semibold text-vic-blue">
                             {v}
                           </span>
                         ))}
                         {minerals.map((m, i) => (
-                          <span key={i} className="px-3 py-1.5 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-xs font-semibold text-emerald-300">
+                          <span key={i} className="px-3 py-1.5 bg-emerald-500/20 border border-emerald-500/40 rounded-xl text-xs font-semibold text-emerald-300">
                             {m}
                           </span>
                         ))}
@@ -550,14 +548,14 @@ export function ProductDetails({
 
                   {/* Nutrition Narrative Paragraph */}
                   {vitamins_and_nutrition && (
-                    <div className="pt-2 border-t border-white/10 text-slate-300 text-sm sm:text-[15px] leading-relaxed space-y-3">
+                    <div className="pt-2 border-t border-white/10 text-slate-100 text-sm sm:text-[15px] leading-relaxed space-y-3 font-medium">
                       {vitamins_and_nutrition.split('\n\n').map((p: string, i: number) => <p key={i}>{p}</p>)}
                     </div>
                   )}
                 </section>
 
                 {/* SECTION 3: RECOMMENDED FOR YOUR PLAN */}
-                <section className="bg-vic-blue/10 border border-vic-blue/20 rounded-[2rem] p-6 sm:p-7 shadow-lg space-y-4">
+                <section className="bg-slate-900/90 border border-vic-blue/30 rounded-[2rem] p-6 sm:p-7 shadow-lg space-y-4">
                   <div className="flex items-center gap-2">
                     <div className="size-8 rounded-xl bg-vic-blue/20 flex items-center justify-center text-vic-blue border border-vic-blue/30">
                       <Check className="w-4 h-4" />
@@ -566,7 +564,7 @@ export function ProductDetails({
                       Recommended for Your Plan
                     </h2>
                   </div>
-                  <div className="text-slate-200 text-sm sm:text-[15px] leading-relaxed space-y-3">
+                  <div className="text-slate-100 text-sm sm:text-[15px] leading-relaxed space-y-3 font-medium">
                     {recommendation ? (
                       recommendation.split('\n\n').map((p: string, i: number) => <p key={i}>{p}</p>)
                     ) : (
@@ -575,16 +573,16 @@ export function ProductDetails({
                   </div>
                 </section>
 
-                {/* SECTION 4: LOCALIZED PRICE (No artificial hallucinated prices) */}
-                <section className="bg-white/5 border border-white/10 rounded-2xl p-5 flex items-center justify-between shadow-lg">
+                {/* SECTION 4: LOCALIZED PRICE */}
+                <section className="bg-slate-900/90 border border-white/15 rounded-2xl p-5 flex items-center justify-between shadow-lg">
                   <div>
-                    <span className="text-xs font-bold uppercase tracking-wider text-slate-400 block">Verified Local Price</span>
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-300 block">Verified Local Price</span>
                     {price_metadata?.source && (
                       <span className="text-[11px] text-slate-400">Source: {price_metadata.source}</span>
                     )}
                   </div>
                   <div className="text-right">
-                    <span className="text-lg font-black text-white">
+                    <span className="text-xl font-black text-[#21ff64]">
                       {estimated_price || "Price unavailable"}
                     </span>
                     {!estimated_price && (
@@ -600,7 +598,7 @@ export function ProductDetails({
       </main>
 
       {/* Sticky Bottom Action Dock: ALWAYS VISIBLE AND HORIZONTALLY PROPORTIONED */}
-      <footer className="shrink-0 z-30 bg-white/95 dark:bg-[#0b141a]/95 backdrop-blur-xl border-t border-slate-200 dark:border-slate-800 px-5 py-3.5 shadow-lg max-w-2xl mx-auto w-full">
+      <footer className="shrink-0 z-30 bg-[#0b141a]/95 backdrop-blur-xl border-t border-white/10 px-5 py-3.5 shadow-lg max-w-2xl mx-auto w-full">
         <div className="flex flex-row items-center gap-3 w-full">
           {!isFlagged ? (
             <button
@@ -613,7 +611,7 @@ export function ProductDetails({
               ) : (
                 <Check className="w-5 h-5 text-slate-900" strokeWidth={3} />
               )}
-              <span>Log Product</span>
+              <span>Budget</span>
             </button>
           ) : (
             <button
