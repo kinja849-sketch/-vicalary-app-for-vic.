@@ -804,11 +804,11 @@ export const sendTypingIndicator = async (
     userId: string,
     conversationId: string,
     isTyping: boolean,
-    action: 'start' | 'heartbeat' | 'stop' = isTyping ? 'start' : 'stop'
+    action: 'start' | 'heartbeat' | 'stop' = isTyping ? 'start' : 'stop',
+    sessionId?: number
 ) => {
     if (!channel) return;
     const now = Date.now();
-    // 1. Instant WebSocket broadcast (<50ms) to peers listening on the channel
     try {
         await channel.send({
             type: 'broadcast',
@@ -818,23 +818,12 @@ export const sendTypingIndicator = async (
                 conversation_id: conversationId,
                 typing: isTyping,
                 action,
+                session_id: sessionId || now,
                 timestamp: now
             }
         });
     } catch (e) {
         console.warn('[Realtime] Typing broadcast failed:', e);
-    }
-
-    // 2. Presence tracking fallback
-    try {
-        return await channel.track({
-            user_id: userId,
-            conversation_id: conversationId,
-            typing: isTyping,
-            online_at: new Date(now).toISOString()
-        });
-    } catch (e) {
-        console.warn('[Realtime] Typing track fallback failed:', e);
     }
 }
 

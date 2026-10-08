@@ -409,6 +409,7 @@ export default function ChatConversation() {
     const myTypingHeartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const myTypingStopDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const isMyTypingActiveRef = useRef<boolean>(false);
+    const typingSessionIdRef = useRef<number>(0);
 
     // --- Sub-components ---
     const ContextAttachment = () => {
@@ -1265,7 +1266,7 @@ export default function ChatConversation() {
             isMyTypingActiveRef.current = false;
             const convId = canonicalConvId || (!isVirtual ? localActiveId : null);
             if (activeChannelRef.current && convId && !isAI && user?.id) {
-                sendTypingIndicator(activeChannelRef.current, user.id, convId, false, 'stop').catch(() => {});
+                sendTypingIndicator(activeChannelRef.current, user.id, convId, false, 'stop', typingSessionIdRef.current).catch(() => {});
             }
         }
     }, [canonicalConvId, isVirtual, localActiveId, isAI, user?.id]);
@@ -1282,21 +1283,22 @@ export default function ChatConversation() {
         // Send start event on first typing keypress and maintain periodic heartbeat
         if (!isMyTypingActiveRef.current) {
             isMyTypingActiveRef.current = true;
-            sendTypingIndicator(activeChannelRef.current, user.id, convId, true, 'start').catch(() => {});
+            typingSessionIdRef.current = Date.now();
+            sendTypingIndicator(activeChannelRef.current, user.id, convId, true, 'start', typingSessionIdRef.current).catch(() => {});
 
             if (myTypingHeartbeatRef.current) clearInterval(myTypingHeartbeatRef.current);
             myTypingHeartbeatRef.current = setInterval(() => {
                 if (isMyTypingActiveRef.current && activeChannelRef.current) {
-                    sendTypingIndicator(activeChannelRef.current, user.id, convId, true, 'heartbeat').catch(() => {});
+                    sendTypingIndicator(activeChannelRef.current, user.id, convId, true, 'heartbeat', typingSessionIdRef.current).catch(() => {});
                 }
-            }, 2500);
+            }, 2000);
         }
 
-        // Inactivity debounce: if no keypress for 3s, send stop event
+        // Inactivity debounce: if no keypress for 2s, send stop event
         if (myTypingStopDebounceRef.current) clearTimeout(myTypingStopDebounceRef.current);
         myTypingStopDebounceRef.current = setTimeout(() => {
             stopMyTyping();
-        }, 3000);
+        }, 2000);
     }, [isAI, canonicalConvId, isVirtual, localActiveId, user?.id, stopMyTyping]);
 
     const activeChannelRef = useRef<any>(null);
@@ -1440,32 +1442,27 @@ export default function ChatConversation() {
 
         channel
             .on('broadcast', { event: 'typing' }, ({ payload }: any) => {
-                if (!payload || payload.conversation_id !== convId) return;
-                const targetId = presenceTargetRef.current;
-                if (payload.user_id === targetId && !isAI) {
-                    // Stale event protection: ignore past events
-                    if (payload.timestamp && payload.timestamp < peerTypingTimestampRef.current) {
-                        return;
-                    }
-                    peerTypingTimestampRef.current = payload.timestamp || Date.now();
+                if (!payload || payload.conversation_id !== convId || isAI) return;
+                // Accept typing from any participant in this 1-on-1 direct conversation who is not me
+                if (payload.user_id === user.id) return;
 
-                    const isTyping = Boolean(payload.typing);
-                    if (isTyping) {
-                        setOtherUserTyping(true);
-                        if (peerTypingClearTimeoutRef.current) {
-                            clearTimeout(peerTypingClearTimeoutRef.current);
-                        }
-                        // Authoritative 4-second expiry timer
-                        peerTypingClearTimeoutRef.current = setTimeout(() => {
-                            setOtherUserTyping(false);
-                        }, 4000);
-                    } else {
-                        if (peerTypingClearTimeoutRef.current) {
-                            clearTimeout(peerTypingClearTimeoutRef.current);
-                            peerTypingClearTimeoutRef.current = null;
-                        }
-                        setOtherUserTyping(false);
+                const isTyping = Boolean(payload.typing);
+                if (isTyping) {
+                    setOtherUserTyping(true);
+                    if (peerTypingClearTimeoutRef.current) {
+                        clearTimeout(peerTypingClearTimeoutRef.current);
                     }
+                    // Responsive 3.0s auto-expiry fallback in case peer disconnects
+                    peerTypingClearTimeoutRef.current = setTimeout(() => {
+                        setOtherUserTyping(false);
+                        peerTypingClearTimeoutRef.current = null;
+                    }, 3000);
+                } else {
+                    if (peerTypingClearTimeoutRef.current) {
+                        clearTimeout(peerTypingClearTimeoutRef.current);
+                        peerTypingClearTimeoutRef.current = null;
+                    }
+                    setOtherUserTyping(false);
                 }
             })
             .on('broadcast', { event: 'new_message' }, ({ payload }: any) => {
@@ -1474,8 +1471,8 @@ export default function ChatConversation() {
 
                 console.log(`[Chat] Instant broadcast message received:`, payload);
 
-                // 1. Immediately clear peer typing indicator on receipt
-                if (!isAI && payload.sender_id === targetPeerId) {
+                // 1. Immediately clear peer typing indicator on receipt from header
+                if (!isAI) {
                     setOtherUserTyping(false);
                     if (peerTypingClearTimeoutRef.current) {
                         clearTimeout(peerTypingClearTimeoutRef.current);
@@ -1865,6 +1862,12 @@ export default function ChatConversation() {
 
         // Immediately clear sender's typing state
         stopMyTyping();
+
+        // Immediately clear input field with zero UI delay
+        setMessage("");
+        if (inputRef.current) {
+            inputRef.current.style.height = 'auto';
+        }
 
         if (isAI) {
             setOtherUserTyping(true);
@@ -2558,15 +2561,13 @@ export default function ChatConversation() {
                         </div>
                     )}
 
-                    {/* Typing Indicator Overlay (Outside the date groups but inside main) */}
-                    { (otherUserTyping || isProcessingVoice) && (
+                    {/* Voice Transcribing / AI Processing Indicator Overlay (Peer typing is rendered strictly in conversation header) */}
+                    { ((isAI && otherUserTyping) || isProcessingVoice) && (
                         <div className="flex w-full justify-start mt-1 px-3 py-1">
                             <div className="bg-white dark:bg-[#202c33] p-2 rounded-xl shadow-sm flex items-center gap-2">
-                                {(isAI || isProcessingVoice) && (
-                                    <div className="flex items-center gap-1.5 text-vic-green">
-                                        <Brain className="w-4 h-4 animate-pulse" />
-                                    </div>
-                                )}
+                                <div className="flex items-center gap-1.5 text-vic-green">
+                                    <Brain className="w-4 h-4 animate-pulse" />
+                                </div>
                                 <div className="flex gap-1 py-0.5 px-0.5">
                                     <div className="size-1.5 bg-vic-green rounded-full animate-bounce"></div>
                                     <div className="size-1.5 bg-vic-green rounded-full animate-bounce [animation-delay:0.2s]"></div>
