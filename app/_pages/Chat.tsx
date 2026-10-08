@@ -11,6 +11,7 @@ import { MyQRCode } from "@/components/MyQRCode";
 import { useTranslation } from "@/lib/api/translation";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
+import { useLastSeenHeartbeat } from "@/hooks/useLastSeenHeartbeat";
 import dynamic from "next/dynamic";
 const QRScanner = dynamic(() => import("@/components/QRScanner"), { ssr: false });
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,7 @@ export default function Chat() {
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const { user } = useAuth();
+  useLastSeenHeartbeat(user?.id);
   const { t } = useTranslation();
 
   const [searchQuery, setSearchQuery] = useState("");

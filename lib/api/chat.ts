@@ -718,12 +718,33 @@ export const subscribeToUserConversations = (userId: string, callback: (payload:
 }
 
 export const sendTypingIndicator = async (channel: RealtimeChannel, userId: string, conversationId: string, isTyping: boolean) => {
-    return channel.track({
-        user_id: userId,
-        conversation_id: conversationId,
-        typing: isTyping,
-        online_at: new Date().toISOString()
-    });
+    // 1. Instant WebSocket broadcast (<50ms) to peers listening on the channel
+    try {
+        await channel.send({
+            type: 'broadcast',
+            event: 'typing',
+            payload: {
+                user_id: userId,
+                conversation_id: conversationId,
+                typing: isTyping,
+                timestamp: Date.now()
+            }
+        });
+    } catch (e) {
+        console.warn('[Realtime] Typing broadcast failed:', e);
+    }
+
+    // 2. Presence tracking fallback
+    try {
+        return await channel.track({
+            user_id: userId,
+            conversation_id: conversationId,
+            typing: isTyping,
+            online_at: new Date().toISOString()
+        });
+    } catch (e) {
+        console.warn('[Realtime] Typing track fallback failed:', e);
+    }
 }
 
 export const initiateCallV2 = async (conversationId: string, callerId: string, receiverId: string, type: 'voice' | 'video') => {

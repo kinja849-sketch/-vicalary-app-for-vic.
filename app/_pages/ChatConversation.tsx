@@ -9,6 +9,7 @@ import { supabase } from '@/lib/supabase';
 import { saveFoodAnalysis } from '@/lib/api/food';
 import { getConversationById, getMessages, sendMessage, uploadChatMedia, markAsRead, sendTypingIndicator, initiateCallV2, updateCallStatus, softDeleteConversation, findUserByIdSecure, provisionAndSendMessage, findConversationByParticipants, archiveConversation, muteConversation, clearChatHistory } from '@/lib/api/chat';
 import { useAuth } from '@/lib/AuthContext';
+import { useLastSeenHeartbeat } from '@/hooks/useLastSeenHeartbeat';
 import { getUserProfile } from '@/lib/api/auth';
 import { toast } from 'sonner';
 import EmojiPicker, { Theme, EmojiStyle } from 'emoji-picker-react';
@@ -284,6 +285,20 @@ export default function ChatConversation() {
     const virtualTargetId = isVirtual ? localActiveId.replace('new-', '') : (targetHint || null);
 
     const { user } = useAuth();
+
+    // Early resolution: If user navigated with new-<targetId>, immediately check if a conversation already exists
+    useEffect(() => {
+        if (isVirtual && virtualTargetId && user?.id) {
+            findConversationByParticipants(user.id, virtualTargetId).then((existingId) => {
+                if (existingId) {
+                    console.log(`[Chat] Early resolved virtual ID ${localActiveId} to existing ID ${existingId}`);
+                    setLocalActiveId(existingId);
+                }
+            }).catch(err => {
+                console.warn('[Chat] Failed to early-resolve virtual conversation:', err);
+            });
+        }
+    }, [isVirtual, virtualTargetId, user?.id, localActiveId]);
     const { t } = useTranslation();
     const queryClient = useQueryClient();
     const router = useRouter();
@@ -313,6 +328,8 @@ export default function ChatConversation() {
     const [showCamera, setShowCamera] = useState(false);
     const [otherUserTyping, setOtherUserTyping] = useState(false);
     const [otherUserOnline, setOtherUserOnline] = useState(false);
+    const presenceTargetRef = useRef<string | null>(null);
+    const recomputePresenceRef = useRef<(() => void) | null>(null);
     const [isProcessingVoice, setIsProcessingVoice] = useState(false);
     const [recordingDragY, setRecordingDragY] = useState(0);
     const [recordingDragX, setRecordingDragX] = useState(0);
@@ -354,6 +371,7 @@ export default function ChatConversation() {
     const [isDictating, setIsDictating] = useState(false);
     const recognitionRef = useRef<any>(null);
     const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const peerTypingClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // --- Sub-components ---
     const ContextAttachment = () => {
@@ -664,32 +682,40 @@ export default function ChatConversation() {
 
     const resolvedOtherUserId = otherParticipant?.user_id || virtualTargetId;
     const isOnline = resolvedOtherUserId && onlineUsers.has(resolvedOtherUserId);
+
+    // Durable last seen (user_profiles.last_seen) for the peer; null when unknown.
+    const { data: peerLastSeen } = useQuery<string | null>({
+        queryKey: ['peer-last-seen', resolvedOtherUserId],
+        queryFn: async () => {
+            const res = await fetch(`/api/presence/last-seen?user_id=${resolvedOtherUserId}`, { credentials: 'same-origin' });
+            if (!res.ok) return null;
+            const json = await res.json();
+            return json.last_seen ?? null;
+        },
+        enabled: !!resolvedOtherUserId && !isAI && !isSelf && !isVirtual,
+        refetchInterval: 60_000,
+    });
+
     const displayStatus = useMemo(() => {
         if (isOnline) return "online";
-        
-        // Prevent empty arrays from useQuery from overwriting the pre-fetched profile from conversation
-        const resolvedUserProfile = (Array.isArray(otherUserProfile) && otherUserProfile.length === 0) ? null : otherUserProfile;
-        const rawP = isVirtual ? virtualProfile : (resolvedUserProfile || otherParticipant?.user_profiles);
-        const p = Array.isArray(rawP) ? rawP[0] : rawP;
-        
-        const lastSeenStr = p?.last_seen || p?.updated_at;
-        
-        if (lastSeenStr) {
-            const date = new Date(lastSeenStr);
+
+        if (peerLastSeen) {
+            const date = new Date(peerLastSeen);
             const now = new Date();
-            const diffMs = now.getTime() - date.getTime();
-            const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-            
-            if (diffDays === 0) {
-                return `last seen today at ${date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
+            const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+            const diffDays = Math.round((startOfDay(now) - startOfDay(date)) / (1000 * 60 * 60 * 24));
+            const timeStr = date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+
+            if (diffDays <= 0) {
+                return `last seen today at ${timeStr}`;
             } else if (diffDays === 1) {
-                return `last seen yesterday at ${date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
+                return `last seen yesterday at ${timeStr}`;
             } else {
                 return `last seen ${date.toLocaleDateString()}`;
             }
         }
         return "Offline";
-    }, [isOnline, isVirtual, virtualProfile, otherUserProfile, otherParticipant]);
+    }, [isOnline, peerLastSeen]);
 
     // --- Actions ---
 
@@ -1190,8 +1216,13 @@ export default function ChatConversation() {
                     );
                 });
 
-                if (newMessage.sender_id === COACH_ID) {
+                // When any incoming message arrives in the conversation from the other participant or AI coach, immediately clear typing indicator
+                if (newMessage.sender_id !== user?.id) {
                     setOtherUserTyping(false);
+                    if (peerTypingClearTimeoutRef.current) {
+                        clearTimeout(peerTypingClearTimeoutRef.current);
+                        peerTypingClearTimeoutRef.current = null;
+                    }
                 }
             } else if (payload.eventType === 'UPDATE') {
                 const updatedMessage = payload.new;
@@ -1230,17 +1261,22 @@ export default function ChatConversation() {
         }
         
         activeSubscriptionIdRef.current = currentSubKey;
-        const channelName = isAI ? `chat_room_${localActiveId}` : (localActiveId === user.id ? `private_chat_self_${localActiveId}` : `private_chat_${[user.id, localActiveId].sort().join('_')}`);
+        // Peer chats: both participants must join the SAME room, so the name depends only on the conversation id.
+        const channelName = isAI ? `chat_room_${localActiveId}` : (localActiveId === user.id ? `private_chat_self_${localActiveId}` : `conversation:${localActiveId}`);
         
         console.log(`[Chat] V12 Subscribing to: ${channelName} for ${localActiveId}`);
 
-        const channel = supabase.channel(channelName)
-            .on('presence', { event: 'sync' }, () => {
-                const state = channel.presenceState();
-                let isTyping = false;
-                let isOnline = false;
-                const targetId = isV ? vTargetId : otherParticipantId;
+        presenceTargetRef.current = isV ? vTargetId : (otherParticipantId || null);
 
+        const channel = supabase.channel(channelName);
+
+        const recomputePresence = () => {
+            const state = channel.presenceState();
+            let isTyping = false;
+            let isOnline = false;
+            const targetId = presenceTargetRef.current;
+
+            if (targetId) {
                 Object.values(state).forEach((presences: any) => {
                     presences.forEach((p: any) => {
                         if (p.user_id === targetId) {
@@ -1251,12 +1287,106 @@ export default function ChatConversation() {
                         }
                     });
                 });
+            }
 
-                if (!isAI) {
-                    setOtherUserTyping(prev => (prev !== isTyping ? isTyping : prev));
+            if (!isAI) {
+                setOtherUserTyping(prev => (prev !== isTyping ? isTyping : prev));
+                if (peerTypingClearTimeoutRef.current) {
+                    clearTimeout(peerTypingClearTimeoutRef.current);
+                    peerTypingClearTimeoutRef.current = null;
                 }
-                setOtherUserOnline(prev => (prev !== isOnline ? isOnline : prev));
+                // Safety guard: if peer is typing, auto-expire typing indicator after 3.5s if no refresh arrives
+                if (isTyping) {
+                    peerTypingClearTimeoutRef.current = setTimeout(() => {
+                        setOtherUserTyping(false);
+                    }, 3500);
+                }
+            }
+            setOtherUserOnline(prev => (prev !== isOnline ? isOnline : prev));
+        };
+        recomputePresenceRef.current = recomputePresence;
+
+        channel
+            .on('broadcast', { event: 'typing' }, ({ payload }: any) => {
+                if (!payload || !payload.user_id) return;
+                const targetId = presenceTargetRef.current;
+                if (payload.user_id === targetId && !isAI) {
+                    const isTyping = Boolean(payload.typing);
+                    setOtherUserTyping(isTyping);
+                    if (peerTypingClearTimeoutRef.current) {
+                        clearTimeout(peerTypingClearTimeoutRef.current);
+                        peerTypingClearTimeoutRef.current = null;
+                    }
+                    if (isTyping) {
+                        peerTypingClearTimeoutRef.current = setTimeout(() => {
+                            setOtherUserTyping(false);
+                        }, 3500);
+                    }
+                }
             })
+            .on('broadcast', { event: 'new_message' }, ({ payload }: any) => {
+                if (!payload || !payload.id || payload.sender_id === user?.id) return;
+                console.log(`[Chat] Instant broadcast message received:`, payload);
+
+                // 1. Instantly clear otherUserTyping indicator upon message receipt
+                if (!isAI) {
+                    setOtherUserTyping(false);
+                    if (peerTypingClearTimeoutRef.current) {
+                        clearTimeout(peerTypingClearTimeoutRef.current);
+                        peerTypingClearTimeoutRef.current = null;
+                    }
+                }
+
+                // 2. Add message to local cache with deduplication
+                queryClient.setQueryData(['messages', localActiveId], (old: any) => {
+                    const base = Array.isArray(old) ? old : [];
+                    const exists = base.some((m: any) =>
+                        m.id === payload.id ||
+                        (m.content === payload.content &&
+                         m.sender_id === payload.sender_id &&
+                         Math.abs(new Date(m.created_at).getTime() - new Date(payload.created_at).getTime()) < 5000)
+                    );
+                    if (exists) return old;
+
+                    return [...base, payload].sort((a, b) =>
+                        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+                    );
+                });
+
+                // 3. Update conversations list preview
+                queryClient.setQueryData(['conversations', user?.id], (old: any) => {
+                    if (!Array.isArray(old)) return old;
+                    return old.map((conv: any) => {
+                        if (conv.id === localActiveId) {
+                            return {
+                                ...conv,
+                                last_message_content: payload.content,
+                                last_message_at: payload.created_at,
+                                last_message_sender_id: payload.sender_id
+                            };
+                        }
+                        return conv;
+                    }).sort((a: any, b: any) => {
+                        const timeA = new Date(a.last_message_at || 0).getTime();
+                        const timeB = new Date(b.last_message_at || 0).getTime();
+                        return timeB - timeA;
+                    });
+                });
+
+                if (isAtBottom.current) {
+                    scrollToBottom('smooth');
+                }
+            })
+            .on('presence', { event: 'sync' }, recomputePresence)
+            .on('presence', { event: 'join' }, recomputePresence)
+            .on('presence', { event: 'leave' }, () => {
+                recomputePresence();
+                // Peer may have just gone offline: refresh the durable last_seen shortly after.
+                setTimeout(() => {
+                    queryClient.invalidateQueries({ queryKey: ['peer-last-seen'] });
+                }, 1500);
+            })
+
             .on('postgres_changes', {
                 event: '*',
                 schema: 'public',
@@ -1284,6 +1414,14 @@ export default function ChatConversation() {
         activeChannelRef.current = channel;
 
         return () => {
+            if (typingTimeoutRef.current) {
+                clearTimeout(typingTimeoutRef.current);
+                typingTimeoutRef.current = null;
+            }
+            if (peerTypingClearTimeoutRef.current) {
+                clearTimeout(peerTypingClearTimeoutRef.current);
+                peerTypingClearTimeoutRef.current = null;
+            }
             if (activeChannelRef.current) {
                 supabase.removeChannel(activeChannelRef.current);
                 activeChannelRef.current = null;
@@ -1291,6 +1429,16 @@ export default function ChatConversation() {
             activeSubscriptionIdRef.current = null;
         };
     }, [activeId, user?.id]);
+
+    // Keep the presence target fresh: when the peer id resolves after the channel is
+    // already subscribed, re-derive typing/online from the current presence state.
+    useEffect(() => {
+        presenceTargetRef.current = otherParticipantId || (isVirtual ? virtualTargetId : null) || null;
+        recomputePresenceRef.current?.();
+    }, [otherParticipantId, isVirtual, virtualTargetId]);
+
+    // Keep the last_seen heartbeat running while the conversation screen is open
+    useLastSeenHeartbeat(user?.id);
 
     // On mount or switch: clear unread once
     useEffect(() => {
@@ -1375,6 +1523,15 @@ export default function ChatConversation() {
                 queryClient.setQueryData(['messages', localActiveId], (old: any) => [...(old || []), optimisticMsg]);
             } else {
                 queryClient.setQueryData(['messages', localActiveId], (old: any) => [...(old || []), optimisticMsg]);
+
+                // Instantly broadcast message to peer via channel (<50ms delivery)
+                if (activeChannelRef.current) {
+                    activeChannelRef.current.send({
+                        type: 'broadcast',
+                        event: 'new_message',
+                        payload: optimisticMsg
+                    }).catch((err: any) => console.warn('[Realtime] Broadcast new_message failed:', err));
+                }
             }
 
             // --- Optimistic Sidebar Sync ---
@@ -1472,6 +1629,16 @@ export default function ChatConversation() {
         const content = message.trim();
 
         console.log(`[Chat] handleSend to ${activeId}`);
+
+        // Immediately clear sender's typing state both locally and across the channel
+        if (typingTimeoutRef.current) {
+            clearTimeout(typingTimeoutRef.current);
+            typingTimeoutRef.current = null;
+        }
+        lastTypingSentRef.current = 0;
+        if (!isAI && activeChannelRef.current) {
+            sendTypingIndicator(activeChannelRef.current, user.id, localActiveId, false).catch(() => {});
+        }
 
         // Instant simulated response indicator for AI
         if (isAI) {
@@ -1578,23 +1745,47 @@ export default function ChatConversation() {
     };
 
     const lastTypingSentRef = useRef<number>(0);
-    const handleTyping = async () => {
-        if (!user || !activeId || !activeChannelRef.current) return;
+    const handleTyping = async (currentText?: string) => {
+        if (!user || !localActiveId || !activeChannelRef.current) return;
 
-        // Throttle presence updates to once every 2 seconds to avoid channel noise
+        // If the input is empty/whitespace, immediately notify peer that typing stopped
+        if (typeof currentText === 'string' && !currentText.trim()) {
+            if (typingTimeoutRef.current) {
+                clearTimeout(typingTimeoutRef.current);
+                typingTimeoutRef.current = null;
+            }
+            lastTypingSentRef.current = 0;
+            if (!isAI) {
+                await sendTypingIndicator(activeChannelRef.current, user.id, localActiveId, false);
+            }
+            return;
+        }
+
+        if (isAI) return;
+
+        // Throttle presence updates to once every 1.5 seconds to avoid channel noise
         const now = Date.now();
-        if (now - lastTypingSentRef.current < 2000) return;
+        if (now - lastTypingSentRef.current < 1500) {
+            // Keep resetting the idle timeout so stopping triggers promptly 2.5s after the last keypress
+            if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+            typingTimeoutRef.current = setTimeout(async () => {
+                if (activeChannelRef.current) {
+                    await sendTypingIndicator(activeChannelRef.current, user.id, localActiveId, false);
+                }
+            }, 2500);
+            return;
+        }
         lastTypingSentRef.current = now;
 
-        // EPHEMERAL PRESENCE TYPING
-        await sendTypingIndicator(activeChannelRef.current, user.id, activeId, true);
+        // INSTANT BROADCAST + EPHEMERAL PRESENCE TYPING
+        await sendTypingIndicator(activeChannelRef.current, user.id, localActiveId, true);
 
         if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
         typingTimeoutRef.current = setTimeout(async () => {
             if (activeChannelRef.current) {
-                await sendTypingIndicator(activeChannelRef.current, user.id, activeId, false);
+                await sendTypingIndicator(activeChannelRef.current, user.id, localActiveId, false);
             }
-        }, 3000);
+        }, 2500);
     };
 
     // --- Rendering Helpers ---
@@ -1989,7 +2180,7 @@ export default function ChatConversation() {
                                 <span className="text-vic-green font-medium animate-pulse">Transcribing...</span>
                             ) : otherUserTyping ? (
                                 <span className="text-vic-green font-medium animate-pulse">typing...</span>
-                            ) : otherUserOnline ? (
+                            ) : (otherUserOnline || (!isAI && !isSelf && isOnline)) ? (
                                 <span className="text-vic-green font-medium">Online</span>
                             ) : isAI ? (
                                 null
@@ -2168,13 +2359,15 @@ export default function ChatConversation() {
                     { (otherUserTyping || isProcessingVoice) && (
                         <div className="flex w-full justify-start mt-1 px-3 py-1">
                             <div className="bg-white dark:bg-[#202c33] p-2 rounded-xl shadow-sm flex items-center gap-2">
-                                <div className="flex items-center gap-1.5 text-vic-green">
-                                    {isProcessingVoice ? <Brain className="w-4 h-4 animate-pulse" /> : <Brain className="w-4 h-4 animate-pulse" />}
-                                </div>
-                                <div className="flex gap-1">
-                                    <div className="size-1 bg-vic-green rounded-full animate-bounce"></div>
-                                    <div className="size-1 bg-vic-green rounded-full animate-bounce [animation-delay:0.2s]"></div>
-                                    <div className="size-1 bg-vic-green rounded-full animate-bounce [animation-delay:0.4s]"></div>
+                                {(isAI || isProcessingVoice) && (
+                                    <div className="flex items-center gap-1.5 text-vic-green">
+                                        <Brain className="w-4 h-4 animate-pulse" />
+                                    </div>
+                                )}
+                                <div className="flex gap-1 py-0.5 px-0.5">
+                                    <div className="size-1.5 bg-vic-green rounded-full animate-bounce"></div>
+                                    <div className="size-1.5 bg-vic-green rounded-full animate-bounce [animation-delay:0.2s]"></div>
+                                    <div className="size-1.5 bg-vic-green rounded-full animate-bounce [animation-delay:0.4s]"></div>
                                 </div>
                             </div>
                         </div>
@@ -2212,10 +2405,22 @@ export default function ChatConversation() {
                                     rows={1}
                                     value={message}
                                     onChange={(e) => {
-                                        setMessage(e.target.value);
-                                        handleTyping();
+                                        const val = e.target.value;
+                                        setMessage(val);
+                                        handleTyping(val);
                                         e.target.style.height = 'auto';
                                         e.target.style.height = Math.min(e.target.scrollHeight, 100) + 'px';
+                                    }}
+                                    onBlur={() => {
+                                        // When input loses focus, cancel typing indicator if not already cleared
+                                        if (typingTimeoutRef.current) {
+                                            clearTimeout(typingTimeoutRef.current);
+                                            typingTimeoutRef.current = null;
+                                        }
+                                        lastTypingSentRef.current = 0;
+                                        if (activeChannelRef.current && !isAI) {
+                                            sendTypingIndicator(activeChannelRef.current, user.id, localActiveId, false).catch(() => {});
+                                        }
                                     }}
                                     onKeyDown={(e) => {
                                         if (e.key === 'Enter' && !e.shiftKey) {

@@ -1503,6 +1503,7 @@ export type Database = {
           height_cm: number | null
           id: string
           last_name: string | null
+          last_seen: string | null
           location_metadata: Json | null
           onboarding_complete: boolean | null
           onboarding_completed: boolean | null
@@ -1530,6 +1531,7 @@ export type Database = {
           height_cm?: number | null
           id: string
           last_name?: string | null
+          last_seen?: string | null
           location_metadata?: Json | null
           onboarding_complete?: boolean | null
           onboarding_completed?: boolean | null
@@ -1557,6 +1559,7 @@ export type Database = {
           height_cm?: number | null
           id?: string
           last_name?: string | null
+          last_seen?: string | null
           location_metadata?: Json | null
           onboarding_complete?: boolean | null
           onboarding_completed?: boolean | null
