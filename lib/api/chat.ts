@@ -380,6 +380,38 @@ export const findConversationByParticipants = async (user1: string, user2: strin
     return data;
 }
 
+export const getOrCreateDirectConversation = async (userId: string, peerUserId: string): Promise<string> => {
+    try {
+        const existing = await findConversationByParticipants(userId, peerUserId);
+        if (existing) {
+            const rawId = typeof existing === 'object' ? (existing.id || existing.conversation_id || existing.r_id) : existing;
+            if (rawId) return String(rawId);
+        }
+    } catch (e) {
+        console.warn('[getOrCreateDirectConversation] Lookup failed, will try create/resolve endpoint:', e);
+    }
+
+    try {
+        const res = await fetch('/api/chat/conversation', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId, peerUserId })
+        });
+        if (!res.ok) {
+            const errBody = await res.json().catch(() => ({}));
+            throw new Error(errBody.error || `Failed to create/resolve direct conversation (HTTP ${res.status})`);
+        }
+        const data = await res.json();
+        if (!data?.conversationId) {
+            throw new Error('No conversationId returned from server');
+        }
+        return String(data.conversationId);
+    } catch (err: any) {
+        console.error('[getOrCreateDirectConversation] Failed:', err);
+        throw err;
+    }
+};
+
 export function findUserByPhone(phoneNumber: string) {
     return findUserByIdentifier(phoneNumber);
 }
@@ -524,6 +556,28 @@ export const getMessages = async (conversationId: string, userId?: string, limit
     return (data || []).reverse()
 }
 
+export const markMessageDelivered = async (messageId: string, conversationId?: string) => {
+    const now = new Date().toISOString();
+    try {
+        let query = (supabase.from('messages') as any)
+            .update({ is_delivered: true, delivered_at: now })
+            .eq('id', messageId)
+            .eq('is_delivered', false);
+        
+        if (conversationId) {
+            query = query.eq('conversation_id', conversationId);
+        }
+
+        const { error } = await query;
+        if (error) {
+            console.warn('[Chat] Failed to mark message delivered in DB:', error);
+        }
+    } catch (e) {
+        console.warn('[Chat] Exception marking message delivered:', e);
+    }
+    return now;
+};
+
 export const sendMessage = async (
     userId: string,
     conversationId: string,
@@ -531,29 +585,57 @@ export const sendMessage = async (
     messageType: 'text' | 'voice' | 'video' | 'image' | 'file' | 'link' = 'text',
     metadata?: any,
     isAI?: boolean,
-    isSelf?: boolean
+    isSelf?: boolean,
+    clientMessageId?: string
 ) => {
     const now = new Date().toISOString();
-    const { data, error } = await supabase
-        .from('messages')
-        .insert({
-            conversation_id: conversationId,
-            sender_id: userId,
-            message_type: messageType,
-            content,
-            metadata: {
-                ...metadata,
-                timestamp: now
-            },
-            is_delivered: true,
-            delivered_at: now,
-            read_at: (isAI || isSelf) ? now : null,
-            is_read: (isAI || isSelf)
-        })
-        .select()
-        .single()
+    const messageId = clientMessageId || crypto.randomUUID();
+    const isPeer = !isAI && !isSelf;
 
-    if (error) throw error;
+    const payload: any = {
+        id: messageId,
+        conversation_id: conversationId,
+        sender_id: userId,
+        message_type: messageType,
+        content,
+        metadata: {
+            ...metadata,
+            timestamp: now
+        },
+        is_delivered: !isPeer,
+        delivered_at: isPeer ? null : now,
+        read_at: (isAI || isSelf) ? now : null,
+        is_read: (isAI || isSelf)
+    };
+
+    let data: any = null;
+    const { data: inserted, error } = await supabase
+        .from('messages')
+        .insert(payload)
+        .select()
+        .single();
+
+    if (error) {
+        // Idempotent retry: If duplicate key violation on primary key 'id' (PostgreSQL code 23505), fetch existing row
+        if (error.code === '23505' || error.message?.includes('duplicate key') || error.message?.includes('uniqueness')) {
+            console.log(`[sendMessage] Message ${messageId} already exists, fetching existing record (idempotent retry)`);
+            const { data: existing, error: fetchErr } = await supabase
+                .from('messages')
+                .select('*')
+                .eq('id', messageId)
+                .single();
+            if (!fetchErr && existing) {
+                data = existing;
+            } else {
+                throw error;
+            }
+        } else {
+            throw error;
+        }
+    } else {
+        data = inserted;
+    }
+
     if (!data) throw new Error('Message could not be saved');
 
     supabase.from('conversations')
@@ -717,7 +799,15 @@ export const subscribeToUserConversations = (userId: string, callback: (payload:
         })
 }
 
-export const sendTypingIndicator = async (channel: RealtimeChannel, userId: string, conversationId: string, isTyping: boolean) => {
+export const sendTypingIndicator = async (
+    channel: RealtimeChannel,
+    userId: string,
+    conversationId: string,
+    isTyping: boolean,
+    action: 'start' | 'heartbeat' | 'stop' = isTyping ? 'start' : 'stop'
+) => {
+    if (!channel) return;
+    const now = Date.now();
     // 1. Instant WebSocket broadcast (<50ms) to peers listening on the channel
     try {
         await channel.send({
@@ -727,7 +817,8 @@ export const sendTypingIndicator = async (channel: RealtimeChannel, userId: stri
                 user_id: userId,
                 conversation_id: conversationId,
                 typing: isTyping,
-                timestamp: Date.now()
+                action,
+                timestamp: now
             }
         });
     } catch (e) {
@@ -740,7 +831,7 @@ export const sendTypingIndicator = async (channel: RealtimeChannel, userId: stri
             user_id: userId,
             conversation_id: conversationId,
             typing: isTyping,
-            online_at: new Date().toISOString()
+            online_at: new Date(now).toISOString()
         });
     } catch (e) {
         console.warn('[Realtime] Typing track fallback failed:', e);

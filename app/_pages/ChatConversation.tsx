@@ -2,12 +2,12 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter, useParams, usePathname, useSearchParams } from 'next/navigation';
 import { requestMicrophoneAccess } from "@/lib/api/permissions";
-import { AlertCircle, MapPin, Navigation, Plus, Link as LinkIcon, FileText, ArrowLeft, Bookmark, Video, VideoOff, Phone, PhoneOff, Trash2, MoreVertical, Smile, Paperclip, Mic, Send, CheckCheck, Lock, Image, Headphones, User, BarChart, ChevronLeft, TriangleAlert, X, Brain } from 'lucide-react';
+import { AlertCircle, MapPin, Navigation, Plus, Link as LinkIcon, FileText, ArrowLeft, Bookmark, Video, VideoOff, Phone, PhoneOff, Trash2, MoreVertical, Smile, Paperclip, Mic, Send, Check, CheckCheck, Clock, RotateCcw, Lock, Image, Headphones, User, BarChart, ChevronLeft, TriangleAlert, X, Brain } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { saveFoodAnalysis } from '@/lib/api/food';
-import { getConversationById, getMessages, sendMessage, uploadChatMedia, markAsRead, sendTypingIndicator, initiateCallV2, updateCallStatus, softDeleteConversation, findUserByIdSecure, provisionAndSendMessage, findConversationByParticipants, archiveConversation, muteConversation, clearChatHistory } from '@/lib/api/chat';
+import { getConversationById, getMessages, sendMessage, uploadChatMedia, markAsRead, sendTypingIndicator, initiateCallV2, updateCallStatus, softDeleteConversation, findUserByIdSecure, provisionAndSendMessage, findConversationByParticipants, archiveConversation, muteConversation, clearChatHistory, getOrCreateDirectConversation, markMessageDelivered, getOrCreateCoachConversation } from '@/lib/api/chat';
 import { useAuth } from '@/lib/AuthContext';
 import { useLastSeenHeartbeat } from '@/hooks/useLastSeenHeartbeat';
 import { getUserProfile } from '@/lib/api/auth';
@@ -266,6 +266,10 @@ const isValidUUID = (id: string | undefined): boolean => {
 };
 
 export default function ChatConversation() {
+    const router = useRouter();
+    const pathname = usePathname();
+    const { t } = useTranslation();
+    const queryClient = useQueryClient();
     const { id: activeId } = useParams() as { id: string };
     const searchParams = useSearchParams();
     const targetHint = searchParams.get('target');
@@ -284,25 +288,54 @@ export default function ChatConversation() {
     const isVirtual = localActiveId?.startsWith('new-');
     const virtualTargetId = isVirtual ? localActiveId.replace('new-', '') : (targetHint || null);
 
+    // Canonical Conversation Resolution: holds authoritative database conversation ID
+    const [canonicalConvId, setCanonicalConvId] = useState<string | null>(() => {
+        return (activeId && !activeId.startsWith('new-')) ? activeId : null;
+    });
+    const [subscriptionStatus, setSubscriptionStatus] = useState<'connecting' | 'subscribed' | 'error' | 'closed'>('connecting');
+
     const { user } = useAuth();
 
-    // Early resolution: If user navigated with new-<targetId>, immediately check if a conversation already exists
+    // Canonical resolution: If user navigated with new-<targetId>, resolve or create canonical database conversation
     useEffect(() => {
-        if (isVirtual && virtualTargetId && user?.id) {
-            findConversationByParticipants(user.id, virtualTargetId).then((existingId) => {
-                if (existingId) {
-                    console.log(`[Chat] Early resolved virtual ID ${localActiveId} to existing ID ${existingId}`);
-                    setLocalActiveId(existingId);
-                }
-            }).catch(err => {
-                console.warn('[Chat] Failed to early-resolve virtual conversation:', err);
-            });
+        if (!activeId) return;
+        if (!activeId.startsWith('new-')) {
+            setCanonicalConvId(activeId);
+            return;
         }
-    }, [isVirtual, virtualTargetId, user?.id, localActiveId]);
-    const { t } = useTranslation();
-    const queryClient = useQueryClient();
-    const router = useRouter();
-    const pathname = usePathname();
+
+        if (!user?.id || !virtualTargetId) return;
+
+        let isMounted = true;
+        console.log(`[Chat] Resolving temporary conversation ${activeId} for target ${virtualTargetId}...`);
+
+        const resolveCanonical = async () => {
+            try {
+                let resolvedId: string | null = null;
+                if (virtualTargetId === COACH_ID) {
+                    resolvedId = await getOrCreateCoachConversation(user.id);
+                } else {
+                    resolvedId = await getOrCreateDirectConversation(user.id, virtualTargetId);
+                }
+
+                if (isMounted && resolvedId) {
+                    console.log(`[Chat] Resolved temporary conversation to canonical DB ID: ${resolvedId}`);
+                    setCanonicalConvId(resolvedId);
+                    setLocalActiveId(resolvedId);
+                    router.replace(`/chat/${resolvedId}${virtualTargetId ? `?target=${virtualTargetId}` : ''}`, { scroll: false });
+                }
+            } catch (err) {
+                console.error('[Chat] Failed to resolve temporary conversation to canonical ID:', err);
+                if (isMounted) {
+                    toast.error("Failed to connect conversation. Please try again.");
+                }
+            }
+        };
+
+        resolveCanonical();
+        return () => { isMounted = false; };
+    }, [activeId, isVirtual, virtualTargetId, user?.id, router]);
+
 
     // V12: Robust stabilization
     const pendingAnalysisContext = useAnalysisStore(state => state.pendingAnalysisContext);
@@ -372,6 +405,10 @@ export default function ChatConversation() {
     const recognitionRef = useRef<any>(null);
     const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const peerTypingClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const peerTypingTimestampRef = useRef<number>(0);
+    const myTypingHeartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const myTypingStopDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const isMyTypingActiveRef = useRef<boolean>(false);
 
     // --- Sub-components ---
     const ContextAttachment = () => {
@@ -454,21 +491,19 @@ export default function ChatConversation() {
         refetchOnWindowFocus: false // Don't refetch on window focus to avoid jumps
     });
 
-    const { data: messages = [], isLoading: isLoadingMessages } = useQuery({
-        queryKey: ['messages', localActiveId],
-        queryFn: async () => {
-            if (isVirtual && virtualTargetId) {
-                // V7/V8: Check if a direct conversation already exists to load history using RPC
-                const existingId = await findConversationByParticipants(user!.id, virtualTargetId);
+    const activeResolvedConvId = canonicalConvId || (!isVirtual ? localActiveId : null);
 
-                if (existingId) {
-                    return getMessages(existingId, user!.id);
-                }
-                return [];
-            }
-            return getMessages(localActiveId!, user!.id);
+    const { data: messages = [], isLoading: isLoadingMessages } = useQuery({
+        queryKey: ['messages', activeResolvedConvId],
+        queryFn: async () => {
+            if (!activeResolvedConvId || !user?.id) return [];
+            const msgs = await getMessages(activeResolvedConvId, user.id);
+            return (msgs || []).map((m: any) => ({
+                ...m,
+                status: m.is_read ? 'read' : (m.is_delivered ? 'delivered' : (m.sender_id === user.id ? 'sent' : undefined))
+            }));
         },
-        enabled: (isValidUUID(localActiveId) || !!isVirtual) && !!user?.id,
+        enabled: !!activeResolvedConvId && !activeResolvedConvId.startsWith('new-') && !!user?.id,
         refetchOnWindowFocus: false
     });
 
@@ -1173,50 +1208,135 @@ export default function ChatConversation() {
         }
     }, [user?.id, queryClient]);
 
-    // V11: Ground Truth Persistence Logic
+    // --- Ground Truth Database Reconciliation ---
+    const reconcileMessagesFromDatabase = useCallback(async (convId: string) => {
+        if (!convId || !user?.id || convId.startsWith('new-')) return;
+        try {
+            console.log(`[Chat] Reconciling messages from DB for ${convId}...`);
+            const dbMessages = await getMessages(convId, user.id);
+
+            // Acknowledge delivery for any unacknowledged peer messages in DB
+            if (Array.isArray(dbMessages)) {
+                for (const m of dbMessages) {
+                    if (m.sender_id !== user.id && !m.is_delivered) {
+                        markMessageDelivered(m.id, convId);
+                    }
+                }
+            }
+
+            queryClient.setQueryData(['messages', convId], (old: any) => {
+                const currentList: any[] = Array.isArray(old) ? old : [];
+                // Preserve pending and failed local sends without overwriting
+                const pendingSends = currentList.filter((m: any) => m.status === 'pending' || m.status === 'failed');
+
+                const dbMap = new Map<string, any>();
+                (dbMessages || []).forEach((m: any) => {
+                    const status = m.is_read ? 'read' : (m.is_delivered ? 'delivered' : (m.sender_id === user.id ? 'sent' : undefined));
+                    dbMap.set(m.id, { ...m, status });
+                });
+
+                const merged: any[] = [...(dbMessages || []).map((m: any) => dbMap.get(m.id))];
+
+                // Re-append local pending/failed sends that are not yet confirmed in the DB
+                pendingSends.forEach((p: any) => {
+                    if (!dbMap.has(p.id)) {
+                        merged.push(p);
+                    }
+                });
+
+                return merged.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+            });
+        } catch (e) {
+            console.warn('[Chat] Failed to reconcile messages from database:', e);
+        }
+    }, [user?.id, queryClient]);
+
+    // --- Authoritative Outgoing Typing Protocol ---
+    const stopMyTyping = useCallback(() => {
+        if (myTypingHeartbeatRef.current) {
+            clearInterval(myTypingHeartbeatRef.current);
+            myTypingHeartbeatRef.current = null;
+        }
+        if (myTypingStopDebounceRef.current) {
+            clearTimeout(myTypingStopDebounceRef.current);
+            myTypingStopDebounceRef.current = null;
+        }
+        if (isMyTypingActiveRef.current) {
+            isMyTypingActiveRef.current = false;
+            const convId = canonicalConvId || (!isVirtual ? localActiveId : null);
+            if (activeChannelRef.current && convId && !isAI && user?.id) {
+                sendTypingIndicator(activeChannelRef.current, user.id, convId, false, 'stop').catch(() => {});
+            }
+        }
+    }, [canonicalConvId, isVirtual, localActiveId, isAI, user?.id]);
+
+    const handleTyping = useCallback((val: string) => {
+        const convId = canonicalConvId || (!isVirtual ? localActiveId : null);
+        if (isAI || !activeChannelRef.current || !convId || !user?.id) return;
+
+        if (!val.trim()) {
+            stopMyTyping();
+            return;
+        }
+
+        // Send start event on first typing keypress and maintain periodic heartbeat
+        if (!isMyTypingActiveRef.current) {
+            isMyTypingActiveRef.current = true;
+            sendTypingIndicator(activeChannelRef.current, user.id, convId, true, 'start').catch(() => {});
+
+            if (myTypingHeartbeatRef.current) clearInterval(myTypingHeartbeatRef.current);
+            myTypingHeartbeatRef.current = setInterval(() => {
+                if (isMyTypingActiveRef.current && activeChannelRef.current) {
+                    sendTypingIndicator(activeChannelRef.current, user.id, convId, true, 'heartbeat').catch(() => {});
+                }
+            }, 2500);
+        }
+
+        // Inactivity debounce: if no keypress for 3s, send stop event
+        if (myTypingStopDebounceRef.current) clearTimeout(myTypingStopDebounceRef.current);
+        myTypingStopDebounceRef.current = setTimeout(() => {
+            stopMyTyping();
+        }, 3000);
+    }, [isAI, canonicalConvId, isVirtual, localActiveId, user?.id, stopMyTyping]);
+
     const activeChannelRef = useRef<any>(null);
     const lastReadAtTimestampRef = useRef<string | null>(null);
-
-    // Refs for handlers to avoid useEffect dependency churn
     const onMessageEventRef = useRef<((payload: any) => void) | null>(null);
 
+    // Postgres Changes Dispatcher
     useEffect(() => {
         onMessageEventRef.current = (payload: any) => {
-            console.log(`[Chat] V11 Real-time event [${payload.eventType}]:`, payload);
+            const convId = canonicalConvId || (!isVirtual ? localActiveId : null);
+            if (!convId) return;
+
+            console.log(`[Chat] Real-time event [${payload.eventType}]:`, payload);
 
             if (payload.eventType === 'INSERT') {
                 const newMessage = payload.new;
+                // STRICT VALIDATION: reject any message not matching canonical conversation ID
+                if (newMessage.conversation_id !== convId) return;
+
                 if (newMessage.sender_id === COACH_ID) {
                     setIsProcessingVoice(false);
                 }
 
-                // 1. Update local cache with deduplication
-                queryClient.setQueryData(['messages', localActiveId], (old: any) => {
-                    const base = Array.isArray(old) ? old : [];
-
-                    if (base.some((m: any) => m.id === newMessage.id)) {
-                        return old;
+                // If message from peer, acknowledge delivery immediately
+                if (newMessage.sender_id !== user?.id && !newMessage.is_delivered) {
+                    markMessageDelivered(newMessage.id, convId);
+                    if (activeChannelRef.current) {
+                        activeChannelRef.current.send({
+                            type: 'broadcast',
+                            event: 'delivery_ack',
+                            payload: {
+                                message_id: newMessage.id,
+                                conversation_id: convId,
+                                delivered_at: new Date().toISOString()
+                            }
+                        }).catch(() => {});
                     }
+                }
 
-                    const optIndex = base.findIndex(m =>
-                        (m.id?.toString().startsWith('opt-') || m.id?.toString().startsWith('temp-')) &&
-                        m.content === newMessage.content &&
-                        m.message_type === newMessage.message_type &&
-                        m.sender_id === newMessage.sender_id
-                    );
-
-                    if (optIndex > -1) {
-                        const updated = [...base];
-                        updated[optIndex] = newMessage;
-                        return updated;
-                    }
-
-                    return [...base, newMessage].sort((a, b) =>
-                        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-                    );
-                });
-
-                // When any incoming message arrives in the conversation from the other participant or AI coach, immediately clear typing indicator
+                // Peer sent a message: clear peer's typing indicator
                 if (newMessage.sender_id !== user?.id) {
                     setOtherUserTyping(false);
                     if (peerTypingClearTimeoutRef.current) {
@@ -1224,33 +1344,58 @@ export default function ChatConversation() {
                         peerTypingClearTimeoutRef.current = null;
                     }
                 }
+
+                // Reconcile into local cache strictly by ID (eliminating text/time heuristics)
+                queryClient.setQueryData(['messages', convId], (old: any) => {
+                    const base = Array.isArray(old) ? old : [];
+                    const status = newMessage.is_read ? 'read' : (newMessage.is_delivered ? 'delivered' : (newMessage.sender_id === user?.id ? 'sent' : undefined));
+                    const itemWithStatus = { ...newMessage, status };
+
+                    const existingIndex = base.findIndex((m: any) => m.id === newMessage.id);
+                    if (existingIndex > -1) {
+                        const copy = [...base];
+                        copy[existingIndex] = itemWithStatus;
+                        return copy;
+                    }
+
+                    return [...base, itemWithStatus].sort(
+                        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+                    );
+                });
             } else if (payload.eventType === 'UPDATE') {
                 const updatedMessage = payload.new;
+                if (updatedMessage.conversation_id !== convId) return;
 
                 if (updatedMessage.sender_id === COACH_ID && updatedMessage.content?.length > 0) {
                     setOtherUserTyping(false);
                 }
 
-                queryClient.setQueryData(['messages', localActiveId], (old: any) => {
-                    if (!old) return old;
-                    return old.map((m: any) => m.id === updatedMessage.id ? { ...m, ...updatedMessage } : m);
+                queryClient.setQueryData(['messages', convId], (old: any) => {
+                    if (!Array.isArray(old)) return old;
+                    return old.map((m: any) => m.id === updatedMessage.id ? {
+                        ...m,
+                        ...updatedMessage,
+                        status: updatedMessage.is_read ? 'read' : (updatedMessage.is_delivered ? 'delivered' : m.status)
+                    } : m);
                 });
             } else if (payload.eventType === 'DELETE') {
-                queryClient.setQueryData(['messages', activeId], (old: any) => {
-                    if (!old) return old;
+                queryClient.setQueryData(['messages', convId], (old: any) => {
+                    if (!Array.isArray(old)) return old;
                     return old.filter((m: any) => m.id !== payload.old.id);
                 });
             }
         };
-    }, [localActiveId, user?.id, queryClient, markConversationAsReadLocal]);
+    }, [canonicalConvId, localActiveId, isVirtual, user?.id, queryClient]);
 
+    // Channel Subscription Lifecycle: strictly depends on resolved canonical conversation ID and authenticated user
     useEffect(() => {
-        if (!activeId || !user?.id) return;
+        const convId = canonicalConvId || (!isVirtual ? localActiveId : null);
+        if (!convId || !user?.id || convId.startsWith('new-')) {
+            // DO NOT subscribe to unshared or temporary channel
+            return;
+        }
 
-        const isV = localActiveId.startsWith('new-');
-        const vTargetId = isV ? localActiveId.replace('new-', '') : null;
-
-        const currentSubKey = `${user.id}:${localActiveId}`;
+        const currentSubKey = `${user.id}:${convId}`;
         if (activeSubscriptionIdRef.current === currentSubKey && activeChannelRef.current) {
             return;
         }
@@ -1259,20 +1404,24 @@ export default function ChatConversation() {
             try { supabase.removeChannel(activeChannelRef.current); } catch (e) {}
             activeChannelRef.current = null;
         }
-        
-        activeSubscriptionIdRef.current = currentSubKey;
-        // Peer chats: both participants must join the SAME room, so the name depends only on the conversation id.
-        const channelName = isAI ? `chat_room_${localActiveId}` : (localActiveId === user.id ? `private_chat_self_${localActiveId}` : `conversation:${localActiveId}`);
-        
-        console.log(`[Chat] V12 Subscribing to: ${channelName} for ${localActiveId}`);
 
-        presenceTargetRef.current = isV ? vTargetId : (otherParticipantId || null);
+        activeSubscriptionIdRef.current = currentSubKey;
+        setSubscriptionStatus('connecting');
+
+        const channelName = isAI
+            ? `chat_room_${convId}`
+            : (convId === user.id ? `private_chat_self_${convId}` : `conversation:${convId}`);
+
+        console.log(`[Chat] Subscribing to canonical channel: ${channelName} for conv: ${convId}`);
+
+        const targetPeerId = otherParticipantId || (isVirtual ? virtualTargetId : null);
+        presenceTargetRef.current = targetPeerId;
 
         const channel = supabase.channel(channelName);
 
+        // Presence only tracks online status — never clears peer typing!
         const recomputePresence = () => {
             const state = channel.presenceState();
-            let isTyping = false;
             let isOnline = false;
             const targetId = presenceTargetRef.current;
 
@@ -1281,26 +1430,9 @@ export default function ChatConversation() {
                     presences.forEach((p: any) => {
                         if (p.user_id === targetId) {
                             isOnline = true;
-                            if (p.typing && (p.conversation_id === localActiveId || isV)) {
-                                isTyping = true;
-                            }
                         }
                     });
                 });
-            }
-
-            if (!isAI) {
-                setOtherUserTyping(prev => (prev !== isTyping ? isTyping : prev));
-                if (peerTypingClearTimeoutRef.current) {
-                    clearTimeout(peerTypingClearTimeoutRef.current);
-                    peerTypingClearTimeoutRef.current = null;
-                }
-                // Safety guard: if peer is typing, auto-expire typing indicator after 3.5s if no refresh arrives
-                if (isTyping) {
-                    peerTypingClearTimeoutRef.current = setTimeout(() => {
-                        setOtherUserTyping(false);
-                    }, 3500);
-                }
             }
             setOtherUserOnline(prev => (prev !== isOnline ? isOnline : prev));
         };
@@ -1308,28 +1440,42 @@ export default function ChatConversation() {
 
         channel
             .on('broadcast', { event: 'typing' }, ({ payload }: any) => {
-                if (!payload || !payload.user_id) return;
+                if (!payload || payload.conversation_id !== convId) return;
                 const targetId = presenceTargetRef.current;
                 if (payload.user_id === targetId && !isAI) {
-                    const isTyping = Boolean(payload.typing);
-                    setOtherUserTyping(isTyping);
-                    if (peerTypingClearTimeoutRef.current) {
-                        clearTimeout(peerTypingClearTimeoutRef.current);
-                        peerTypingClearTimeoutRef.current = null;
+                    // Stale event protection: ignore past events
+                    if (payload.timestamp && payload.timestamp < peerTypingTimestampRef.current) {
+                        return;
                     }
+                    peerTypingTimestampRef.current = payload.timestamp || Date.now();
+
+                    const isTyping = Boolean(payload.typing);
                     if (isTyping) {
+                        setOtherUserTyping(true);
+                        if (peerTypingClearTimeoutRef.current) {
+                            clearTimeout(peerTypingClearTimeoutRef.current);
+                        }
+                        // Authoritative 4-second expiry timer
                         peerTypingClearTimeoutRef.current = setTimeout(() => {
                             setOtherUserTyping(false);
-                        }, 3500);
+                        }, 4000);
+                    } else {
+                        if (peerTypingClearTimeoutRef.current) {
+                            clearTimeout(peerTypingClearTimeoutRef.current);
+                            peerTypingClearTimeoutRef.current = null;
+                        }
+                        setOtherUserTyping(false);
                     }
                 }
             })
             .on('broadcast', { event: 'new_message' }, ({ payload }: any) => {
-                if (!payload || !payload.id || payload.sender_id === user?.id) return;
+                if (!payload || !payload.id || payload.conversation_id !== convId) return;
+                if (payload.sender_id === user.id) return; // Ignore own broadcast
+
                 console.log(`[Chat] Instant broadcast message received:`, payload);
 
-                // 1. Instantly clear otherUserTyping indicator upon message receipt
-                if (!isAI) {
+                // 1. Immediately clear peer typing indicator on receipt
+                if (!isAI && payload.sender_id === targetPeerId) {
                     setOtherUserTyping(false);
                     if (peerTypingClearTimeoutRef.current) {
                         clearTimeout(peerTypingClearTimeoutRef.current);
@@ -1337,87 +1483,106 @@ export default function ChatConversation() {
                     }
                 }
 
-                // 2. Add message to local cache with deduplication
-                queryClient.setQueryData(['messages', localActiveId], (old: any) => {
+                // 2. Add message to local cache with exact ID reconciliation
+                queryClient.setQueryData(['messages', convId], (old: any) => {
                     const base = Array.isArray(old) ? old : [];
-                    const exists = base.some((m: any) =>
-                        m.id === payload.id ||
-                        (m.content === payload.content &&
-                         m.sender_id === payload.sender_id &&
-                         Math.abs(new Date(m.created_at).getTime() - new Date(payload.created_at).getTime()) < 5000)
-                    );
-                    if (exists) return old;
-
-                    return [...base, payload].sort((a, b) =>
-                        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+                    if (base.some((m: any) => m.id === payload.id)) {
+                        return base.map((m: any) => m.id === payload.id ? { ...m, ...payload } : m);
+                    }
+                    const itemWithStatus = {
+                        ...payload,
+                        status: payload.is_read ? 'read' : (payload.is_delivered ? 'delivered' : undefined)
+                    };
+                    return [...base, itemWithStatus].sort(
+                        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
                     );
                 });
 
-                // 3. Update conversations list preview
-                queryClient.setQueryData(['conversations', user?.id], (old: any) => {
+                // 3. Acknowledge delivery in DB and notify sender via delivery_ack
+                markMessageDelivered(payload.id, convId);
+                channel.send({
+                    type: 'broadcast',
+                    event: 'delivery_ack',
+                    payload: {
+                        message_id: payload.id,
+                        conversation_id: convId,
+                        delivered_at: new Date().toISOString()
+                    }
+                }).catch(() => {});
+
+                // 4. Update conversations list preview
+                queryClient.setQueryData(['conversations', user.id], (old: any) => {
                     if (!Array.isArray(old)) return old;
-                    return old.map((conv: any) => {
-                        if (conv.id === localActiveId) {
+                    return old.map((c: any) => {
+                        if (c.id === convId) {
                             return {
-                                ...conv,
+                                ...c,
                                 last_message_content: payload.content,
                                 last_message_at: payload.created_at,
                                 last_message_sender_id: payload.sender_id
                             };
                         }
-                        return conv;
-                    }).sort((a: any, b: any) => {
-                        const timeA = new Date(a.last_message_at || 0).getTime();
-                        const timeB = new Date(b.last_message_at || 0).getTime();
-                        return timeB - timeA;
-                    });
+                        return c;
+                    }).sort((a: any, b: any) => new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime());
                 });
 
                 if (isAtBottom.current) {
                     scrollToBottom('smooth');
                 }
             })
+            .on('broadcast', { event: 'delivery_ack' }, ({ payload }: any) => {
+                if (!payload || payload.conversation_id !== convId) return;
+                queryClient.setQueryData(['messages', convId], (old: any) => {
+                    if (!Array.isArray(old)) return old;
+                    return old.map((m: any) => m.id === payload.message_id ? {
+                        ...m,
+                        is_delivered: true,
+                        delivered_at: payload.delivered_at,
+                        status: m.is_read ? 'read' : 'delivered'
+                    } : m);
+                });
+            })
             .on('presence', { event: 'sync' }, recomputePresence)
             .on('presence', { event: 'join' }, recomputePresence)
             .on('presence', { event: 'leave' }, () => {
                 recomputePresence();
-                // Peer may have just gone offline: refresh the durable last_seen shortly after.
                 setTimeout(() => {
                     queryClient.invalidateQueries({ queryKey: ['peer-last-seen'] });
                 }, 1500);
             })
-
             .on('postgres_changes', {
                 event: '*',
                 schema: 'public',
                 table: 'messages'
             }, (payload) => {
                 const incomingConvId = payload.new ? (payload.new as any).conversation_id : (payload.old as any)?.conversation_id;
-                const isMatch = incomingConvId?.toString().toLowerCase() === localActiveId?.toString().toLowerCase();
-
-                if (isMatch || (isV && incomingConvId)) {
+                // STRICT VALIDATION: no wildcard acceptance
+                if (incomingConvId === convId) {
                     onMessageEventRef.current?.(payload);
                 }
             })
             .subscribe(async (status) => {
+                console.log(`[Chat] Channel ${channelName} subscribe status:`, status);
                 if (status === 'SUBSCRIBED') {
-                    console.log(`[Chat] V12 channel ${channelName} SUBSCRIBED`);
+                    setSubscriptionStatus('subscribed');
                     await channel.track({
                         user_id: user.id,
-                        conversation_id: localActiveId,
-                        online_at: new Date().toISOString(),
-                        typing: false
+                        conversation_id: convId,
+                        online_at: new Date().toISOString()
                     });
+                    // Reconcile messages from DB once subscription is ready
+                    reconcileMessagesFromDatabase(convId);
+                } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                    setSubscriptionStatus('error');
+                } else if (status === 'CLOSED') {
+                    setSubscriptionStatus('closed');
                 }
             });
 
         activeChannelRef.current = channel;
 
         return () => {
-            if (typingTimeoutRef.current) {
-                clearTimeout(typingTimeoutRef.current);
-                typingTimeoutRef.current = null;
-            }
+            stopMyTyping();
             if (peerTypingClearTimeoutRef.current) {
                 clearTimeout(peerTypingClearTimeoutRef.current);
                 peerTypingClearTimeoutRef.current = null;
@@ -1427,8 +1592,41 @@ export default function ChatConversation() {
                 activeChannelRef.current = null;
             }
             activeSubscriptionIdRef.current = null;
+            setSubscriptionStatus('closed');
         };
-    }, [activeId, user?.id]);
+    }, [canonicalConvId, localActiveId, isVirtual, user?.id, isAI, otherParticipantId, virtualTargetId, reconcileMessagesFromDatabase, stopMyTyping]);
+
+    // Background-to-foreground & Reconnection Reconciliation
+    useEffect(() => {
+        const convId = canonicalConvId || (!isVirtual ? localActiveId : null);
+        if (!convId || !user?.id || convId.startsWith('new-')) return;
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible') {
+                console.log('[Chat] App returned from background, reconciling messages...');
+                reconcileMessagesFromDatabase(convId);
+            }
+        };
+
+        const handleOnline = () => {
+            console.log('[Chat] Network online, reconciling messages...');
+            reconcileMessagesFromDatabase(convId);
+        };
+
+        const handleFocus = () => {
+            reconcileMessagesFromDatabase(convId);
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('focus', handleFocus);
+
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+            window.removeEventListener('online', handleOnline);
+            window.removeEventListener('focus', handleFocus);
+        };
+    }, [canonicalConvId, isVirtual, localActiveId, user?.id, reconcileMessagesFromDatabase]);
 
     // Keep the presence target fresh: when the peer id resolves after the channel is
     // already subscribed, re-derive typing/online from the current presence state.
@@ -1466,15 +1664,10 @@ export default function ChatConversation() {
     // --- Message Actions ---
 
     const sendMutation = useMutation({
-        mutationFn: async (args: { content: string, type?: string, metadata?: any }) => {
-            if (!user?.id || !activeId) throw new Error("Missing context");
-
-            if (isVirtual && virtualTargetId) {
-                console.log("[Chat] V11 Provisioning new conversation for virtual ID:", activeId);
-                const newId = await provisionAndSendMessage(user.id, virtualTargetId, args.content, args.type || 'text', args.metadata);
-                // The navigate will happen in onSettled or handleSend to avoid race conditions with Query cache
-                return { id: 'new', realId: newId };
-            }
+        mutationFn: async (args: { content: string, type?: string, metadata?: any, clientMessageId?: string }) => {
+            if (!user?.id) throw new Error("Missing user context");
+            const targetConvId = canonicalConvId || (!isVirtual ? localActiveId : null);
+            if (!targetConvId) throw new Error("Conversation not resolved");
 
             // Inject context and location if sending to AI
             const { latestAnalysis, clearLatestAnalysis } = useCoachInjectionStore.getState();
@@ -1495,50 +1688,62 @@ export default function ChatConversation() {
                 clearLatestAnalysis();
             }
 
-            const result = await sendMessage(user.id, localActiveId, args.content, (args.type as any) || 'text', messageMetadata, isAI, isSelf);
+            const result = await sendMessage(
+                user.id,
+                targetConvId,
+                args.content,
+                (args.type as any) || 'text',
+                messageMetadata,
+                isAI,
+                isSelf,
+                args.clientMessageId
+            );
             return result;
         },
-        onMutate: async (newMsg) => {
-            // Cancel any outgoing refetches (so they don't overwrite our optimistic update)
-            await queryClient.cancelQueries({ queryKey: ['messages', localActiveId] });
+        onMutate: async (newMsg: any) => {
+            const targetConvId = canonicalConvId || (!isVirtual ? localActiveId : null);
+            if (!targetConvId) return;
 
-            // Snapshot the previous value
-            const previousMessages = queryClient.getQueryData(['messages', localActiveId]);
-            const previousConvs = queryClient.getQueryData(['conversations', user?.id]);
+            // Generate or reuse stable client message UUID
+            const clientMsgId = newMsg.clientMessageId || crypto.randomUUID();
+            newMsg.clientMessageId = clientMsgId;
 
-            // Optimistically update to the new value
-            const optimisticId = `opt-${Date.now()}`;
+            // Cancel any outgoing refetches so they don't overwrite optimistic write
+            await queryClient.cancelQueries({ queryKey: ['messages', targetConvId] });
+
             const optimisticMsg = {
-                id: optimisticId,
+                id: clientMsgId,
                 content: newMsg.content,
                 sender_id: user?.id,
-                conversation_id: localActiveId,
+                conversation_id: targetConvId,
                 created_at: new Date().toISOString(),
                 message_type: newMsg.type || 'text',
                 metadata: newMsg.metadata,
+                status: 'pending', // Visible pending state
+                is_delivered: false,
+                delivered_at: null,
+                is_read: false,
+                read_at: null,
                 is_optimistic: true
             };
 
-            if (isAI) {
-                queryClient.setQueryData(['messages', localActiveId], (old: any) => [...(old || []), optimisticMsg]);
-            } else {
-                queryClient.setQueryData(['messages', localActiveId], (old: any) => [...(old || []), optimisticMsg]);
-
-                // Instantly broadcast message to peer via channel (<50ms delivery)
-                if (activeChannelRef.current) {
-                    activeChannelRef.current.send({
-                        type: 'broadcast',
-                        event: 'new_message',
-                        payload: optimisticMsg
-                    }).catch((err: any) => console.warn('[Realtime] Broadcast new_message failed:', err));
+            // Keep optimistic messages purely local until persistence succeeds!
+            queryClient.setQueryData(['messages', targetConvId], (old: any) => {
+                const base = Array.isArray(old) ? old : [];
+                const existingIndex = base.findIndex((m: any) => m.id === clientMsgId);
+                if (existingIndex > -1) {
+                    const copy = [...base];
+                    copy[existingIndex] = optimisticMsg;
+                    return copy;
                 }
-            }
+                return [...base, optimisticMsg];
+            });
 
-            // --- Optimistic Sidebar Sync ---
+            // Optimistic Sidebar Sync
             queryClient.setQueryData(['conversations', user?.id], (old: any) => {
                 if (!Array.isArray(old)) return old;
                 return old.map((conv: any) => {
-                    if (conv.id === localActiveId) {
+                    if (conv.id === targetConvId) {
                         return {
                             ...conv,
                             last_message_content: newMsg.content,
@@ -1559,19 +1764,51 @@ export default function ChatConversation() {
             setShowEmoji(false);
             scrollToBottom();
 
-            return { previousMessages, previousConvs };
+            return { clientMsgId, targetConvId };
         },
-        onError: (err, newMsg, context: any) => {
-            setOtherUserTyping(false);
-            queryClient.setQueryData(['messages', localActiveId], context?.previousMessages);
-            queryClient.setQueryData(['conversations', user?.id], context?.previousConvs);
-            toast.error("Message failed to send");
-        },
-        onSuccess: (data: any, variables: any) => {
-            setOtherUserTyping(false);
-            const assistantReply = data?.assistantReply;
-            const targetConvId = data?.realId ? (typeof data.realId === 'object' ? (data.realId.id || data.realId.conversation_id || data.realId.r_id) : data.realId) : localActiveId;
+        onError: (err, newMsg: any, context: any) => {
+            const targetConvId = context?.targetConvId || canonicalConvId || localActiveId;
+            const failedId = context?.clientMsgId || newMsg?.clientMessageId;
 
+            // Mark optimistic message as failed with retry affordance
+            if (targetConvId && failedId) {
+                queryClient.setQueryData(['messages', targetConvId], (old: any) => {
+                    if (!Array.isArray(old)) return old;
+                    return old.map((m: any) => m.id === failedId ? { ...m, status: 'failed' } : m);
+                });
+            }
+            toast.error("Message failed to send. Tap retry to send again.");
+        },
+        onSuccess: (savedRecord: any, variables: any, context: any) => {
+            const targetConvId = context?.targetConvId || canonicalConvId || localActiveId;
+
+            // 1. Update local cache with saved record (status: 'sent')
+            queryClient.setQueryData(['messages', targetConvId], (old: any) => {
+                const base = Array.isArray(old) ? old : [];
+                const updatedItem = {
+                    ...savedRecord,
+                    status: savedRecord.is_read ? 'read' : (savedRecord.is_delivered ? 'delivered' : 'sent')
+                };
+                const idx = base.findIndex((m: any) => m.id === savedRecord.id);
+                if (idx > -1) {
+                    const copy = [...base];
+                    copy[idx] = updatedItem;
+                    return copy;
+                }
+                return [...base, updatedItem];
+            });
+
+            // 2. Broadcast to peers ONLY after database persistence succeeds
+            if (!isAI && activeChannelRef.current) {
+                activeChannelRef.current.send({
+                    type: 'broadcast',
+                    event: 'new_message',
+                    payload: savedRecord
+                }).catch((err: any) => console.warn('[Realtime] Broadcast new_message failed:', err));
+            }
+
+            // 3. AI assistant reply handling
+            const assistantReply = savedRecord?.assistantReply;
             if (assistantReply && assistantReply.content) {
                 const assistantMsg = {
                     id: assistantReply.messageId || `ai-${Date.now()}`,
@@ -1595,56 +1832,44 @@ export default function ChatConversation() {
                     return [...base, assistantMsg];
                 });
             }
-
-            if (data?.realId) {
-                const id = typeof data.realId === 'object' ? (data.realId.id || data.realId.conversation_id || data.realId.r_id) : data.realId;
-                
-                // V16: Migrate optimistic messages and conversation metadata to the new real ID cache
-                const virtualMsgs = queryClient.getQueryData(['messages', localActiveId]);
-                if (virtualMsgs) {
-                    queryClient.setQueryData(['messages', String(id)], virtualMsgs);
-                }
-
-                const virtualConv = queryClient.getQueryData(['conversation', localActiveId]);
-                if (virtualConv) {
-                    queryClient.setQueryData(['conversation', String(id)], virtualConv);
-                }
-
-                // V18: SEAMLESS TRANSITION - Update local state and navigate
-                setLocalActiveId(String(id));
-                const newUrl = `/chat/${String(id)}${virtualTargetId ? `?target=${virtualTargetId}` : ''}`;
-                router.push(newUrl, { scroll: false });
-            }
         },
-        onSettled: () => {
-            setOtherUserTyping(false);
-            queryClient.invalidateQueries({ queryKey: ['messages', localActiveId] });
+        onSettled: (data: any, error: any, variables: any, context: any) => {
             queryClient.invalidateQueries({ queryKey: ['conversations', user?.id] });
             queryClient.invalidateQueries({ queryKey: ['contacts', user?.id] });
         }
     });
 
+    const handleRetrySend = useCallback((failedMsg: any) => {
+        if (!failedMsg || !user?.id) return;
+        const targetConvId = canonicalConvId || (!isVirtual ? localActiveId : null);
+        if (!targetConvId) return;
+
+        // Mark back to pending
+        queryClient.setQueryData(['messages', targetConvId], (old: any) => {
+            if (!Array.isArray(old)) return old;
+            return old.map((m: any) => m.id === failedMsg.id ? { ...m, status: 'pending' } : m);
+        });
+
+        sendMutation.mutate({
+            content: failedMsg.content,
+            type: failedMsg.message_type || 'text',
+            metadata: failedMsg.metadata,
+            clientMessageId: failedMsg.id // Idempotent retry with same client UUID
+        });
+    }, [canonicalConvId, isVirtual, localActiveId, user?.id, queryClient, sendMutation]);
+
     const handleSend = async () => {
-        if (!message.trim() || !user || !activeId || isSubmitting) return;
+        const targetConvId = canonicalConvId || (!isVirtual ? localActiveId : null);
+        if (!message.trim() || !user || !targetConvId || isSubmitting) return;
         const content = message.trim();
 
-        console.log(`[Chat] handleSend to ${activeId}`);
+        // Immediately clear sender's typing state
+        stopMyTyping();
 
-        // Immediately clear sender's typing state both locally and across the channel
-        if (typingTimeoutRef.current) {
-            clearTimeout(typingTimeoutRef.current);
-            typingTimeoutRef.current = null;
-        }
-        lastTypingSentRef.current = 0;
-        if (!isAI && activeChannelRef.current) {
-            sendTypingIndicator(activeChannelRef.current, user.id, localActiveId, false).catch(() => {});
-        }
-
-        // Instant simulated response indicator for AI
         if (isAI) {
             setOtherUserTyping(true);
         }
-        // Attach any pending analysis context when sending to the coach
+
         const contextMetadata = isAI && pendingAnalysisContext
             ? { 
                 scannedProductContext: pendingAnalysisContext,
@@ -1744,49 +1969,6 @@ export default function ChatConversation() {
         );
     };
 
-    const lastTypingSentRef = useRef<number>(0);
-    const handleTyping = async (currentText?: string) => {
-        if (!user || !localActiveId || !activeChannelRef.current) return;
-
-        // If the input is empty/whitespace, immediately notify peer that typing stopped
-        if (typeof currentText === 'string' && !currentText.trim()) {
-            if (typingTimeoutRef.current) {
-                clearTimeout(typingTimeoutRef.current);
-                typingTimeoutRef.current = null;
-            }
-            lastTypingSentRef.current = 0;
-            if (!isAI) {
-                await sendTypingIndicator(activeChannelRef.current, user.id, localActiveId, false);
-            }
-            return;
-        }
-
-        if (isAI) return;
-
-        // Throttle presence updates to once every 1.5 seconds to avoid channel noise
-        const now = Date.now();
-        if (now - lastTypingSentRef.current < 1500) {
-            // Keep resetting the idle timeout so stopping triggers promptly 2.5s after the last keypress
-            if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-            typingTimeoutRef.current = setTimeout(async () => {
-                if (activeChannelRef.current) {
-                    await sendTypingIndicator(activeChannelRef.current, user.id, localActiveId, false);
-                }
-            }, 2500);
-            return;
-        }
-        lastTypingSentRef.current = now;
-
-        // INSTANT BROADCAST + EPHEMERAL PRESENCE TYPING
-        await sendTypingIndicator(activeChannelRef.current, user.id, localActiveId, true);
-
-        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-        typingTimeoutRef.current = setTimeout(async () => {
-            if (activeChannelRef.current) {
-                await sendTypingIndicator(activeChannelRef.current, user.id, localActiveId, false);
-            }
-        }, 2500);
-    };
 
     // --- Rendering Helpers ---
 
@@ -2329,7 +2511,28 @@ export default function ChatConversation() {
                                                             {formatMessageTime(msg.created_at)}
                                                         </span>
                                                         {isMe && (
-                                                            <CheckCheck className={`-ml-0.5 ${msg.read_at ? 'text-[#34B7F1]' : 'text-[#8696A0]'}`} size={15} />
+                                                            (msg as any).status === 'pending' ? (
+                                                                <Clock className="w-3 h-3 text-[#8696A0] animate-pulse ml-0.5" />
+                                                            ) : (msg as any).status === 'failed' ? (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        handleRetrySend(msg);
+                                                                    }}
+                                                                    className="inline-flex items-center gap-0.5 text-[10px] text-red-500 hover:text-red-600 font-medium ml-1"
+                                                                    title="Send failed. Tap to retry"
+                                                                >
+                                                                    <RotateCcw className="w-3 h-3" />
+                                                                    <span>Retry</span>
+                                                                </button>
+                                                            ) : msg.read_at ? (
+                                                                <CheckCheck className="-ml-0.5 text-[#34B7F1]" size={15} />
+                                                            ) : msg.is_delivered ? (
+                                                                <CheckCheck className="-ml-0.5 text-[#8696A0]" size={15} />
+                                                            ) : (
+                                                                <Check className="-ml-0.5 text-[#8696A0]" size={15} />
+                                                            )
                                                         )}
                                                     </div>
                                                 </div>
@@ -2412,15 +2615,7 @@ export default function ChatConversation() {
                                         e.target.style.height = Math.min(e.target.scrollHeight, 100) + 'px';
                                     }}
                                     onBlur={() => {
-                                        // When input loses focus, cancel typing indicator if not already cleared
-                                        if (typingTimeoutRef.current) {
-                                            clearTimeout(typingTimeoutRef.current);
-                                            typingTimeoutRef.current = null;
-                                        }
-                                        lastTypingSentRef.current = 0;
-                                        if (activeChannelRef.current && !isAI) {
-                                            sendTypingIndicator(activeChannelRef.current, user.id, localActiveId, false).catch(() => {});
-                                        }
+                                        stopMyTyping();
                                     }}
                                     onKeyDown={(e) => {
                                         if (e.key === 'Enter' && !e.shiftKey) {
