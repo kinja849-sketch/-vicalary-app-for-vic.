@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Link from "next/link"
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { MessageCircle, ArrowLeft, MoreVertical, Search, Bookmark, CheckCheck, Image, Mic, Video, FileText, MessageSquarePlus, Trash2, X, ScanLine, UserSearch, UserPlus, UserRound } from "lucide-react";
+import { MessageCircle, ArrowLeft, MoreVertical, Search, Bookmark, CheckCheck, Image, Mic, Video, VideoOff, Phone, PhoneOff, FileText, MessageSquarePlus, Trash2, X, ScanLine, UserSearch, UserPlus, UserRound } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/AuthContext";
 import { getConversationsV2, isChatVerified, findUserByIdentifier, softDeleteConversation, getMyQRCodeData, getContacts, addContactPure } from "@/lib/api/chat";
@@ -594,6 +594,19 @@ export default function Chat() {
                               <span className="flex items-center gap-1"><Video size={16} /> Video</span>
                             ) : conv.last_message.message_type === 'file' ? (
                               <span className="flex items-center gap-1"><FileText size={16} /> Document</span>
+                            ) : conv.last_message.message_type === 'call' ? (
+                              <span className="flex items-center gap-1.5">
+                                {conv.last_message.metadata?.call_type === 'video' ? (
+                                  ['missed', 'declined', 'cancelled'].includes(conv.last_message.metadata?.call_status)
+                                    ? <VideoOff size={15} className="text-rose-500 shrink-0 inline" />
+                                    : <Video size={15} className="text-emerald-500 shrink-0 inline" />
+                                ) : (
+                                  ['missed', 'declined', 'cancelled'].includes(conv.last_message.metadata?.call_status)
+                                    ? <PhoneOff size={15} className="text-rose-500 shrink-0 inline" />
+                                    : <Phone size={15} className="text-emerald-500 shrink-0 inline" />
+                                )}
+                                <span className="truncate">{conv.last_message.content}</span>
+                              </span>
                             ) : conv.last_message.content}
                           </>
                         ) : "No messages yet"}

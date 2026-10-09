@@ -27,6 +27,7 @@ export function useDailyCall() {
     const [activeVideoDeviceId, setActiveVideoDeviceId] = useState<string | null>(null);
 
     const callTypeRef = useRef<'voice' | 'video'>('voice');
+    const callObjectRef = useRef<DailyCall | null>(null);
 
     // Check device capabilities
     const checkDevices = useCallback(async (co?: DailyCall) => {
@@ -45,19 +46,28 @@ export function useDailyCall() {
         }
     }, []);
 
-    const refreshTracks = useCallback((co: DailyCall) => {
-        const parts = co.participants();
-        const localP = parts.local;
-        const remoteP = Object.values(parts).find((p: any) => !p.local) as any;
+    const refreshTracks = useCallback((co: DailyCall | null) => {
+        if (!co) return;
+        let parts: Record<string, any> = {};
+        try {
+            parts = co.participants();
+        } catch (_) {
+            return;
+        }
 
-        const getTrack = (trackState: any) => {
-            if (!trackState || trackState.state === 'off' || trackState.state === 'blocked') return null;
-            return trackState.persistentTrack || trackState.track || null;
+        const localP = parts.local;
+        const remoteParticipants = Object.values(parts).filter((p: any) => !p.local) as any[];
+        const remoteP = remoteParticipants[0];
+
+        const getTrack = (trackState: any, directTrack?: any) => {
+            if (trackState && (trackState.state === 'off' || trackState.state === 'blocked')) return null;
+            const t = trackState?.persistentTrack || trackState?.track || (directTrack instanceof MediaStreamTrack ? directTrack : null);
+            return (t && t instanceof MediaStreamTrack && t.readyState !== 'ended') ? t : null;
         };
 
-        const lvt = getTrack(localP?.tracks?.video);
-        const rvt = getTrack(remoteP?.tracks?.video);
-        const rat = getTrack(remoteP?.tracks?.audio);
+        const lvt = getTrack(localP?.tracks?.video, localP?.videoTrack);
+        const rvt = getTrack(remoteP?.tracks?.video, remoteP?.videoTrack);
+        const rat = getTrack(remoteP?.tracks?.audio, remoteP?.audioTrack);
 
         setLocalVideoTrack(lvt);
         setRemoteVideoTrack(rvt);
@@ -73,13 +83,20 @@ export function useDailyCall() {
 
         if (remoteP) {
             setPeerJoined(true);
+            setConnectionState('connected');
+
+            // Explicitly ensure remote tracks are actively subscribed
+            try {
+                co.updateParticipant(remoteP.session_id, {
+                    setSubscribedTracks: { audio: true, video: true } as any
+                });
+            } catch (_) {}
+
             const remoteMicState = remoteP?.tracks?.audio?.state;
             setIsRemoteAudioMuted(remoteMicState === 'off' || remoteMicState === 'blocked');
 
             const remoteCamState = remoteP?.tracks?.video?.state;
             setIsRemoteVideoOff(!rvt || remoteCamState === 'off' || remoteCamState === 'blocked');
-
-            setConnectionState('connected');
         } else {
             setPeerJoined(false);
             setIsRemoteAudioMuted(false);
@@ -90,21 +107,67 @@ export function useDailyCall() {
         }
     }, []);
 
-    useEffect(() => {
-        if (!callObject) return;
-
+    // Set up all Daily event listeners synchronously upon creation to never miss events
+    const setupCallListeners = useCallback((co: DailyCall) => {
         const handleJoined = () => {
             console.log('[Daily] Joined room successfully');
             setStatus('joined');
-            const parts = callObject.participants();
+            const parts = co.participants();
             const hasPeer = Object.values(parts).some((p: any) => !p.local);
             setConnectionState(hasPeer ? 'connected' : 'waiting_peer');
-            refreshTracks(callObject);
-            checkDevices(callObject);
+            refreshTracks(co);
+            checkDevices(co);
         };
 
-        const handleParticipant = () => {
-            refreshTracks(callObject);
+        const handleParticipantJoined = (ev?: any) => {
+            console.log('[Daily] participant-joined event:', ev?.participant?.session_id);
+            if (ev?.participant && !ev.participant.local) {
+                setPeerJoined(true);
+                setConnectionState('connected');
+                try {
+                    co.updateParticipant(ev.participant.session_id, {
+                        setSubscribedTracks: { audio: true, video: true } as any
+                    });
+                } catch (subErr) {
+                    console.warn('[Daily] Failed to setSubscribedTracks on participant-joined:', subErr);
+                }
+            }
+            refreshTracks(co);
+        };
+
+        const handleParticipantUpdated = (ev?: any) => {
+            if (ev?.participant && !ev.participant.local) {
+                setPeerJoined(true);
+            }
+            refreshTracks(co);
+        };
+
+        const handleTrackStarted = (ev?: any) => {
+            console.log('[Daily] track-started event:', ev?.type, ev?.participant?.session_id);
+            if (ev?.participant && !ev.participant.local) {
+                setPeerJoined(true);
+                setConnectionState('connected');
+                if (ev.type === 'video' && ev.track) {
+                    setRemoteVideoTrack(ev.track);
+                    setIsRemoteVideoOff(false);
+                } else if (ev.type === 'audio' && ev.track) {
+                    setRemoteAudioTrack(ev.track);
+                    setIsRemoteAudioMuted(false);
+                }
+            } else if (ev?.participant?.local && ev.type === 'video' && ev.track) {
+                setLocalVideoTrack(ev.track);
+                setIsLocalVideoOff(false);
+            }
+            refreshTracks(co);
+        };
+
+        const handleTrackStopped = (_ev?: any) => {
+            refreshTracks(co);
+        };
+
+        const handleParticipantLeft = (ev?: any) => {
+            console.log('[Daily] participant-left event:', ev?.participant?.session_id);
+            refreshTracks(co);
         };
 
         const handleError = (event: any) => {
@@ -125,43 +188,21 @@ export function useDailyCall() {
         };
 
         const handleDeviceChange = () => {
-            checkDevices(callObject);
+            checkDevices(co);
         };
 
-        callObject.on('joined-meeting', handleJoined);
-        callObject.on('participant-joined', handleParticipant);
-        callObject.on('participant-updated', handleParticipant);
-        callObject.on('participant-left', handleParticipant);
-        callObject.on('left-meeting', handleLeft);
-        callObject.on('error', handleError);
-        callObject.on('camera-error', handleError);
-        callObject.on('track-started', handleParticipant);
-        callObject.on('track-stopped', handleParticipant);
-        callObject.on('available-devices-updated', handleDeviceChange);
-        callObject.on('selected-devices-updated', handleDeviceChange);
-
-        if (callObject.meetingState() === 'joined-meeting') {
-            handleJoined();
-        }
-
-        return () => {
-            try {
-                callObject.off('joined-meeting', handleJoined);
-                callObject.off('participant-joined', handleParticipant);
-                callObject.off('participant-updated', handleParticipant);
-                callObject.off('participant-left', handleParticipant);
-                callObject.off('left-meeting', handleLeft);
-                callObject.off('error', handleError);
-                callObject.off('camera-error', handleError);
-                callObject.off('track-started', handleParticipant);
-                callObject.off('track-stopped', handleParticipant);
-                callObject.off('available-devices-updated', handleDeviceChange);
-                callObject.off('selected-devices-updated', handleDeviceChange);
-            } catch (err) {
-                console.warn('[Daily] Listener cleanup warning:', err);
-            }
-        };
-    }, [callObject, refreshTracks, checkDevices]);
+        co.on('joined-meeting', handleJoined);
+        co.on('participant-joined', handleParticipantJoined);
+        co.on('participant-updated', handleParticipantUpdated);
+        co.on('participant-left', handleParticipantLeft);
+        co.on('left-meeting', handleLeft);
+        co.on('error', handleError);
+        co.on('camera-error', handleError);
+        co.on('track-started', handleTrackStarted);
+        co.on('track-stopped', handleTrackStopped);
+        co.on('available-devices-updated', handleDeviceChange);
+        co.on('selected-devices-updated', handleDeviceChange);
+    }, [refreshTracks, checkDevices]);
 
     // Unmount cleanup to prevent leaking Daily call instances across page transitions
     useEffect(() => {
@@ -190,9 +231,11 @@ export function useDailyCall() {
         let co: DailyCall | null = null;
         try {
             // Strictly enforce: audio calls MUST NEVER request camera permission or create video source!
+            // Explicitly enable subscribeToTracksAutomatically: true to prevent staging tracks
             co = DailyIframe.createCallObject({
                 audioSource: true,
                 videoSource: isVideo ? true : false,
+                subscribeToTracksAutomatically: true,
                 dailyConfig: {
                     experimentalChromeVideoMuteLightOff: true,
                     useDevicePreference: true,
@@ -205,7 +248,10 @@ export function useDailyCall() {
             return;
         }
 
+        callObjectRef.current = co;
         setCallObject(co);
+        // Synchronously bind listeners BEFORE joining room
+        setupCallListeners(co);
         setStatus('joining');
         setConnectionState('joining');
 
@@ -217,17 +263,20 @@ export function useDailyCall() {
                 userName: userName || 'Vicalary User'
             });
             await checkDevices(co);
+            refreshTracks(co);
         } catch (err) {
             console.error('[Daily] Failed to join call room:', err);
             setStatus('error');
             setConnectionState('error');
             try { await co.destroy(); } catch (_) {}
+            callObjectRef.current = null;
             setCallObject(null);
         }
-    }, [checkDevices]);
+    }, [setupCallListeners, checkDevices, refreshTracks]);
 
     const leaveCall = useCallback(async () => {
-        if (!callObject) {
+        const co = callObjectRef.current || callObject;
+        if (!co) {
             try {
                 const ex = DailyIframe.getCallInstance();
                 if (ex) {
@@ -244,11 +293,12 @@ export function useDailyCall() {
         setStatus('leaving');
         setConnectionState('leaving');
         try {
-            await callObject.leave();
-            await callObject.destroy();
+            await co.leave();
+            await co.destroy();
         } catch (err) {
             console.warn('[Daily] Destroy warning:', err);
         } finally {
+            callObjectRef.current = null;
             setCallObject(null);
             setStatus('idle');
             setConnectionState('idle');
@@ -336,6 +386,20 @@ export function useDailyCall() {
         }
     }, [callObject, isSpeakerSupported, speakerActive]);
 
+    /**
+     * Force refresh of session tracks and enforce active subscriptions.
+     * Called when Supabase reports peer connection or on handshake polling.
+     */
+    const refreshSessionTracks = useCallback(() => {
+        const co = callObjectRef.current || callObject;
+        if (co) {
+            try {
+                co.setSubscribeToTracksAutomatically(true);
+            } catch (_) {}
+            refreshTracks(co);
+        }
+    }, [callObject, refreshTracks]);
+
     return {
         joinCall,
         leaveCall,
@@ -343,6 +407,7 @@ export function useDailyCall() {
         toggleVideo,
         flipCamera,
         toggleSpeaker,
+        refreshSessionTracks,
         status,
         connectionState,
         peerJoined,
@@ -359,3 +424,4 @@ export function useDailyCall() {
         speakerActive
     };
 }
+

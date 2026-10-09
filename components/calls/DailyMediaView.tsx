@@ -49,9 +49,13 @@ export function DailyMediaView({
         if (!el) return;
 
         if (track && track.readyState !== 'ended') {
-            // Create a fresh MediaStream containing this track
-            const stream = new MediaStream([track]);
-            el.srcObject = stream;
+            const currentStream = el.srcObject as MediaStream | null;
+            const currentTrack = currentStream?.getTracks()[0];
+
+            if (currentTrack !== track) {
+                const stream = new MediaStream([track]);
+                el.srcObject = stream;
+            }
             setPlaybackBlocked(false);
 
             // Attempt playback
@@ -59,7 +63,7 @@ export function DailyMediaView({
 
             // Track mute / unmute events
             const handleTrackEnded = () => {
-                if (el.srcObject === stream) {
+                if (el.srcObject) {
                     el.srcObject = null;
                 }
             };
@@ -67,9 +71,6 @@ export function DailyMediaView({
 
             return () => {
                 track.removeEventListener('ended', handleTrackEnded);
-                if (el.srcObject === stream) {
-                    el.srcObject = null;
-                }
             };
         } else {
             el.srcObject = null;

@@ -888,7 +888,11 @@ export const initiateCallV2 = async (conversationId: string, callerId: string, r
     return data;
 }
 
-export const updateCallStatus = async (callId: string, status: 'connected' | 'ended' | 'missed' | 'declined' | 'cancelled') => {
+export const updateCallStatus = async (
+    callId: string, 
+    status: 'connected' | 'ended' | 'missed' | 'declined' | 'cancelled',
+    duration: number = 0
+) => {
     try {
         const { data: { session } } = await supabase.auth.getSession();
         const token = session?.access_token;
@@ -899,7 +903,7 @@ export const updateCallStatus = async (callId: string, status: 'connected' | 'en
                 'Content-Type': 'application/json',
                 ...(token ? { Authorization: `Bearer ${token}` } : {})
             },
-            body: JSON.stringify({ call_id: callId, status })
+            body: JSON.stringify({ call_id: callId, status, duration })
         });
         const data = await res.json();
         if (res.ok && data.data) {
@@ -920,6 +924,43 @@ export const updateCallStatus = async (callId: string, status: 'connected' | 'en
         .single();
 
     if (error) throw error;
+
+    // Fallback message & conversation update if API route failed
+    if (data && ['ended', 'declined', 'missed', 'cancelled'].includes(status) && data.conversation_id && data.caller_id) {
+        try {
+            const isMissed = ['declined', 'missed', 'cancelled'].includes(status);
+            const m = Math.floor(duration / 60);
+            const s = duration % 60;
+            const durStr = duration > 0 ? (m > 0 ? `${m}m ${s}s` : `${s}s`) : '';
+            const label = data.type === 'video' ? 'Video call' : 'Voice call';
+            const content = isMissed 
+                ? (data.type === 'video' ? 'Missed video call' : 'Missed voice call')
+                : (durStr ? `${label} (${durStr})` : label);
+
+            const now = new Date().toISOString();
+            await supabase.from('messages').insert({
+                conversation_id: data.conversation_id,
+                sender_id: data.caller_id,
+                content,
+                message_type: 'call',
+                metadata: {
+                    call_id: data.id,
+                    call_type: data.type,
+                    call_status: status,
+                    duration,
+                    receiver_id: data.receiver_id
+                }
+            });
+
+            await supabase.from('conversations').update({
+                last_message_at: now,
+                last_message_content: content,
+                last_message_type: 'call',
+                last_message_sender_id: data.caller_id
+            }).eq('id', data.conversation_id);
+        } catch (_) {}
+    }
+
     return data;
 }
 

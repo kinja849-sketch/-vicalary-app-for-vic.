@@ -187,6 +187,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         toggleVideo,
         flipCamera,
         toggleSpeaker,
+        refreshSessionTracks,
         connectionState,
         peerJoined,
         localVideoTrack,
@@ -201,10 +202,53 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         speakerActive
     } = useDailyCall();
 
-    // Reset peer ringing state when call ends or session changes
+    const handshakeIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    const connectedAtRef = useRef<number | null>(null);
+    const ringingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+    const triggerTrackSyncHandshake = useCallback(() => {
+        if (handshakeIntervalRef.current) {
+            clearInterval(handshakeIntervalRef.current);
+            handshakeIntervalRef.current = null;
+        }
+        refreshSessionTracks();
+        let ticks = 0;
+        handshakeIntervalRef.current = setInterval(() => {
+            ticks++;
+            refreshSessionTracks();
+            if (ticks >= 12) {
+                if (handshakeIntervalRef.current) {
+                    clearInterval(handshakeIntervalRef.current);
+                    handshakeIntervalRef.current = null;
+                }
+            }
+        }, 500);
+    }, [refreshSessionTracks]);
+
+    // Track call status transitions: duration, ringing timeout, and cleanup
     useEffect(() => {
         if (!callSession || callSession.status !== 'ringing') {
             setIsPeerRinging(false);
+        }
+        if (callSession?.status === 'connected') {
+            if (!connectedAtRef.current) {
+                connectedAtRef.current = Date.now();
+            }
+            if (ringingTimeoutRef.current) {
+                clearTimeout(ringingTimeoutRef.current);
+                ringingTimeoutRef.current = null;
+            }
+        }
+        if (!callSession || callSession.status === 'ended') {
+            connectedAtRef.current = null;
+            if (handshakeIntervalRef.current) {
+                clearInterval(handshakeIntervalRef.current);
+                handshakeIntervalRef.current = null;
+            }
+            if (ringingTimeoutRef.current) {
+                clearTimeout(ringingTimeoutRef.current);
+                ringingTimeoutRef.current = null;
+            }
         }
     }, [callSession?.status]);
 
@@ -297,7 +341,12 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
                             if (status === 'connected') {
                                 setCallSession(prev => prev ? { ...prev, status: 'connected' } : null);
+                                triggerTrackSyncHandshake();
                             } else if (['ended', 'declined', 'missed', 'cancelled'].includes(status)) {
+                                if (handshakeIntervalRef.current) {
+                                    clearInterval(handshakeIntervalRef.current);
+                                    handshakeIntervalRef.current = null;
+                                }
                                 ringtoneRef.current.stop();
                                 await leaveCall();
                                 setCallSession(prev => prev ? { ...prev, status: 'ended' } : null);
@@ -410,9 +459,31 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
                 console.warn('[CallContext] Error subscribing to call ack channel:', subErr);
             }
 
+            // Auto-timeout unanswered ringing after 45 seconds
+            if (ringingTimeoutRef.current) {
+                clearTimeout(ringingTimeoutRef.current);
+            }
+            ringingTimeoutRef.current = setTimeout(() => {
+                setCallSession(curr => {
+                    if (curr && curr.status === 'ringing') {
+                        if (curr.id) {
+                            updateCallStatus(curr.id, 'missed', 0).catch(() => {});
+                        }
+                        leaveCall();
+                        return { ...curr, status: 'ended' };
+                    }
+                    return curr;
+                });
+                setTimeout(() => setCallSession(null), 800);
+            }, 45000);
+
             // Caller joins Daily room while ringing (microphone on, camera on only if video call)
             await joinCall(callRecord.room_url, type === 'video', user.user_metadata?.full_name || 'Caller');
         } catch (err: any) {
+            if (ringingTimeoutRef.current) {
+                clearTimeout(ringingTimeoutRef.current);
+                ringingTimeoutRef.current = null;
+            }
             console.error('[CallContext] Failed to start call:', err);
             toast.error(err.message || "Failed to start call");
             ringtoneRef.current.stop();
@@ -428,12 +499,13 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         ringtoneRef.current.stop();
 
         try {
-            await updateCallStatus(callSession.id, 'connected');
+            await updateCallStatus(callSession.id, 'connected', 0);
             setCallSession(prev => prev ? { ...prev, status: 'connected' } : null);
 
             // Callee joins Daily room upon accept
             // Note: joinCall will strictly enable camera ONLY if type === 'video'
             await joinCall(callSession.roomUrl, callSession.type === 'video', user?.user_metadata?.full_name || 'Callee');
+            triggerTrackSyncHandshake();
         } catch (err) {
             console.error('[CallContext] Failed to accept call:', err);
             toast.error("Failed to connect call");
@@ -444,16 +516,22 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         } finally {
             isAcceptingRef.current = false;
         }
-    }, [callSession, joinCall, leaveCall, user]);
+    }, [callSession, joinCall, leaveCall, user, triggerTrackSyncHandshake]);
 
     // 4. Decline Call Action (Callee side)
     const handleDecline = useCallback(async () => {
         if (!callSession) return;
         ringtoneRef.current.stop();
 
+        if (ringingTimeoutRef.current) {
+            clearTimeout(ringingTimeoutRef.current);
+            ringingTimeoutRef.current = null;
+        }
+        connectedAtRef.current = null;
+
         const targetStatus = callSession.direction === 'incoming' ? 'declined' : 'cancelled';
         if (callSession.id) {
-            updateCallStatus(callSession.id, targetStatus).catch(e => console.warn('[CallContext] Decline status error:', e));
+            updateCallStatus(callSession.id, targetStatus, 0).catch(e => console.warn('[CallContext] Decline status error:', e));
         }
 
         await leaveCall();
@@ -465,6 +543,12 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     const handleMessageAndDecline = useCallback(async (messageText: string) => {
         if (!callSession || !user?.id) return;
         ringtoneRef.current.stop();
+
+        if (ringingTimeoutRef.current) {
+            clearTimeout(ringingTimeoutRef.current);
+            ringingTimeoutRef.current = null;
+        }
+        connectedAtRef.current = null;
 
         const targetCallId = callSession.id;
         const convId = callSession.conversationId;
@@ -479,7 +563,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
         // 2. Decline the call
         if (targetCallId) {
-            updateCallStatus(targetCallId, 'declined').catch(e => console.warn('[CallContext] Decline error:', e));
+            updateCallStatus(targetCallId, 'declined', 0).catch(e => console.warn('[CallContext] Decline error:', e));
         }
 
         await leaveCall();
@@ -492,9 +576,17 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         if (!callSession) return;
         ringtoneRef.current.stop();
 
+        if (ringingTimeoutRef.current) {
+            clearTimeout(ringingTimeoutRef.current);
+            ringingTimeoutRef.current = null;
+        }
+
+        const duration = connectedAtRef.current ? Math.max(0, Math.round((Date.now() - connectedAtRef.current) / 1000)) : 0;
+        connectedAtRef.current = null;
+
         if (callSession.id) {
             const finalStatus = callSession.status === 'connected' ? 'ended' : (callSession.direction === 'outgoing' ? 'cancelled' : 'declined');
-            updateCallStatus(callSession.id, finalStatus).catch(e => console.warn('[CallContext] End call status error:', e));
+            updateCallStatus(callSession.id, finalStatus, duration).catch(e => console.warn('[CallContext] End call status error:', e));
         }
 
         await leaveCall();

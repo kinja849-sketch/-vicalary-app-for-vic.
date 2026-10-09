@@ -2069,9 +2069,10 @@ export default function ChatConversation() {
                     </div>
                 );
             case 'call': {
-                const isMissed = msg.metadata?.call_status === 'missed' || msg.metadata?.call_status === 'declined';
+                const isMissed = msg.metadata?.call_status === 'missed' || msg.metadata?.call_status === 'declined' || msg.metadata?.call_status === 'cancelled';
                 const isVideo = msg.metadata?.call_type === 'video';
-                const durationSecs = msg.metadata?.duration || 0;
+                const durationSecs = Number(msg.metadata?.duration) || 0;
+                const isCaller = msg.sender_id === user?.id;
                 const formatDur = (s: number) => {
                     if (!s) return '';
                     const m = Math.floor(s / 60);
@@ -2090,10 +2091,14 @@ export default function ChatConversation() {
                         </div>
                         <div className="flex flex-col min-w-0">
                             <span className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate">
-                                {isMissed ? (isVideo ? 'Missed Video Call' : 'Missed Voice Call') : (isVideo ? 'Video Call' : 'Voice Call')}
+                                {isMissed 
+                                    ? (isCaller ? (isVideo ? 'Cancelled Video Call' : 'Cancelled Voice Call') : (isVideo ? 'Missed Video Call' : 'Missed Voice Call'))
+                                    : (isVideo ? 'Video Call' : 'Voice Call')}
                             </span>
                             <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">
-                                {isMissed ? 'No answer' : (durationSecs > 0 ? formatDur(durationSecs) : 'Call completed')}
+                                {isMissed 
+                                    ? (isCaller ? 'No answer' : 'Missed call') 
+                                    : (durationSecs > 0 ? formatDur(durationSecs) : 'Call completed')}
                             </span>
                         </div>
                     </div>
