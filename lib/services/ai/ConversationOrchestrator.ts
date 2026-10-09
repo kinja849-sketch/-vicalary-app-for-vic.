@@ -14,6 +14,13 @@ import {
 import { formatConversationalOutput } from './ConversationFormatter';
 import { routeAndExecuteTools, ToolExecutionResult } from './ToolRouter';
 import { formatForSpeech } from './SpeechFormatter';
+import {
+  callChatCompletionWithFallback,
+  streamChatCompletionWithFallback,
+  synthesizeVoiceAudioWithFallback,
+  getPrimaryApiKey,
+  getBackupApiKey
+} from '@/lib/ai/ai-fallback';
 
 const COACH_ID = '00000000-0000-0000-0000-000000000001';
 export const DEFAULT_COACH_VOICE = 'nova';
@@ -32,6 +39,7 @@ export interface ProcessConversationInput {
   } | null;
   locale?: string;
   voiceMode?: boolean;
+  isInitialGreeting?: boolean;
   sessionTurns?: Array<{ role: 'user' | 'assistant'; content: string }>;
 }
 
@@ -39,6 +47,7 @@ export interface ProcessConversationResult {
   success: boolean;
   messageId?: string;
   content: string;
+  reply?: string;
   intent: string;
   format: string;
   audioBase64?: string;
@@ -52,6 +61,10 @@ export interface ProcessConversationResult {
 
 export type VoiceStreamEvent =
   | { type: 'thinking' }
+  | { type: 'searching' }
+  | { type: 'preparing' }
+  | { type: 'tool_call'; tool: string }
+  | { type: 'interim_audio'; audioBase64: string; text: string }
   | { type: 'first_audio'; audioBase64: string; text: string; metrics: { firstSentenceMs: number; ttsDurationMs: number; totalTurnMs: number } }
   | { type: 'audio'; audioBase64: string; text: string; metrics: { firstSentenceMs: number; ttsDurationMs: number; totalTurnMs: number } }
   | { type: 'text_chunk'; text: string }
@@ -69,20 +82,45 @@ export async function processConversationStream(
   try {
     onEvent({ type: 'thinking' });
 
-    const isShortGreeting = /^(hello|hi|hey|good morning|good afternoon|good evening|how are you|how are you doing|halo|hai|yo|greetings|howdy|sup)[\s!.?,]*$/i.test(userMessage.trim());
+    const lowerUserMsg = userMessage.toLowerCase().trim();
+    const isDynamicGreeting = Boolean(input.isInitialGreeting || userMessage === '[DYNAMIC_GREETING_REQUEST]');
+    const isShortGreeting = /^(hello|hi|hey|good morning|good afternoon|good evening|how are you|how are you doing|halo|hai|yo|greetings|howdy|sup)[\s!.?,]*$/i.test(lowerUserMsg);
 
     // 1. Classify Intent
-    const classification: IntentClassification = classifyIntentFast(userMessage);
+    const classification: IntentClassification = isDynamicGreeting
+      ? { intent: 'general_chat', format: 'conversation', confidence: 1.0, requires_user_profile: true, requires_meal_plan: false, requires_budget_snapshot: false, requires_affiliation_lookup: false, requires_external_search: false }
+      : classifyIntentFast(userMessage);
 
-    // 2. Dynamic Context Assembly (skip slow external tools in voiceMode unless specifically required)
+    const isResearchQuery = !isDynamicGreeting && (/\b(weather|forecast|climate|temperature|news|current events|latest study|scientific study|stock price|who is|who won|election|search for|look up|check online|nearest|nearby|where can i find|supermarket|grocery store|pharmacy)\b/i.test(lowerUserMsg) || classification.requires_external_search);
+
+    const isProfileReviewOrGreeting = isDynamicGreeting || isShortGreeting || /\b(about me|my goal|my calorie|my profile|my allergies|my health|who am i|what foods do i like|how are you)\b/i.test(lowerUserMsg);
+
+    // 2. Dynamic Context Assembly
     let profileContext: UserProfileContext | null = null;
     let mealPlanContext: MealPlanContext | null = null;
     let budgetContext: BudgetContext | null = null;
     let affiliationContext: AffiliationRecord | null = null;
     let toolResults: ToolExecutionResult[] = [];
 
-    const shouldRunExternalTools = !voiceMode || classification.requires_external_search;
+    // Trigger immediate spoken acknowledgement for research queries in voice mode
+    let interimAudioPromise: Promise<void> | null = null;
+    if (isResearchQuery && voiceMode) {
+      onEvent({ type: 'searching' });
+      interimAudioPromise = (async () => {
+        try {
+          const interimAudio = await synthesizeVoiceAudio("Let me check that for you.");
+          if (interimAudio) {
+            onEvent({
+              type: 'interim_audio',
+              text: "Let me check that for you.",
+              audioBase64: interimAudio
+            });
+          }
+        } catch (e) {}
+      })();
+    }
 
+    // Parallel context and tool gathering
     const [
       profileRes,
       mealRes,
@@ -90,29 +128,24 @@ export async function processConversationStream(
       affiliationRes,
       historyRes,
       toolsRes
-    ] = isShortGreeting
-      ? await Promise.all([
-          loadUserProfileContext(supabase, userId),
-          Promise.resolve(null),
-          Promise.resolve(null),
-          Promise.resolve(null),
-          Promise.resolve([]),
-          Promise.resolve([])
-        ])
-      : await Promise.all([
-          loadUserProfileContext(supabase, userId),
-          classification.requires_meal_plan ? loadMealPlanContext(supabase, userId) : Promise.resolve(null),
-          classification.requires_budget_snapshot ? loadBudgetContext(supabase, userId) : Promise.resolve(null),
-          classification.requires_affiliation_lookup ? loadAffiliationContext(supabase, classification.extracted_entity || userMessage) : Promise.resolve(null),
-          loadRecentConversationHistory(supabase, conversationId, 4),
-          shouldRunExternalTools ? routeAndExecuteTools({ userMessage, locationContext }) : Promise.resolve([])
-        ]);
+    ] = await Promise.all([
+      loadUserProfileContext(supabase, userId),
+      (!isProfileReviewOrGreeting && classification.requires_meal_plan) ? loadMealPlanContext(supabase, userId) : Promise.resolve(null),
+      (!isProfileReviewOrGreeting && classification.requires_budget_snapshot) ? loadBudgetContext(supabase, userId) : Promise.resolve(null),
+      (!isProfileReviewOrGreeting && classification.requires_affiliation_lookup) ? loadAffiliationContext(supabase, classification.extracted_entity || userMessage) : Promise.resolve(null),
+      loadRecentConversationHistory(supabase, conversationId, 4),
+      isResearchQuery ? routeAndExecuteTools({ userMessage, locationContext }) : Promise.resolve([])
+    ]);
 
     profileContext = profileRes;
     mealPlanContext = mealRes;
     budgetContext = budgetRes;
     affiliationContext = affiliationRes;
     toolResults = toolsRes || [];
+
+    if (interimAudioPromise) {
+      await interimAudioPromise;
+    }
 
     // 3. Build System Prompt
     const systemPrompt = buildSystemPrompt({
@@ -124,33 +157,49 @@ export async function processConversationStream(
       locationContext,
       locale,
       voiceMode,
-      toolResults
+      toolResults,
+      isDynamicGreeting
     });
 
-    // 4. Build Messages Payload
+    // 4. Build Messages Payload with clean alternating sequence
     const messagesPayload: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
       { role: 'system', content: systemPrompt }
     ];
 
-    const effectiveHistory = (sessionTurns && sessionTurns.length > 0)
-      ? sessionTurns.slice(-6)
-      : historyRes;
+    if (isDynamicGreeting) {
+      messagesPayload.push({
+        role: 'user',
+        content: 'Hi Coach Vee, please greet me warmly and ask how you can support my health goals today.'
+      });
+    } else {
+      const effectiveHistory = (sessionTurns && sessionTurns.length > 0)
+        ? sessionTurns.slice(-6)
+        : historyRes;
 
-    for (const hist of effectiveHistory) {
-      if (hist.content && hist.content.trim() && hist.content !== userMessage) {
-        messagesPayload.push({
-          role: hist.role === 'assistant' ? 'assistant' : 'user',
-          content: hist.content
-        });
+      const cleanedHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+      for (const hist of effectiveHistory) {
+        if (hist.content && hist.content.trim()) {
+          const last = cleanedHistory[cleanedHistory.length - 1];
+          if (!last || last.role !== hist.role) {
+            cleanedHistory.push({
+              role: hist.role === 'assistant' ? 'assistant' : 'user',
+              content: hist.content.trim()
+            });
+          }
+        }
       }
+      if (cleanedHistory.length > 0 && cleanedHistory[cleanedHistory.length - 1].role === 'user') {
+        cleanedHistory.pop();
+      }
+      messagesPayload.push(...cleanedHistory);
+      messagesPayload.push({ role: 'user', content: userMessage });
     }
-    messagesPayload.push({ role: 'user', content: userMessage });
 
-    // 5. Stream response from OpenAI and synthesize complete spoken response
-    const apiKey = process.env.OPENAI_API_KEY || process.env.NEXT_PUBLIC_OPENAI_API_KEY;
+    // 5. Stream response with automated fallback and synthesize complete spoken response
+    const hasAIKey = !!(getPrimaryApiKey() || getBackupApiKey());
     const model = process.env.OPENAI_MODEL || process.env.NEXT_PUBLIC_OPENAI_MODEL || 'gpt-4o-mini';
 
-    if (!apiKey || apiKey.includes('placeholder')) {
+    if (!hasAIKey) {
       const defaultText = `I hear you, ${profileContext?.fullName || 'User'}. How can I best guide your health goals today?`;
       onEvent({
         type: 'done',
@@ -161,33 +210,34 @@ export async function processConversationStream(
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
 
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
+    let response: Response;
+    try {
+      const streamResult = await streamChatCompletionWithFallback({
         model,
         messages: messagesPayload,
-        temperature: 0.3,
+        temperature: 0.5,
         max_tokens: 350,
-        stream: true
-      }),
-      signal: controller.signal
-    });
-
-    if (!response.ok || !response.body) {
+        signal: controller.signal
+      });
+      response = streamResult.response;
+    } catch (err: any) {
       clearTimeout(timeoutId);
-      throw new Error(`OpenAI stream error: ${response.status}`);
+      throw new Error(`AI stream error: ${err?.message || err}`);
+    }
+
+    if (!response.body) {
+      clearTimeout(timeoutId);
+      throw new Error(`AI stream error: missing body`);
     }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let fullText = '';
     let buffer = '';
+    let firstSentenceAudioSent = false;
+    let firstSentenceText = '';
 
     while (true) {
       const { done, value } = await reader.read();
@@ -207,6 +257,30 @@ export async function processConversationStream(
             if (delta) {
               fullText += delta;
               onEvent({ type: 'text_chunk', text: delta });
+
+              // Rapid conversational turnaround: synthesize and emit first sentence audio immediately
+              if (!firstSentenceAudioSent && voiceMode) {
+                const sentenceMatch = fullText.match(/^([^.!?\n]+[.!?\n])/);
+                if (sentenceMatch && sentenceMatch[1] && sentenceMatch[1].trim().length >= 15) {
+                  firstSentenceAudioSent = true;
+                  firstSentenceText = sentenceMatch[1].trim();
+                  const firstSentTime = Date.now();
+                  synthesizeVoiceAudio(firstSentenceText).then((firstAudio) => {
+                    if (firstAudio) {
+                      onEvent({
+                        type: 'first_audio',
+                        audioBase64: firstAudio,
+                        text: firstSentenceText,
+                        metrics: {
+                          firstSentenceMs: Date.now() - startTime,
+                          ttsDurationMs: Date.now() - firstSentTime,
+                          totalTurnMs: Date.now() - startTime
+                        }
+                      });
+                    }
+                  }).catch(() => {});
+                }
+              }
             }
           } catch (e) {}
         }
@@ -220,7 +294,7 @@ export async function processConversationStream(
     const ttsDurationMs = Date.now() - ttsStartMs;
     const totalTurnMs = Date.now() - startTime;
 
-    if (fullAudioBase64) {
+    if (fullAudioBase64 && !firstSentenceAudioSent) {
       onEvent({
         type: 'audio',
         audioBase64: fullAudioBase64,
@@ -285,12 +359,20 @@ export async function processConversation(
   const { userId, conversationId, userMessage, locationContext, locale = 'en', voiceMode = false, sessionTurns } = input;
 
   try {
-    const isShortGreeting = /^(hello|hi|hey|good morning|good afternoon|good evening|how are you|how are you doing|halo|hai|yo|greetings|howdy|sup)[\s!.?,]*$/i.test(userMessage.trim());
+    const lowerUserMsg = userMessage.toLowerCase().trim();
+    const isDynamicGreeting = Boolean(input.isInitialGreeting || userMessage === '[DYNAMIC_GREETING_REQUEST]');
+    const isShortGreeting = /^(hello|hi|hey|good morning|good afternoon|good evening|how are you|how are you doing|halo|hai|yo|greetings|howdy|sup)[\s!.?,]*$/i.test(lowerUserMsg);
 
     // 1. Classify Intent
-    const classification: IntentClassification = classifyIntentFast(userMessage);
+    const classification: IntentClassification = isDynamicGreeting
+      ? { intent: 'general_chat', format: 'conversation', confidence: 1.0, requires_user_profile: true, requires_meal_plan: false, requires_budget_snapshot: false, requires_affiliation_lookup: false, requires_external_search: false }
+      : classifyIntentFast(userMessage);
 
-    // 2. Dynamic Context Assembly based on flags (in voiceMode with non-greeting, include profile)
+    const isResearchQuery = !isDynamicGreeting && (/\b(weather|forecast|climate|temperature|news|current events|latest study|scientific study|stock price|who is|who won|election|search for|look up|check online|nearest|nearby|where can i find|supermarket|grocery store|pharmacy)\b/i.test(lowerUserMsg) || classification.requires_external_search);
+
+    const isProfileReviewOrGreeting = isDynamicGreeting || isShortGreeting || /\b(about me|my goal|my calorie|my profile|my allergies|my health|who am i|what foods do i like|how are you)\b/i.test(lowerUserMsg);
+
+    // 2. Dynamic Context Assembly
     let profileContext: UserProfileContext | null = null;
     let mealPlanContext: MealPlanContext | null = null;
     let budgetContext: BudgetContext | null = null;
@@ -304,23 +386,14 @@ export async function processConversation(
       affiliationRes,
       historyRes,
       toolsRes
-    ] = isShortGreeting
-      ? await Promise.all([
-          loadUserProfileContext(supabase, userId),
-          Promise.resolve(null),
-          Promise.resolve(null),
-          Promise.resolve(null),
-          Promise.resolve([]),
-          Promise.resolve([])
-        ])
-      : await Promise.all([
-          loadUserProfileContext(supabase, userId),
-          classification.requires_meal_plan ? loadMealPlanContext(supabase, userId) : Promise.resolve(null),
-          classification.requires_budget_snapshot ? loadBudgetContext(supabase, userId) : Promise.resolve(null),
-          classification.requires_affiliation_lookup ? loadAffiliationContext(supabase, classification.extracted_entity || userMessage) : Promise.resolve(null),
-          loadRecentConversationHistory(supabase, conversationId, 4),
-          (voiceMode && !classification.requires_external_search) ? Promise.resolve([]) : routeAndExecuteTools({ userMessage, locationContext })
-        ]);
+    ] = await Promise.all([
+      loadUserProfileContext(supabase, userId),
+      (!isProfileReviewOrGreeting && classification.requires_meal_plan) ? loadMealPlanContext(supabase, userId) : Promise.resolve(null),
+      (!isProfileReviewOrGreeting && classification.requires_budget_snapshot) ? loadBudgetContext(supabase, userId) : Promise.resolve(null),
+      (!isProfileReviewOrGreeting && classification.requires_affiliation_lookup) ? loadAffiliationContext(supabase, classification.extracted_entity || userMessage) : Promise.resolve(null),
+      loadRecentConversationHistory(supabase, conversationId, 4),
+      isResearchQuery ? routeAndExecuteTools({ userMessage, locationContext }) : Promise.resolve([])
+    ]);
 
     profileContext = profileRes;
     mealPlanContext = mealRes;
@@ -338,29 +411,43 @@ export async function processConversation(
       locationContext,
       locale,
       voiceMode,
-      toolResults
+      toolResults,
+      isDynamicGreeting
     });
 
-    // 4. Build Messages Payload with immediate multi-turn context
+    // 4. Build Messages Payload with clean alternating sequence
     const messagesPayload: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
       { role: 'system', content: systemPrompt }
     ];
 
-    const effectiveHistory = (sessionTurns && sessionTurns.length > 0)
-      ? sessionTurns.slice(-6)
-      : historyRes;
+    if (isDynamicGreeting) {
+      messagesPayload.push({
+        role: 'user',
+        content: 'Hi Coach Vee, please greet me warmly and ask how you can support my health goals today.'
+      });
+    } else {
+      const effectiveHistory = (sessionTurns && sessionTurns.length > 0)
+        ? sessionTurns.slice(-6)
+        : historyRes;
 
-    for (const hist of effectiveHistory) {
-      if (hist.content && hist.content.trim() && hist.content !== userMessage) {
-        messagesPayload.push({
-          role: hist.role === 'assistant' ? 'assistant' : 'user',
-          content: hist.content
-        });
+      const cleanedHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+      for (const hist of effectiveHistory) {
+        if (hist.content && hist.content.trim()) {
+          const last = cleanedHistory[cleanedHistory.length - 1];
+          if (!last || last.role !== hist.role) {
+            cleanedHistory.push({
+              role: hist.role === 'assistant' ? 'assistant' : 'user',
+              content: hist.content.trim()
+            });
+          }
+        }
       }
+      if (cleanedHistory.length > 0 && cleanedHistory[cleanedHistory.length - 1].role === 'user') {
+        cleanedHistory.pop();
+      }
+      messagesPayload.push(...cleanedHistory);
+      messagesPayload.push({ role: 'user', content: userMessage });
     }
-
-    // Ensure the current user message is appended
-    messagesPayload.push({ role: 'user', content: userMessage });
 
     // 5. Generate Model Response (Streaming First Sentence in Voice Mode)
     if (voiceMode) {
@@ -404,6 +491,7 @@ export async function processConversation(
       return {
         success: true,
         content: finalContent,
+        reply: finalContent,
         intent: classification.intent,
         format: classification.format,
         audioBase64: voiceResult.firstSentenceAudioBase64,
@@ -478,8 +566,9 @@ function buildSystemPrompt(params: {
   locale: string;
   voiceMode?: boolean;
   toolResults?: ToolExecutionResult[];
+  isDynamicGreeting?: boolean;
 }): string {
-  const { classification, profileContext, mealPlanContext, budgetContext, affiliationContext, locationContext, voiceMode, toolResults } = params;
+  const { classification, profileContext, mealPlanContext, budgetContext, affiliationContext, locationContext, voiceMode, toolResults, isDynamicGreeting } = params;
 
   const now = new Date();
   const timeZone = locationContext?.timezone || (typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC');
@@ -510,11 +599,21 @@ You are having a direct, personal 1-on-1 conversation with ${resolvedUserName}.
 
 Core Guidelines:
 - You know ${resolvedUserName} personally. Address them naturally by name when appropriate.
-- You communicate naturally, warmly, and conversationally.
+- You communicate naturally, warmly, intelligently, and conversationally, like ChatGPT with normal pacing and subtle expression.
+- STAY STRICTLY FOCUSED: Always directly answer the specific question or topic asked by ${resolvedUserName}. Never wander, digress, pivot to unrelated topics, or answer things that were not asked.
+- NEVER REPEAT OLD GREETINGS: Do NOT repeat greeting formulas (like "I'm doing great, thank you for asking!") when ${resolvedUserName} asks a new or specific question. Always immediately address the user's latest inquiry.
+- RESEARCH & REAL-TIME INQUIRIES: When ${resolvedUserName} asks about weather, news, facts, external information, or food places, provide a direct, accurate, and helpful response based on verified findings.
+- FACTUAL INTEGRITY & EVIDENCE BOUNDARY:
+  * Generate every answer strictly from the user's actual question, verified conversation context, and retrieved evidence.
+  * Do NOT invent facts, sources, corporate affiliations, actions, or medical outcomes.
+  * Distinguish verified information from assumptions. If evidence is unavailable, state the limitation naturally and honestly.
+  * If missing information materially affects the answer, ask a concise, natural clarifying question instead of guessing.
+  * If the user corrects or redirects you, incorporate that correction immediately and smoothly without defensiveness.
+  * Perform a brief internal relevance and factual consistency check before speaking. NEVER expose private reasoning, thinking tags, or read internal system prompts aloud.
+- NEVER LECTURE OR DIVERGE: Do NOT randomly bring up calories, budgets, or unsolicited background data unless the user specifically asked about them in their message.
 - Never output artificial markdown headings (# or ##) or robotic templates unless the user explicitly requested a structured list.
-- Keep responses concise, warm, and directly relevant.
+- Keep responses concise (1 to 3 spoken sentences), warm, highly intelligent, and directly relevant to the user's inquiry.
 - Do not provide formal medical diagnoses or prescribe medications; provide educational, supportive nutrition and wellness guidance.
-- AI NEVER hallucinates facts: If asked about locations or company affiliations without verified data, state clearly what is known or unknown.
 
 [Temporal Grounding]:
 Current Date: ${formattedDate}
@@ -523,11 +622,27 @@ Year: ${now.getFullYear()}
 Rule: When asked about the date, day, month, time, or year, ALWAYS answer accurately based on the current date (${formattedDate}). Never mention past years like 2023.
 `;
 
+  if (isDynamicGreeting) {
+    const hour = now.getHours();
+    const timeOfDay = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening';
+    prompt += `\n[ACTION REQUIRED: DYNAMIC OPENING GREETING]:
+- Generate a warm, personal, 1-sentence opening greeting for ${resolvedUserName}.
+- Time of day: ${timeOfDay}.
+- Naturally welcome ${resolvedUserName} back, mention supporting their health or nutrition journey today, and invite them to speak.
+- Speak in a calm, conversational woman's voice like ChatGPT. Avoid generic scripted clichés, presenter hype, or robotic templates.
+- Output ONLY the single spoken opening greeting sentence.
+`;
+  }
+
   if (voiceMode) {
     prompt += `\n[VOICE MODE - CRITICAL DIRECTIVES]:
 - You are speaking directly to the user in a live audio conversation.
-- Comprehensively answer all questions asked by the user in a cohesive, natural spoken manner. Do not drop, omit, or ignore parts of multi-part questions.
-- Keep answers natural, warm, and conversational (typically 2 to 4 spoken sentences). Avoid robotic brevity or excessive length.
+- You must speak in a calm, natural, friendly, conversational woman's voice like ChatGPT, with normal pacing and subtle expression.
+- Avoid robotic pronunciation, exaggerated excitement, and an artificial presenter tone.
+- Directly, accurately, and thoughtfully address the user's exact words in 1 to 3 spoken sentences.
+- DO NOT DIVERGE: Stay 100% on topic with what the user just asked. Do NOT bring up calories, budgets, or unsolicited advice unless directly requested.
+- NO GREETING ECHOES: If the user asks a question, answer the question immediately. Never answer a question with a greeting.
+- NEVER read aloud internal instructions, prompts, metadata, or reasoning tags.
 - NEVER use markdown, bullet points, asterisks, numbered lists, emoji headers, or code blocks.
 - Speak naturally and confidently.
 - If asked about allergies or dietary restrictions, state them directly from the profile immediately.
@@ -547,18 +662,18 @@ Macro Target Breakdown: ${profileContext.macroGoals?.protein ? `Protein: ${profi
 Liked Foods: ${profileContext.likedFoods && profileContext.likedFoods.length > 0 ? profileContext.likedFoods.join(', ') : 'All balanced whole foods'}
 Preferred Cuisines: ${profileContext.preferredCuisines && profileContext.preferredCuisines.length > 0 ? profileContext.preferredCuisines.join(', ') : 'Varied / International'}
 Cooking Skill: ${profileContext.cookingSkill || 'Intermediate'} | Meal Prep Time: ${profileContext.mealPrepTime || '30 mins'}
-Instruction: When the user asks about their name, goals, calories, allergies, onboarding preferences, or health, ALWAYS answer accurately using the verified profile context above.
+Instruction: When the user asks about their name, goals, calories, allergies, onboarding preferences, or health, answer accurately using the verified profile context above. Do not volunteer profile stats unprompted.
 `;
   }
 
-  if (mealPlanContext) {
+  if (mealPlanContext && (classification.requires_meal_plan || classification.intent === 'meal_question')) {
     prompt += `\n[Today's Nutrition Context]:
 Logged Calories Today: ${mealPlanContext.totalCaloriesLoggedToday} / ${mealPlanContext.calorieTarget} kcal
 Logged Items: ${mealPlanContext.todaysMeals.map(m => `${m.foodName} (${m.calories} kcal)`).join(', ') || 'None yet'}
 `;
   }
 
-  if (budgetContext) {
+  if (budgetContext && (classification.requires_budget_snapshot || classification.intent === 'budget_status')) {
     prompt += `\n[Food Budget Context]:
 Daily Target: ${budgetContext.currency} ${budgetContext.dailyTarget}
 Spent So Far: ${budgetContext.currency} ${budgetContext.spentSoFar}
@@ -620,10 +735,10 @@ async function generateStreamingVoiceTurn(
   options?: { maxTokens?: number; temperature?: number }
 ): Promise<VoiceTurnResult> {
   const startTime = Date.now();
-  const apiKey = process.env.OPENAI_API_KEY || process.env.NEXT_PUBLIC_OPENAI_API_KEY;
+  const hasAIKey = !!(getPrimaryApiKey() || getBackupApiKey());
   const model = process.env.OPENAI_MODEL || process.env.NEXT_PUBLIC_OPENAI_MODEL || 'gpt-4o-mini';
 
-  if (!apiKey || apiKey.includes('placeholder')) {
+  if (!hasAIKey) {
     return {
       fullText: "I am here with you. How can I help you today?",
       metrics: { firstSentenceMs: 0, ttsDurationMs: 0, totalTurnMs: 0 }
@@ -631,28 +746,20 @@ async function generateStreamingVoiceTurn(
   }
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 12000);
+  const timeoutId = setTimeout(() => controller.abort(), 25000);
 
   try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: options?.temperature ?? 0.3,
-        max_tokens: options?.maxTokens ?? 350,
-        stream: true
-      }),
+    const streamResult = await streamChatCompletionWithFallback({
+      model,
+      messages,
+      temperature: options?.temperature ?? 0.3,
+      max_tokens: options?.maxTokens ?? 350,
       signal: controller.signal
     });
+    const response = streamResult.response;
 
-    if (!response.ok || !response.body) {
-      const errText = await response.text().catch(() => '');
-      throw new Error(`OpenAI stream error: ${response.status} ${errText}`);
+    if (!response.body) {
+      throw new Error(`AI stream error: missing response body`);
     }
 
     const reader = response.body.getReader();
@@ -707,10 +814,10 @@ async function generateModelReply(
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
   options?: { maxTokens?: number; temperature?: number }
 ): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY || process.env.NEXT_PUBLIC_OPENAI_API_KEY;
+  const hasAIKey = !!(getPrimaryApiKey() || getBackupApiKey());
   const model = process.env.OPENAI_MODEL || process.env.NEXT_PUBLIC_OPENAI_MODEL || 'gpt-4o-mini';
 
-  if (!apiKey || apiKey.includes('placeholder')) {
+  if (!hasAIKey) {
     return "I am here with you to support your health and nutrition journey. How can I help you today?";
   }
 
@@ -718,27 +825,14 @@ async function generateModelReply(
   const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
 
   try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: options?.temperature ?? 0.7,
-        max_tokens: options?.maxTokens ?? 600
-      }),
+    const data = await callChatCompletionWithFallback({
+      model,
+      messages,
+      temperature: options?.temperature ?? 0.7,
+      max_tokens: options?.maxTokens ?? 600,
       signal: controller.signal
     });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`OpenAI API error: ${response.status} ${errText}`);
-    }
-
-    const data = await response.json();
     return data.choices?.[0]?.message?.content || "I'm listening. How can I help you right now?";
   } finally {
     clearTimeout(timeoutId);
@@ -746,31 +840,17 @@ async function generateModelReply(
 }
 
 async function synthesizeVoiceAudio(text: string): Promise<string | null> {
-  const apiKey = process.env.OPENAI_API_KEY || process.env.NEXT_PUBLIC_OPENAI_API_KEY;
-  if (!apiKey || apiKey.includes('placeholder')) return null;
-
   try {
     const spokenText = formatForSpeech(text).slice(0, 1500);
-    const response = await fetch('https://api.openai.com/v1/audio/speech', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'tts-1',
-        voice: 'nova',
-        input: spokenText,
-        speed: 1.05,
-      }),
+    const result = await synthesizeVoiceAudioWithFallback(spokenText, {
+      voice: DEFAULT_COACH_VOICE,
+      speed: 1.05
     });
 
-    if (!response.ok) return null;
-    const arrayBuffer = await response.arrayBuffer();
-    const base64 = Buffer.from(arrayBuffer).toString('base64');
-    return `data:audio/mp3;base64,${base64}`;
+    return result ? result.dataUri : null;
   } catch (err) {
     console.warn('[ConversationOrchestrator] Server TTS error:', err);
     return null;
   }
 }
+

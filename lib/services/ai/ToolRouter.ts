@@ -22,7 +22,7 @@ export interface ToolRoutingContext {
 async function executeTavilySearch(query: string, apiKey: string): Promise<ToolExecutionResult> {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3500); // 3.5s max
+    const timeoutId = setTimeout(() => controller.abort(), 7000); // 7s max
 
     const response = await fetch('https://api.tavily.com/search', {
       method: 'POST',
@@ -188,8 +188,8 @@ export async function routeAndExecuteTools(context: ToolRoutingContext): Promise
   const lowerMsg = userMessage.toLowerCase();
   const results: ToolExecutionResult[] = [];
 
-  // Detect genuine current events, breaking news, or external events (excluding routine queries with 'today' or 'recent')
-  const isCurrentEventOrNews = /\b(breaking news|world news|current events|stock price|election results|who won the|conflict in|situation in|latest study on|weather in)\b/i.test(lowerMsg);
+  // Detect genuine current events, breaking news, weather, or external queries
+  const isCurrentEventOrNews = /\b(weather|forecast|temperature|climate|breaking news|world news|current events|stock price|election results|who won the|conflict in|situation in|latest study|scientific study|search online|search for|look up)\b/i.test(lowerMsg);
   
   // Detect location / nearby places intent
   const isLocationPlacesQuery = /(nearest|near me|nearby|where can i find|supermarket|grocery store|gym|pharmacy|halal food|restaurant near|where am i|my current location|my location|what city|what country|where do i live|where am i located)/i.test(lowerMsg);

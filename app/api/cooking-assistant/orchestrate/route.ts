@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
+import { callChatCompletionWithFallback } from '@/lib/ai/ai-fallback';
 
 export async function POST(req: NextRequest) {
     try {
@@ -8,11 +9,6 @@ export async function POST(req: NextRequest) {
 
         if (!recipe || !recipe.title) {
             return NextResponse.json({ error: 'Missing recipe data' }, { status: 400 });
-        }
-
-        const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
-        if (!apiKey) {
-            throw new Error('OpenAI API key missing');
         }
 
         // Fetch User Profile to get VCalorie Context
@@ -61,23 +57,14 @@ Output a strictly valid JSON object matching this schema:
   ]
 }`;
 
-        const openAiRes = await fetch('https://api.openai.com/v1/chat/completions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-            body: JSON.stringify({
-                model: 'gpt-4o',
-                messages: [{ role: 'system', content: systemPrompt }],
-                response_format: { type: 'json_object' },
-                temperature: 0.7,
-            }),
+        const openAiRes = await callChatCompletionWithFallback({
+            model: 'gpt-4o',
+            messages: [{ role: 'system', content: systemPrompt }],
+            response_format: { type: 'json_object' },
+            temperature: 0.7,
         });
 
-        if (!openAiRes.ok) {
-            throw new Error(`OpenAI error: ${await openAiRes.text()}`);
-        }
-
-        const data = await openAiRes.json();
-        const content = data.choices[0].message.content;
+        const content = openAiRes.choices[0]?.message?.content || '{}';
         const parsedSession = JSON.parse(content);
 
         return NextResponse.json({ success: true, session: parsedSession });

@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerSupabaseClient, createAdminSupabaseClient } from '@/lib/supabase-server';
 import { recipeProvider } from '@/lib/services/RecipeProviderService';
-import OpenAI from 'openai';
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+import { callChatCompletionWithFallback } from '@/lib/ai/ai-fallback';
 
 const CATEGORIES = ['breakfast', 'lunch', 'dinner', 'snacks', 'drinks', 'desserts'];
 
@@ -47,13 +45,13 @@ export async function POST(req: NextRequest) {
     }
     `;
 
-    const aiRes = await openai.chat.completions.create({
+    const aiRes = await callChatCompletionWithFallback({
       model: "gpt-4o",
       response_format: { type: "json_object" },
       messages: [{ role: "user", content: aiPrompt }]
     });
 
-    const aiParams = JSON.parse(aiRes.choices[0].message.content || "{}");
+    const aiParams = JSON.parse(aiRes.choices[0]?.message?.content || "{}");
 
     // 3. Fetch from API Provider & 4. Validation Gate
     const responsePayload: Record<string, any[]> = {};

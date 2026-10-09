@@ -1,5 +1,4 @@
-import { generateText } from 'ai';
-import { openai } from '@ai-sdk/openai';
+import { callChatCompletionWithFallback } from './ai-fallback';
 
 export class ProductAdvisor {
   /**
@@ -63,11 +62,13 @@ Return ONLY a JSON object:
 }`;
 
     try {
-      const { text } = await generateText({
-        model: openai('gpt-4o-mini'),
-        prompt,
+      const response = await callChatCompletionWithFallback({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: prompt }],
+        response_format: { type: 'json_object' }
       });
 
+      const text = response.choices[0]?.message?.content || '';
       const jsonStart = text.indexOf('{');
       const jsonEnd = text.lastIndexOf('}');
       if (jsonStart !== -1 && jsonEnd !== -1) {

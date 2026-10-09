@@ -51,7 +51,7 @@ elif parent_env.exists():
 
 # Ensure credentials exist
 DAILY_API_KEY = os.getenv("DAILY_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("NEXT_PUBLIC_OPENAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("NEXT_PUBLIC_OPENAI_API_KEY") or os.getenv("BACKUP_AI_API_KEY") or os.getenv("GEMINI_API_KEY")
 
 if DAILY_API_KEY:
     os.environ["DAILY_API_KEY"] = DAILY_API_KEY

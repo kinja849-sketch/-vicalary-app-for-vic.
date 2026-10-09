@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient, getAuthenticatedUser } from '@/lib/supabase-server';
+import { callChatCompletionWithFallback } from '@/lib/ai/ai-fallback';
 
 export async function POST(request: Request) {
     try {
@@ -14,7 +15,6 @@ export async function POST(request: Request) {
         }
 
         const supabase = createServerSupabaseClient(request);
-        const openAiApiKey = process.env.OPENAI_API_KEY || process.env.NEXT_PUBLIC_OPENAI_API_KEY;
 
         const { data: userSettings } = await supabase.from('user_settings').select('language').eq('user_id', userId).maybeSingle();
         const explicitUserLang = userSettings?.language || 'en';
@@ -49,23 +49,14 @@ export async function POST(request: Request) {
         LANGUAGE MANDATE: You MUST write your entire response fluently in this language code ('${explicitUserLang}'). Do NOT reply in English unless their language code is 'en'.
         `;
 
-        // 4. Call OpenAI API
-        const aiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${openAiApiKey}`
-            },
-            body: JSON.stringify({
-                model: 'gpt-4o',
-                messages: [{ role: 'system', content: prompt }],
-                response_format: { type: 'json_object' }
-            })
+        // 4. Call AI API with automated fallback
+        const aiResponse = await callChatCompletionWithFallback({
+            model: 'gpt-4o',
+            messages: [{ role: 'system', content: prompt }],
+            response_format: { type: 'json_object' }
         });
 
-
-        const aiData = await aiResponse.json();
-        const aiResult = JSON.parse(aiData.choices[0].message.content);
+        const aiResult = JSON.parse(aiResponse.choices[0]?.message?.content || '{}');
 
         // 5. Store the AI Budget Goal
         // Deactivate old goals

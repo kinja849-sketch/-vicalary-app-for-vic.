@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
+import { callChatCompletionWithFallback } from '@/lib/ai/ai-fallback'
 
 export async function POST(req: NextRequest) {
   try {
@@ -31,7 +32,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ message: 'Summary already sent for this date', alreadySent: true })
     }
 
-    const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY
     const prompt = `You are a helpful and professional Health Coach for the VicAlary App.
 Generate a concise, encouraging end-of-day summary for the user based on their activities on ${queryDate}.
 Stats: ${progress.calories_consumed}/${progress.calories_goal} kcal.
@@ -44,14 +44,12 @@ Instructions:
 3. Keep it to 3-4 sentences.
 4. Tone: Friendly, scientific, and encouraging.`
 
-    const aiRes = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ model: 'gpt-4o', messages: [{ role: 'user', content: prompt }] }),
-    })
+    const aiRes = await callChatCompletionWithFallback({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: prompt }]
+    });
 
-    const aiData = await aiRes.json()
-    let summary = aiData.choices[0].message.content
+    let summary = aiRes.choices[0]?.message?.content || '';
 
     // Strip markdown symbols to prevent them from showing in the UI
     summary = summary.replace(/[*#]/g, '');

@@ -13,10 +13,15 @@ export async function POST(req: NextRequest) {
       content,
       media_url,
       location_context,
-      locale = 'en'
+      locale = 'en',
+      is_initial_greeting,
+      isInitialGreeting
     } = body;
 
-    if (!conversation_id || !content) {
+    const isGreeting = Boolean(is_initial_greeting || isInitialGreeting || content === '[DYNAMIC_GREETING_REQUEST]');
+    const effectiveContent = isGreeting ? '[DYNAMIC_GREETING_REQUEST]' : content;
+
+    if (!conversation_id || (!effectiveContent && !isGreeting)) {
       return NextResponse.json(
         { error: 'Missing required parameters: conversation_id and content are required' },
         { status: 400 }
@@ -79,16 +84,44 @@ export async function POST(req: NextRequest) {
       }
     } else {
       // Find active AI coach conversation for this user if one already exists
-      const { data: existingAiPart } = await dbClient
-        .from('conversation_participants')
-        .select('conversation_id, conversations!inner(conversation_type)')
-        .eq('user_id', targetUserId)
-        .eq('conversations.conversation_type', 'ai')
-        .limit(1)
-        .maybeSingle();
+      try {
+        const { data: rpcData } = await dbClient.rpc('provision_user_system_chats', { p_user_id: targetUserId });
+        const rpcConvId = (rpcData as any)?.coach_conversation_id || (rpcData as any)?.coach_id;
+        if (rpcConvId) {
+          resolvedConvId = String(rpcConvId);
+        }
+      } catch (e) {}
 
-      if (existingAiPart?.conversation_id) {
-        resolvedConvId = existingAiPart.conversation_id;
+      if (resolvedConvId === conversation_id || !resolvedConvId) {
+        const { data: existingAiPart } = await dbClient
+          .from('conversation_participants')
+          .select('conversation_id, conversations!inner(conversation_type)')
+          .eq('user_id', targetUserId)
+          .eq('conversations.conversation_type', 'ai')
+          .limit(1)
+          .maybeSingle();
+
+        if (existingAiPart?.conversation_id) {
+          resolvedConvId = existingAiPart.conversation_id;
+        } else {
+          try {
+            const { data: newConv } = await dbClient
+              .from('conversations')
+              .insert({ conversation_type: 'ai', name: 'Health Coach' })
+              .select('id')
+              .maybeSingle();
+
+            if (newConv?.id) {
+              await dbClient.from('conversation_participants').insert([
+                { conversation_id: newConv.id, user_id: targetUserId },
+                { conversation_id: newConv.id, user_id: '00000000-0000-0000-0000-000000000001' }
+              ]);
+              resolvedConvId = newConv.id;
+            }
+          } catch (convErr) {
+            console.warn('[VOICE API] Failed to auto-provision AI conversation row:', convErr);
+          }
+        }
       }
     }
 
@@ -103,11 +136,12 @@ export async function POST(req: NextRequest) {
           await processConversationStream(dbClient, {
             userId: targetUserId,
             conversationId: resolvedConvId,
-            userMessage: content,
+            userMessage: effectiveContent,
             mediaUrl: media_url,
             locationContext: location_context,
             locale,
             voiceMode: Boolean(body.voice_mode || body.voiceMode),
+            isInitialGreeting: isGreeting,
             sessionTurns: Array.isArray(body.session_turns || body.sessionTurns) ? (body.session_turns || body.sessionTurns) : undefined
           }, (event) => {
             const dataStr = `data: ${JSON.stringify(event)}\n\n`;
@@ -133,11 +167,12 @@ export async function POST(req: NextRequest) {
     const result = await processConversation(dbClient, {
       userId: targetUserId,
       conversationId: resolvedConvId,
-      userMessage: content,
+      userMessage: effectiveContent,
       mediaUrl: media_url,
       locationContext: location_context,
       locale,
       voiceMode: Boolean(body.voice_mode || body.voiceMode),
+      isInitialGreeting: isGreeting,
       sessionTurns: Array.isArray(body.session_turns || body.sessionTurns) ? (body.session_turns || body.sessionTurns) : undefined
     });
 

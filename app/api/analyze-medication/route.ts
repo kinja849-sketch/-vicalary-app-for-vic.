@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { SafetyEngine } from '@/lib/services/SafetyEngine';
+import { callChatCompletionWithFallback, getPrimaryApiKey, getBackupApiKey } from '@/lib/ai/ai-fallback';
 
 export async function POST(req: NextRequest) {
   try {
@@ -12,10 +13,10 @@ export async function POST(req: NextRequest) {
     }
 
     const supabase = createServerSupabaseClient();
-    const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+    const hasAIKey = !!(getPrimaryApiKey() || getBackupApiKey());
 
-    if (!apiKey) {
-      return NextResponse.json({ error: 'OpenAI API key not configured' }, { status: 500 });
+    if (!hasAIKey) {
+      return NextResponse.json({ error: 'AI provider API key not configured (neither primary nor backup)' }, { status: 500 });
     }
 
     // 1. Load User Safety Profile from Onboarding & Settings
@@ -81,27 +82,13 @@ Return ONLY a valid JSON object matching this schema:
       }];
     }
 
-    const visionRes = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages,
-        response_format: { type: 'json_object' }
-      })
+    const visionResult = await callChatCompletionWithFallback({
+      model: 'gpt-4o',
+      messages,
+      response_format: { type: 'json_object' }
     });
 
-    if (!visionRes.ok) {
-      const errText = await visionRes.text();
-      console.error('[analyze-medication] OpenAI Vision error:', errText);
-      throw new Error(`OpenAI Vision analysis failed: ${errText}`);
-    }
-
-    const visionJson = await visionRes.json();
-    const medData = JSON.parse(visionJson.choices[0].message.content || '{}');
+    const medData = JSON.parse(visionResult.choices[0]?.message?.content || '{}');
 
     const medName = medData.name || inputMedName || 'Scanned Medication';
     const genericName = medData.generic_name || 'Pharmaceutical Product';
@@ -184,27 +171,13 @@ Return ONLY a JSON object:
   "healthStatus": "${isSuitable ? 'GOOD' : 'POOR'}"
 }`;
 
-    const synthesisRes = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [{ role: 'user', content: synthesisPrompt }],
-        response_format: { type: 'json_object' }
-      })
+    const synthesisResult = await callChatCompletionWithFallback({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: synthesisPrompt }],
+      response_format: { type: 'json_object' }
     });
 
-    if (!synthesisRes.ok) {
-      const errText = await synthesisRes.text();
-      console.error('[analyze-medication] Synthesis OpenAI error:', errText);
-      throw new Error(`OpenAI Synthesis failed: ${errText}`);
-    }
-
-    const synthesisJson = await synthesisRes.json();
-    const synthData = JSON.parse(synthesisJson.choices[0].message.content || '{}');
+    const synthData = JSON.parse(synthesisResult.choices[0]?.message?.content || '{}');
 
     return NextResponse.json({
       name: medName,

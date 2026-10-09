@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { NutritionNormalizer, IdentifiedFoodItem } from '@/lib/nutrition/NutritionNormalizer';
 import { SafetyEngine } from '@/lib/services/SafetyEngine';
+import { callChatCompletionWithFallback, getPrimaryApiKey, getBackupApiKey } from '@/lib/ai/ai-fallback';
 
 export async function POST(req: NextRequest) {
   try {
@@ -13,10 +14,10 @@ export async function POST(req: NextRequest) {
     }
 
     const supabase = createServerSupabaseClient();
-    const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+    const hasAIKey = !!(getPrimaryApiKey() || getBackupApiKey());
 
-    if (!apiKey) {
-      return NextResponse.json({ error: 'OpenAI API key not configured' }, { status: 500 });
+    if (!hasAIKey) {
+      return NextResponse.json({ error: 'AI provider API key not configured (neither primary nor backup)' }, { status: 500 });
     }
 
     // ─── 1. FETCH USER PROFILE, ONBOARDING, AND TODAY'S CANONICAL MEAL PLAN ───
@@ -103,39 +104,25 @@ Return ONLY a valid JSON object matching this schema:
   ]
 }`;
 
-    const visionResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'text', text: visionSystemPrompt },
-            {
-              type: 'image_url',
-              image_url: {
-                url: imageBase64 ? `data:image/jpeg;base64,${imageBase64}` : imageUrl,
-                detail: 'auto'
-              }
+    const visionResult = await callChatCompletionWithFallback({
+      model: 'gpt-4o',
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: visionSystemPrompt },
+          {
+            type: 'image_url',
+            image_url: {
+              url: imageBase64 ? `data:image/jpeg;base64,${imageBase64}` : imageUrl,
+              detail: 'auto'
             }
-          ]
-        }],
-        response_format: { type: 'json_object' }
-      })
+          }
+        ]
+      }],
+      response_format: { type: 'json_object' }
     });
 
-    if (!visionResponse.ok) {
-      const errText = await visionResponse.text();
-      console.error('[analyze-food-image] Vision OpenAI error:', errText);
-      throw new Error(`OpenAI Vision analysis failed: ${errText}`);
-    }
-
-    const visionJson = await visionResponse.json();
-    const visionParsed = JSON.parse(visionJson.choices[0].message.content || '{}');
+    const visionParsed = JSON.parse(visionResult.choices[0]?.message?.content || '{}');
     const mealTitle = visionParsed.meal_title || 'Meal Analysis';
     const visualUncertainties = visionParsed.visual_uncertainties || 'Portion sizes and preparation fats estimated from visual appearance.';
     const identifiedFoods: IdentifiedFoodItem[] = Array.isArray(visionParsed.foods) && visionParsed.foods.length > 0
@@ -201,27 +188,13 @@ Return ONLY a JSON object:
   "alternative_meal_name": "Exact canonical meal name from today's plan if not recommended, or null if recommended"
 }`;
 
-    const synthesisResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [{ role: 'user', content: synthesisPrompt }],
-        response_format: { type: 'json_object' }
-      })
+    const synthesisResult = await callChatCompletionWithFallback({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: synthesisPrompt }],
+      response_format: { type: 'json_object' }
     });
 
-    if (!synthesisResponse.ok) {
-      const errText = await synthesisResponse.text();
-      console.error('[analyze-food-image] Synthesis OpenAI error:', errText);
-      throw new Error(`OpenAI Synthesis failed: ${errText}`);
-    }
-
-    const synthesisJson = await synthesisResponse.json();
-    const synthesisData = JSON.parse(synthesisJson.choices[0].message.content || '{}');
+    const synthesisData = JSON.parse(synthesisResult.choices[0]?.message?.content || '{}');
 
     // ─── 5. DETERMINISTIC SAFETY GATE (ALLERGIES & MEDICAL CONDITIONS) ───
     const userSafetyProfile = userId 

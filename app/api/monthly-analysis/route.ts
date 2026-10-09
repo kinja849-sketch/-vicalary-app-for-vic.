@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
+import { callChatCompletionWithFallback } from '@/lib/ai/ai-fallback'
 
 export async function POST(req: NextRequest) {
   try {
@@ -17,9 +18,6 @@ export async function POST(req: NextRequest) {
     ])
     
     const explicitUserLang = settingsRes?.data?.language || 'en';
-
-    const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY
-    if (!apiKey) throw new Error('NEXT_PUBLIC_OPENAI_API_KEY not configured.')
 
     const prompt = `Perform a high-level longitudinal health and financial analysis for the user.
 Month: ${month}/${year}
@@ -42,21 +40,15 @@ STRICT JSON OUTPUT:
     "trend": "improving" | "maintaining" | "struggling"
 }
 
-LANGUAGE MANDATE: You MUST write your entire response fluently in this language code ('\${explicitUserLang}'). Do NOT reply in English unless their language code is 'en'.`
+LANGUAGE MANDATE: You MUST write your entire response fluently in this language code ('${explicitUserLang}'). Do NOT reply in English unless their language code is 'en'.`
 
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: [{ role: 'user', content: prompt }],
-        response_format: { type: 'json_object' },
-        max_tokens: 1500,
-      }),
-    })
+    const data = await callChatCompletionWithFallback({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' },
+      max_tokens: 1500,
+    });
 
-    if (!response.ok) throw new Error(`OpenAI failed: ${await response.text()}`)
-    const data = await response.json()
     const parsed = JSON.parse(data.choices[0]?.message?.content || '{}')
 
     supabase.from('monthly_reports').upsert({ user_id: userId, report_year: year, report_month: month, ...parsed }).then()

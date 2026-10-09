@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
+import { callChatCompletionWithFallback } from '@/lib/ai/ai-fallback'
 
 export async function POST(req: NextRequest) {
   try {
@@ -13,9 +14,6 @@ export async function POST(req: NextRequest) {
       supabase.from('onboarding_responses').select('*').eq('user_id', userId).maybeSingle(),
       supabase.from('user_settings').select('*').eq('user_id', userId).maybeSingle(),
     ])
-
-    const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY
-    if (!apiKey) throw new Error('NEXT_PUBLIC_OPENAI_API_KEY not set')
 
     // Geolocation Mapping
     const countryCode = settingsRes.data?.country_code || 'US';
@@ -57,19 +55,13 @@ STRICT JSON OUTPUT:
   ]
 }`
 
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: [{ role: 'user', content: prompt }],
-        response_format: { type: 'json_object' },
-      }),
-    })
+    const response = await callChatCompletionWithFallback({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' },
+    });
 
-    if (!response.ok) throw new Error(`OpenAI error: ${await response.text()}`)
-    const data = await response.json()
-    const parsed = JSON.parse(data.choices[0].message.content)
+    const parsed = JSON.parse(response.choices[0]?.message?.content || '{}');
 
     return NextResponse.json(parsed)
   } catch (error: any) {

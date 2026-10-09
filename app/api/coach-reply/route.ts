@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
 import { WebResearchService } from '@/lib/services/WebResearchService'
+import { callChatCompletionWithFallback, streamChatCompletionWithFallback, getPrimaryApiKey, getBackupApiKey } from '@/lib/ai/ai-fallback'
 
 const COACH_ID = '00000000-0000-0000-0000-000000000001'
 
@@ -134,9 +135,9 @@ export async function POST(req: NextRequest) {
     const payload = await req.json()
     const { record, type, table, system_context, action } = payload
 
-    const apiKey = process.env.OPENAI_API_KEY || process.env.NEXT_PUBLIC_OPENAI_API_KEY
-    if (!apiKey || apiKey.startsWith('your_') || apiKey.startsWith('sk-your')) {
-      console.error('[Coach-Reply] Critical Error: OPENAI_API_KEY is missing or is a placeholder. Check .env.local');
+    const hasAIKey = !!(getPrimaryApiKey() || getBackupApiKey())
+    if (!hasAIKey) {
+      console.error('[Coach-Reply] Critical Error: Neither OPENAI_API_KEY nor BACKUP_AI_API_KEY is configured.');
       throw new Error('AI Provider API key not set or is a placeholder')
     }
 
@@ -170,20 +171,14 @@ This is a brand new, empty conversation and ${userName} has just opened the coac
 Generate a single, warm, friendly 1-2 sentence welcome greeting that introduces yourself as Vee, their supportive health coach, and asks what nutrition, workout, or wellness habit they'd like to work on today.
 DO NOT use markdown symbols, bullet points, or robotic slogans. Keep it natural, human, and inviting.`;
 
-      const aiRes = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          model: process.env.NEXT_PUBLIC_OPENAI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o',
-          messages: [{ role: 'system', content: welcomePrompt }],
-          temperature: 0.7,
-          max_tokens: 150,
-        }),
+      const aiRes = await callChatCompletionWithFallback({
+        model: process.env.NEXT_PUBLIC_OPENAI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o',
+        messages: [{ role: 'system', content: welcomePrompt }],
+        temperature: 0.7,
+        max_tokens: 150,
       });
 
-      if (!aiRes.ok) throw new Error(`OpenAI welcome error: ${await aiRes.text()}`);
-      const aiData = await aiRes.json();
-      const welcomeText = aiData.choices[0]?.message?.content?.trim() || `Hi ${userName}! I'm Vee, your personal health coach. What nutrition or wellness goal would you like to focus on today?`;
+      const welcomeText = aiRes.choices[0]?.message?.content?.trim() || `Hi ${userName}! I'm Vee, your personal health coach. What nutrition or wellness goal would you like to focus on today?`;
 
       // Save the generated welcome message to Supabase
       const { data: newMsg, error: insertErr } = await supabase.from('messages').insert({
@@ -355,9 +350,10 @@ USER PROFILE & METRICS:
             formData.append('model', 'whisper-1')
             
             console.log(`[Coach-Reply] Transcribing with Whisper...`)
+            const openAiKey = getPrimaryApiKey() || getBackupApiKey();
             const transRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
               method: 'POST',
-              headers: { Authorization: `Bearer ${apiKey}` },
+              headers: { Authorization: `Bearer ${openAiKey}` },
               body: formData,
             })
             
@@ -461,22 +457,16 @@ USER PROFILE & METRICS:
     if (insertErr || !newMsg) throw new Error(`Failed to create message placeholder: ${insertErr?.message}`)
 
     // AI call with streaming (stream to DB, not to client)
-    const openAiRes = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model: process.env.NEXT_PUBLIC_OPENAI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o',
-        messages: [{ role: 'system', content: systemPrompt }, ...chatWithCurrent.slice(-20)],
-        stream: true,
-        temperature: 0.7,
-        max_tokens: 1500,
-        frequency_penalty: 0.5,
-        presence_penalty: 0.5
-      }),
-    })
+    const { response: openAiRes } = await streamChatCompletionWithFallback({
+      model: process.env.NEXT_PUBLIC_OPENAI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o',
+      messages: [{ role: 'system', content: systemPrompt }, ...chatWithCurrent.slice(-20)],
+      temperature: 0.7,
+      max_tokens: 1500,
+      frequency_penalty: 0.5,
+      presence_penalty: 0.5
+    });
 
-    if (!openAiRes.ok) throw new Error(`OpenAI error: ${await openAiRes.text()}`)
-    if (!openAiRes.body) throw new Error('No stream body from AI')
+    if (!openAiRes.body) throw new Error('No stream body from AI');
 
     const reader = openAiRes.body.getReader()
     const decoder = new TextDecoder('utf-8')

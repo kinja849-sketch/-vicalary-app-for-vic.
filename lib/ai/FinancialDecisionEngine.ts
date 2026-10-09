@@ -1,9 +1,5 @@
 import { BudgetEngine, BudgetSummary } from '../financial/BudgetEngine';
-import OpenAI from 'openai'; // or your existing AI provider setup
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+import { callChatCompletionWithFallback } from './ai-fallback';
 
 export class FinancialDecisionEngine {
   /**
@@ -56,7 +52,7 @@ User Financial State:
 `;
 
     try {
-      const response = await openai.chat.completions.create({
+      const response = await callChatCompletionWithFallback({
         model: 'gpt-4o-mini',
         messages: [
           { role: 'system', content: systemPrompt },
