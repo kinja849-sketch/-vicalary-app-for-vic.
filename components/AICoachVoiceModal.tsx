@@ -9,7 +9,7 @@ import { supabase } from '@/lib/supabase';
 import HealthCoachAvatar, { CoachState } from '@/components/avatar/HealthCoachAvatar';
 import { permissionManager } from '@/lib/services/PermissionManager';
 import { normalizeSpokenInput } from '@/lib/services/ai/SpeechNormalizer';
-import { DEFAULT_COACH_VOICE } from '@/lib/services/ai/ConversationOrchestrator';
+const DEFAULT_COACH_VOICE = 'nova';
 
 interface AICoachVoiceModalProps {
   userId: string;

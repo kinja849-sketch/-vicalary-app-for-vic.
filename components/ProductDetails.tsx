@@ -350,28 +350,28 @@ export function ProductDetails({
         {isMedication ? (
           <div className="space-y-6">
             {/* Generic & Purpose */}
-            <section className="bg-white/5 border border-white/10 rounded-[2rem] p-6 sm:p-7 shadow-lg space-y-4">
-              <div className="flex items-center gap-2">
-                <div className="size-8 rounded-xl bg-purple-500/20 flex items-center justify-center text-purple-400 border border-purple-500/30">
+            <section className="bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-[2rem] p-6 sm:p-7 shadow-lg space-y-4">
+              <div className="flex items-center gap-2.5">
+                <div className="size-8 rounded-xl bg-purple-500/20 flex items-center justify-center text-purple-600 dark:text-purple-400 border border-purple-500/30">
                   <Pill className="w-4 h-4" />
                 </div>
                 <div>
-                  <h2 className="text-xs font-black text-white uppercase tracking-wider">Medication Details</h2>
-                  {generic_name && <span className="text-xs text-purple-300 font-semibold">Generic: {generic_name}</span>}
+                  <h2 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">Medication Details</h2>
+                  {generic_name && <span className="text-xs text-purple-700 dark:text-purple-300 font-bold">Generic: {generic_name}</span>}
                 </div>
               </div>
 
               {purpose && (
-                <div className="p-4 bg-purple-500/10 border border-purple-500/20 rounded-2xl">
-                  <h3 className="text-xs font-bold text-purple-300 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                <div className="p-4 bg-purple-50 dark:bg-purple-500/10 border border-purple-200 dark:border-purple-500/20 rounded-2xl">
+                  <h3 className="text-xs font-bold text-purple-800 dark:text-purple-300 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
                     <Dna className="w-3.5 h-3.5" /> Mechanism & Purpose
                   </h3>
-                  <p className="text-slate-300 text-sm leading-relaxed">{purpose}</p>
+                  <p className="text-slate-800 dark:text-slate-200 text-sm font-medium leading-relaxed">{purpose}</p>
                 </div>
               )}
 
               {description && (
-                <div className="text-slate-300 text-sm leading-relaxed space-y-3 pt-1">
+                <div className="text-slate-800 dark:text-slate-200 text-sm leading-relaxed space-y-3 pt-1">
                   {description.split('\n\n').map((p: string, i: number) => <p key={i}>{p}</p>)}
                 </div>
               )}
@@ -379,41 +379,33 @@ export function ProductDetails({
 
             {/* Warnings & Precautions */}
             {warnings && (
-              <section className="bg-amber-500/10 border border-amber-500/20 rounded-[2rem] p-6 shadow-lg">
-                <div className="flex items-center gap-2 mb-2 text-amber-300 font-bold text-xs uppercase tracking-wider">
-                  <TriangleAlert className="w-4 h-4 text-amber-400" /> Warnings & Precautions
+              <section className="bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded-[2rem] p-6 shadow-lg">
+                <div className="flex items-center gap-2 mb-2 text-amber-900 dark:text-amber-300 font-bold text-xs uppercase tracking-wider">
+                  <TriangleAlert className="w-4 h-4 text-amber-600 dark:text-amber-400" /> Warnings & Precautions
                 </div>
-                <p className="text-amber-200/90 text-sm leading-relaxed">{warnings}</p>
+                <p className="text-amber-950 dark:text-amber-200/90 text-sm font-medium leading-relaxed">{warnings}</p>
               </section>
             )}
 
             {/* Side Effects */}
             {side_effects && (
-              <section className="bg-rose-500/10 border border-rose-500/20 rounded-[2rem] p-6 shadow-lg">
-                <div className="flex items-center gap-2 mb-2 text-rose-300 font-bold text-xs uppercase tracking-wider">
-                  <AlertCircle className="w-4 h-4 text-rose-400" /> Common Side Effects
+              <section className="bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/20 rounded-[2rem] p-6 shadow-lg">
+                <div className="flex items-center gap-2 mb-2 text-rose-900 dark:text-rose-300 font-bold text-xs uppercase tracking-wider">
+                  <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400" /> Common Side Effects
                 </div>
-                <p className="text-slate-300 text-sm leading-relaxed">{side_effects}</p>
+                <p className="text-slate-800 dark:text-slate-200 text-sm font-medium leading-relaxed">{side_effects}</p>
               </section>
             )}
 
             {/* Drug Interactions */}
             {interactions && (
-              <section className="bg-white/5 border border-white/10 rounded-[2rem] p-6 shadow-lg">
-                <div className="flex items-center gap-2 mb-2 text-slate-300 font-bold text-xs uppercase tracking-wider">
+              <section className="bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-[2rem] p-6 shadow-lg">
+                <div className="flex items-center gap-2 mb-2 text-slate-900 dark:text-slate-300 font-bold text-xs uppercase tracking-wider">
                   <HeartPulse className="w-4 h-4 text-vic-blue" /> Drug Interactions
                 </div>
-                <p className="text-slate-300 text-sm leading-relaxed">{interactions}</p>
+                <p className="text-slate-800 dark:text-slate-200 text-sm font-medium leading-relaxed">{interactions}</p>
               </section>
             )}
-
-            {/* Verified Price */}
-            <section className="bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-2xl p-5 flex items-center justify-between shadow-sm">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Verified Retail Price</span>
-              <span className="text-base font-black text-slate-900 dark:text-white">
-                {estimated_price || "Price unavailable"}
-              </span>
-            </section>
           </div>
         ) : (
           /* ─── FOOD PRODUCT BRANCH ─── */
@@ -780,48 +772,72 @@ export function ProductDetails({
       {/* Sticky Bottom Action Dock: ALWAYS VISIBLE AND HORIZONTALLY PROPORTIONED */}
       <footer className="shrink-0 z-30 bg-white/95 dark:bg-[#0b141a]/95 backdrop-blur-xl border-t border-slate-200 dark:border-slate-800 px-5 py-3.5 shadow-lg max-w-2xl mx-auto w-full">
         <div className="flex flex-row items-center gap-3 w-full">
-          {!isFlagged ? (
+          {isMedication ? (
             <button
-              onClick={handleConfirmLog}
-              disabled={isLogging}
-              className="flex-1 h-14 px-4 bg-vic-green hover:bg-vic-green/90 active:scale-[0.98] text-slate-900 rounded-2xl font-black text-sm shadow-md flex items-center justify-center gap-2.5 transition-all disabled:opacity-50 whitespace-nowrap cursor-pointer"
+              onClick={handleConsultCoach}
+              disabled={isNavigatingCoach}
+              className="w-full h-14 px-4 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 active:scale-[0.98] text-white rounded-2xl font-black text-sm shadow-lg shadow-blue-500/25 flex items-center justify-center gap-2.5 transition-all disabled:opacity-50 whitespace-nowrap cursor-pointer border border-blue-400/30"
             >
-              {isLogging ? (
-                <div className="w-5 h-5 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+              {isNavigatingCoach ? (
+                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
               ) : (
-                <Check className="w-5 h-5 text-slate-900" strokeWidth={3} />
+                <img
+                  src="/app-logo.png"
+                  alt="Application Logo"
+                  className="w-8 h-8 rounded-full object-cover shrink-0 ring-2 ring-white/80 shadow-md"
+                  onError={(e) => {
+                    (e.target as HTMLElement).setAttribute('src', '/icon.png');
+                  }}
+                />
               )}
-              <span>Budget</span>
+              <span className="tracking-wide">Health Coach</span>
             </button>
           ) : (
-            <button
-              onClick={onClose}
-              className="flex-1 h-14 px-4 bg-rose-600 hover:bg-rose-500 active:scale-[0.98] text-white rounded-2xl font-black text-sm shadow-md flex items-center justify-center gap-2.5 transition-all whitespace-nowrap cursor-pointer"
-            >
-              <AlertCircle className="w-5 h-5" />
-              <span>Avoid Product</span>
-            </button>
-          )}
+            <>
+              {!isFlagged ? (
+                <button
+                  onClick={handleConfirmLog}
+                  disabled={isLogging}
+                  className="flex-1 h-14 px-4 bg-vic-green hover:bg-vic-green/90 active:scale-[0.98] text-slate-900 rounded-2xl font-black text-sm shadow-md flex items-center justify-center gap-2.5 transition-all disabled:opacity-50 whitespace-nowrap cursor-pointer"
+                >
+                  {isLogging ? (
+                    <div className="w-5 h-5 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <Check className="w-5 h-5 text-slate-900" strokeWidth={3} />
+                  )}
+                  <span>Budget</span>
+                </button>
+              ) : (
+                <button
+                  onClick={onClose}
+                  className="flex-1 h-14 px-4 bg-rose-600 hover:bg-rose-500 active:scale-[0.98] text-white rounded-2xl font-black text-sm shadow-md flex items-center justify-center gap-2.5 transition-all whitespace-nowrap cursor-pointer"
+                >
+                  <AlertCircle className="w-5 h-5" />
+                  <span>Avoid Product</span>
+                </button>
+              )}
 
-          <button
-            onClick={handleConsultCoach}
-            disabled={isNavigatingCoach}
-            className="flex-1 h-14 px-4 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 active:scale-[0.98] text-white rounded-2xl font-black text-sm shadow-lg shadow-blue-500/25 flex items-center justify-center gap-2.5 transition-all disabled:opacity-50 whitespace-nowrap cursor-pointer border border-blue-400/30"
-          >
-            {isNavigatingCoach ? (
-              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <img
-                src="/app-logo.png"
-                alt="Application Logo"
-                className="w-8 h-8 rounded-full object-cover shrink-0 ring-2 ring-white/80 shadow-md"
-                onError={(e) => {
-                  (e.target as HTMLElement).setAttribute('src', '/icon.png');
-                }}
-              />
-            )}
-            <span className="tracking-wide">Health Coach</span>
-          </button>
+              <button
+                onClick={handleConsultCoach}
+                disabled={isNavigatingCoach}
+                className="flex-1 h-14 px-4 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 active:scale-[0.98] text-white rounded-2xl font-black text-sm shadow-lg shadow-blue-500/25 flex items-center justify-center gap-2.5 transition-all disabled:opacity-50 whitespace-nowrap cursor-pointer border border-blue-400/30"
+              >
+                {isNavigatingCoach ? (
+                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <img
+                    src="/app-logo.png"
+                    alt="Application Logo"
+                    className="w-8 h-8 rounded-full object-cover shrink-0 ring-2 ring-white/80 shadow-md"
+                    onError={(e) => {
+                      (e.target as HTMLElement).setAttribute('src', '/icon.png');
+                    }}
+                  />
+                )}
+                <span className="tracking-wide">Health Coach</span>
+              </button>
+            </>
+          )}
         </div>
 
         {needs_crowdsourcing && (
