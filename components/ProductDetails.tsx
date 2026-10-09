@@ -18,6 +18,14 @@ export interface ProductDetailsProps {
   servingSize?: string;
   category?: string;
   description?: string;
+  ingredients?: string | null;
+  coloring?: {
+    has_colorings?: boolean;
+    has_synthetic?: boolean;
+    synthetic_colors?: string[];
+    natural_colors?: string[];
+    summary?: string;
+  } | null;
   vitamins_and_nutrition?: string;
   recommendation?: string;
   recommended_pairings?: string;
@@ -43,6 +51,8 @@ export interface ProductDetailsProps {
     source?: string;
     retrievedAt?: string;
     retailer?: string;
+    needs_user_price?: boolean;
+    confidence?: number;
   } | null;
   is_compliant?: boolean;
   status?: 'FLAGGED' | 'APPROVED' | string;
@@ -77,6 +87,8 @@ export function ProductDetails({
   servingSize,
   category,
   description,
+  ingredients,
+  coloring,
   vitamins_and_nutrition,
   recommendation,
   healthStatus = "GOOD",
@@ -120,6 +132,42 @@ export function ProductDetails({
   const [isNavigatingCoach, setIsNavigatingCoach] = useState(false);
   const [showCrowdsourceForm, setShowCrowdsourceForm] = useState(false);
 
+  // Authentic price confirmation: allow user to inspect or adjust before confirming to daily budget
+  const initialNumericPrice = (typeof price === 'number' && !isNaN(price) && price > 0)
+    ? price
+    : (typeof price_metadata?.amount === 'number' && !isNaN(price_metadata.amount) && price_metadata.amount > 0)
+      ? price_metadata.amount
+      : (typeof estimated_price === 'number' && estimated_price > 0)
+        ? estimated_price
+        : (estimated_price ? parseInt(String(estimated_price).replace(/[^0-9]/g, ''), 10) || 0 : 0);
+  const [userEnteredPrice, setUserEnteredPrice] = useState<number | ''>(initialNumericPrice > 0 ? initialNumericPrice : '');
+  const [isEditingPrice, setIsEditingPrice] = useState(false);
+
+  // Split ingredients cleanly into distinct items respecting parentheses
+  const ingredientList = React.useMemo(() => {
+    if (!ingredients || typeof ingredients !== 'string') return [];
+    const cleaned = ingredients.replace(/^ingredients:\s*/i, '').replace(/\.$/, '');
+    const items: string[] = [];
+    let current = '';
+    let parenDepth = 0;
+    for (let i = 0; i < cleaned.length; i++) {
+      const char = cleaned[i];
+      if (char === '(' || char === '[' || char === '{') parenDepth++;
+      else if (char === ')' || char === ']' || char === '}') parenDepth = Math.max(0, parenDepth - 1);
+      
+      if ((char === ',' || char === ';' || char === '\n' || char === '•') && parenDepth === 0) {
+        const trimmed = current.trim();
+        if (trimmed) items.push(trimmed);
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    const lastTrimmed = current.trim();
+    if (lastTrimmed) items.push(lastTrimmed);
+    return items.filter(it => it.length > 0);
+  }, [ingredients]);
+
   // STRICT RULE: Hide bottom navigation while viewing Product Details
   useEffect(() => {
     setNavbarHidden(true);
@@ -130,7 +178,7 @@ export function ProductDetails({
   const isFlagged = status === 'FLAGGED' || is_compliant === false || boycott?.flagged === true;
 
   // STRICT RULE: No auto-save on mount!
-  // Only explicitly save and create purchase transaction when user taps "Log Product"
+  // Only explicitly save and create purchase transaction when user taps "Log Product" / "Budget"
   const handleConfirmLog = async () => {
     if (!user?.id) {
       toast.error("Please sign in to log items");
@@ -139,6 +187,8 @@ export function ProductDetails({
 
     try {
       setIsLogging(true);
+      const confirmedPrice = typeof userEnteredPrice === 'number' ? userEnteredPrice : initialNumericPrice;
+
       const analysisToSave = {
         name: productName,
         calories: calories ?? 0,
@@ -150,28 +200,31 @@ export function ProductDetails({
         sodium_mg: sodium_mg ?? 0,
         healthRating: healthStatus === 'GOOD' ? 8 : 4,
         description,
+        ingredients: ingredients || undefined,
+        coloring: coloring || undefined,
         image_url: productImage,
         barcode: barcode || (productName + (brand || '')).substring(0, 20),
         brand,
         manufacturer,
         origin_country,
-        price: price ?? (typeof estimated_price === 'number' ? estimated_price : (estimated_price ? parseFloat(String(estimated_price).replace(/[^0-9.]/g, '')) || 0 : 0)),
-        estimated_price,
+        price: confirmedPrice,
+        estimated_price: confirmedPrice > 0 ? `${price_metadata?.currency || '$'} ${confirmedPrice.toLocaleString()}` : estimated_price,
         political_warning,
-        is_compliant: !isFlagged
+        is_compliant: !isFlagged,
+        is_scanner_product: true // DEDUCTS from daily budget ledger, DOES NOT add to calorie progress!
       };
 
-      // save with isPurchaseConfirmed = true -> creates financial_transactions budget entry
+      // save with isPurchaseConfirmed = true -> creates financial_transactions and budget_transactions entries
       await saveFoodAnalysis(user.id, analysisToSave, true);
-      queryClient.invalidateQueries({ queryKey: ['daily-progress'] });
-      queryClient.invalidateQueries({ queryKey: ['progress'] });
-      queryClient.invalidateQueries({ queryKey: ['food-history'] });
-      queryClient.invalidateQueries({ queryKey: ['daily-plan'] });
-      queryClient.invalidateQueries({ queryKey: ['daily-summary'] });
-      queryClient.invalidateQueries({ queryKey: ['budget'] });
-      queryClient.invalidateQueries({ queryKey: ['financial-transactions'] });
+      await queryClient.invalidateQueries({ queryKey: ['active-budget'] });
+      await queryClient.invalidateQueries({ queryKey: ['budget'] });
+      await queryClient.invalidateQueries({ queryKey: ['financial-transactions'] });
+      await queryClient.invalidateQueries({ queryKey: ['daily-progress'] });
+      await queryClient.invalidateQueries({ queryKey: ['progress'] });
+      await queryClient.invalidateQueries({ queryKey: ['food-history'] });
+      await queryClient.refetchQueries({ queryKey: ['active-budget'] });
 
-      toast.success(`${productName} logged! Deducted from your budget.`);
+      toast.success(`${productName} logged! Deducted from your daily food budget.`);
 
       router.push("/budget");
     } catch (err: any) {
@@ -232,13 +285,13 @@ export function ProductDetails({
   };
 
   return (
-    <div className="fixed inset-0 z-[9999] bg-[#0b141a] text-white flex flex-col h-[100dvh] overflow-hidden">
+    <div className="fixed inset-0 z-[9999] bg-white dark:bg-[#0b141a] text-slate-900 dark:text-white flex flex-col h-[100dvh] overflow-hidden">
       {/* Top Header Sticky with back button */}
-      <header className="h-16 shrink-0 z-30 flex items-center justify-between px-5 bg-[#0b141a]/95 backdrop-blur-xl border-b border-white/10">
+      <header className="h-16 shrink-0 z-30 flex items-center justify-between px-5 bg-white/95 dark:bg-[#0b141a]/95 backdrop-blur-xl border-b border-slate-200 dark:border-slate-800">
         <button
           onClick={onClose}
           aria-label="Return to Scanner"
-          className="size-10 rounded-full bg-white/10 border border-white/10 flex items-center justify-center text-white hover:bg-white/20 active:scale-95 transition-all"
+          className="size-10 rounded-full bg-slate-100 dark:bg-white/10 border border-slate-200 dark:border-white/10 flex items-center justify-center text-slate-900 dark:text-white hover:bg-slate-200 dark:hover:bg-white/20 active:scale-95 transition-all"
         >
           <ArrowLeft className="w-5 h-5" />
         </button>
@@ -258,7 +311,7 @@ export function ProductDetails({
       {/* Main Vertically Scrollable Content */}
       <main className="flex-1 w-full max-w-2xl mx-auto px-5 py-6 space-y-6 overflow-y-auto">
         {/* Product Photograph Banner */}
-        <div className="relative w-full h-64 sm:h-72 rounded-[2rem] overflow-hidden border border-white/10 shadow-2xl bg-slate-900 shrink-0">
+        <div className="relative w-full h-64 sm:h-72 rounded-[2rem] overflow-hidden border border-slate-200 dark:border-white/10 shadow-2xl bg-slate-900 shrink-0">
           <img
             src={productImage || "https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&q=80&w=600"}
             alt={productName}
@@ -355,9 +408,9 @@ export function ProductDetails({
             )}
 
             {/* Verified Price */}
-            <section className="bg-white/5 border border-white/10 rounded-2xl p-5 flex items-center justify-between">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Verified Retail Price</span>
-              <span className="text-base font-black text-white">
+            <section className="bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-2xl p-5 flex items-center justify-between shadow-sm">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Verified Retail Price</span>
+              <span className="text-base font-black text-slate-900 dark:text-white">
                 {estimated_price || "Price unavailable"}
               </span>
             </section>
@@ -367,36 +420,36 @@ export function ProductDetails({
           <>
             {/* 1. BOYCOTT GATE (BEFORE normal recommendation) */}
             {isFlagged ? (
-              <section className="bg-rose-500/15 border-2 border-rose-500/40 rounded-[2rem] p-6 sm:p-7 shadow-2xl space-y-5">
+              <section className="bg-rose-500/10 border-2 border-rose-500/30 rounded-[2rem] p-6 sm:p-7 shadow-xl space-y-5">
                 <div className="flex items-start gap-3">
-                  <div className="size-10 rounded-2xl bg-rose-500/20 flex items-center justify-center text-rose-400 border border-rose-500/30 shrink-0 mt-0.5">
-                    <AlertCircle className="w-5 h-5 text-rose-400" />
+                  <div className="size-10 rounded-2xl bg-rose-500/20 flex items-center justify-center text-rose-500 dark:text-rose-400 border border-rose-500/30 shrink-0 mt-0.5">
+                    <AlertCircle className="w-5 h-5 text-rose-500 dark:text-rose-400" />
                   </div>
                   <div>
-                    <h2 className="text-base font-black text-rose-400 uppercase tracking-wider">
+                    <h2 className="text-base font-black text-rose-600 dark:text-rose-400 uppercase tracking-wider">
                       Ethical Responsibility Alert — Flagged
                     </h2>
-                    <p className="text-xs text-slate-300 mt-1 font-medium">
+                    <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 font-medium">
                       Normal purchase recommendation is suspended at this safety gate.
                     </p>
                   </div>
                 </div>
 
-                <div className="p-5 bg-black/40 border border-rose-500/20 rounded-2xl space-y-3">
+                <div className="p-5 bg-white dark:bg-black/40 border border-rose-500/20 rounded-2xl space-y-3">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-slate-400 uppercase font-bold tracking-wider">Campaign</span>
-                    <span className="text-rose-300 font-black">{boycott?.campaignName || 'Corporate Responsibility Watch'}</span>
+                    <span className="text-slate-500 dark:text-slate-400 uppercase font-bold tracking-wider">Campaign</span>
+                    <span className="text-rose-600 dark:text-rose-300 font-black">{boycott?.campaignName || 'Corporate Responsibility Watch'}</span>
                   </div>
 
                   {boycott?.parentCompany && (
                     <div className="flex items-center justify-between text-xs">
-                      <span className="text-slate-400 uppercase font-bold tracking-wider">Parent Company</span>
-                      <span className="text-white font-bold">{boycott.parentCompany}</span>
+                      <span className="text-slate-500 dark:text-slate-400 uppercase font-bold tracking-wider">Parent Company</span>
+                      <span className="text-slate-900 dark:text-white font-bold">{boycott.parentCompany}</span>
                     </div>
                   )}
 
-                  <div className="pt-2 border-t border-white/10 text-xs text-slate-300 leading-relaxed">
-                    <span className="font-bold text-white block mb-1">Documented Reason:</span>
+                  <div className="pt-2 border-t border-slate-200 dark:border-white/10 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                    <span className="font-bold text-slate-900 dark:text-white block mb-1">Documented Reason:</span>
                     {boycott?.reason || political_warning || 'Documented political affiliation or corporate relationship under active campaign boycott.'}
                   </div>
 
@@ -416,14 +469,14 @@ export function ProductDetails({
 
                 {cheaper_alternatives && cheaper_alternatives.length > 0 && (
                   <div className="space-y-3">
-                    <h3 className="text-xs font-black text-slate-300 uppercase tracking-wider">
+                    <h3 className="text-xs font-black text-slate-900 dark:text-slate-300 uppercase tracking-wider">
                       Recommended Ethical Alternatives
                     </h3>
                     <div className="space-y-2">
                       {cheaper_alternatives.map((alt, i) => (
-                        <div key={i} className="flex items-center justify-between p-3.5 bg-black/30 rounded-xl border border-white/5">
-                          <p className="text-sm font-bold text-white">{alt.name}</p>
-                          <span className="text-xs text-emerald-400 font-semibold">{alt.reason}</span>
+                        <div key={i} className="flex items-center justify-between p-3.5 bg-white dark:bg-black/30 rounded-xl border border-slate-200 dark:border-white/5">
+                          <p className="text-sm font-bold text-slate-900 dark:text-white">{alt.name}</p>
+                          <span className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold">{alt.reason}</span>
                         </div>
                       ))}
                     </div>
@@ -433,8 +486,8 @@ export function ProductDetails({
             ) : (
               /* PASSED GATE: Cleared Banner */
               <div className="flex items-center gap-2 p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl">
-                <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
-                <p className="text-xs font-bold text-emerald-300 uppercase tracking-wider">
+                <ShieldCheck className="w-5 h-5 text-emerald-500 dark:text-emerald-400 shrink-0" />
+                <p className="text-xs font-bold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider">
                   Ethically Cleared — No active boycott or conflict flags on record
                 </p>
               </div>
@@ -444,16 +497,16 @@ export function ProductDetails({
             {!isFlagged && (
               <>
                 {/* SECTION 1: PRODUCT DESCRIPTION */}
-                <section className="bg-slate-900/90 border border-white/15 rounded-[2rem] p-6 sm:p-7 shadow-lg">
+                <section className="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-[2rem] p-6 sm:p-7 shadow-sm">
                   <div className="flex items-center gap-2 mb-3">
                     <div className="size-8 rounded-xl bg-vic-blue/20 flex items-center justify-center text-vic-blue border border-vic-blue/30">
                       <ShoppingCart className="w-4 h-4" />
                     </div>
-                    <h2 className="text-xs font-black text-white uppercase tracking-wider">
+                    <h2 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
                       Product Description
                     </h2>
                   </div>
-                  <div className="text-slate-100 text-sm sm:text-[15px] leading-relaxed space-y-3 font-medium">
+                  <div className="text-slate-600 dark:text-slate-300 text-sm sm:text-[15px] leading-relaxed space-y-3 font-normal">
                     {description ? (
                       description.split('\n\n').map((para: string, i: number) => <p key={i}>{para}</p>)
                     ) : (
@@ -462,18 +515,107 @@ export function ProductDetails({
                   </div>
                 </section>
 
+                {/* SECTION 1B: INGREDIENTS & FOOD COLORINGS */}
+                <section className="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-[2rem] p-6 sm:p-7 shadow-sm space-y-4">
+                  <div className="flex items-center gap-2">
+                    <div className="size-8 rounded-xl bg-emerald-500/20 flex items-center justify-center text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+                      <Sparkles className="w-4 h-4" />
+                    </div>
+                    <h2 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
+                      Ingredients & Food Coloring
+                    </h2>
+                  </div>
+
+                  {/* Declared Ingredients Breakdown */}
+                  <div className="bg-white dark:bg-black/30 border border-slate-200 dark:border-white/5 rounded-2xl p-4 sm:p-5 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block">
+                        Packaging Ingredients {ingredientList.length > 0 && `(${ingredientList.length})`}
+                      </span>
+                      {ingredientList.length > 0 && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                          Authentic Label
+                        </span>
+                      )}
+                    </div>
+
+                    {ingredientList.length > 0 ? (
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        {ingredientList.map((item, idx) => (
+                          <div
+                            key={idx}
+                            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/60 text-xs sm:text-[13px] font-semibold text-slate-800 dark:text-slate-100 shadow-sm"
+                          >
+                            <span className="size-1.5 rounded-full bg-emerald-500 shrink-0" />
+                            <span>{item}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-slate-700 dark:text-slate-200 text-xs sm:text-sm leading-relaxed">
+                        {ingredients || "Ingredients not declared on product packaging."}
+                      </p>
+                    )}
+
+                    {/* Original packaging statement if more than 1 item */}
+                    {ingredientList.length > 1 && ingredients && (
+                      <div className="pt-2 border-t border-slate-100 dark:border-white/5">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                          Full Packaging Statement
+                        </span>
+                        <p className="text-slate-500 dark:text-slate-400 text-xs leading-relaxed italic">
+                          "{ingredients}"
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Accurate Food Coloring Detection */}
+                  <div className="space-y-2 pt-1">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 block">
+                      Food Coloring Analysis
+                    </span>
+                    <div className="flex flex-wrap gap-2">
+                      {coloring?.has_synthetic && coloring.synthetic_colors && coloring.synthetic_colors.length > 0 ? (
+                        coloring.synthetic_colors.map((c, i) => (
+                          <span key={`syn-${i}`} className="px-3 py-1.5 bg-rose-500/20 border border-rose-500/40 rounded-xl text-xs font-bold text-rose-600 dark:text-rose-300 flex items-center gap-1.5">
+                            <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                            Synthetic: {c}
+                          </span>
+                        ))
+                      ) : null}
+
+                      {coloring?.natural_colors && coloring.natural_colors.length > 0 ? (
+                        coloring.natural_colors.map((nc, i) => (
+                          <span key={`nat-${i}`} className="px-3 py-1.5 bg-emerald-500/20 border border-emerald-500/40 rounded-xl text-xs font-bold text-emerald-600 dark:text-emerald-300 flex items-center gap-1.5">
+                            <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                            Natural: {nc}
+                          </span>
+                        ))
+                      ) : null}
+
+                      {!coloring?.has_colorings && (
+                        <span className="px-3 py-1.5 bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                          <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                          No added food colorings detected
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </section>
+
                 {/* SECTION 2: VITAMINS & NUTRITION */}
-                <section className="bg-slate-900/90 border border-white/15 rounded-[2rem] p-6 sm:p-7 shadow-lg space-y-6">
+                <section className="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-[2rem] p-6 sm:p-7 shadow-sm space-y-6">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <div className="size-8 rounded-xl bg-emerald-500/20 flex items-center justify-center text-emerald-400 border border-emerald-500/30">
+                      <div className="size-8 rounded-xl bg-emerald-500/20 flex items-center justify-center text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
                         <Scale className="w-4 h-4" />
                       </div>
                       <div>
-                        <h2 className="text-xs font-black text-white uppercase tracking-wider">
+                        <h2 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
                           Vitamins & Nutrition
                         </h2>
-                        <span className="text-[11px] text-slate-300 font-semibold">
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400 font-semibold">
                           {servingSize ? `Basis: ${servingSize}` : (serving_basis === 'serving' ? 'Per Serving' : 'Per 100g')}
                         </span>
                       </div>
@@ -481,64 +623,64 @@ export function ProductDetails({
                   </div>
 
                   {/* Calories Card */}
-                  <div className="bg-slate-950/80 border border-white/15 rounded-2xl p-5 text-center shadow-inner">
-                    <span className="text-xs font-bold text-slate-300 uppercase tracking-widest block mb-1">
+                  <div className="bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-2xl p-5 text-center shadow-inner">
+                    <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest block mb-1">
                       Nutritional Energy
                     </span>
-                    <div className="text-4xl sm:text-5xl font-black text-white tracking-tight my-1">
+                    <div className="text-4xl sm:text-5xl font-black text-slate-900 dark:text-white tracking-tight my-1">
                       {calories !== null && calories !== undefined ? (
-                        <><span className="text-[#21ff64]">~{calories}</span> <span className="text-2xl font-bold text-slate-300">kcal</span></>
+                        <><span className="text-emerald-600 dark:text-[#21ff64]">~{calories}</span> <span className="text-2xl font-bold text-slate-400">kcal</span></>
                       ) : (
-                        <span className="text-2xl font-bold text-amber-400">Calorie Data Pending</span>
+                        <span className="text-2xl font-bold text-amber-500">Calorie Data Pending</span>
                       )}
                     </div>
                     {servingSize && (
-                      <p className="text-xs text-slate-300 font-medium">Serving Size: {servingSize}</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">Serving Size: {servingSize}</p>
                     )}
                   </div>
 
                   {/* Macros Grid */}
                   <div className="grid grid-cols-3 sm:grid-cols-6 gap-2.5">
-                    <div className="bg-black/60 rounded-2xl p-3 border border-white/10 text-center">
-                      <span className="text-[10px] uppercase font-bold text-slate-300 tracking-wider">Protein</span>
-                      <p className="text-base font-black text-white mt-0.5">{protein !== null && protein !== undefined ? `${protein}g` : '–'}</p>
+                    <div className="bg-white dark:bg-black/30 rounded-2xl p-3 border border-slate-200 dark:border-white/5 text-center">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Protein</span>
+                      <p className="text-base font-black text-slate-900 dark:text-white mt-0.5">{protein !== null && protein !== undefined ? `${protein}g` : '–'}</p>
                     </div>
-                    <div className="bg-black/60 rounded-2xl p-3 border border-white/10 text-center">
-                      <span className="text-[10px] uppercase font-bold text-slate-300 tracking-wider">Carbs</span>
-                      <p className="text-base font-black text-white mt-0.5">{carbs !== null && carbs !== undefined ? `${carbs}g` : '–'}</p>
+                    <div className="bg-white dark:bg-black/30 rounded-2xl p-3 border border-slate-200 dark:border-white/5 text-center">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Carbs</span>
+                      <p className="text-base font-black text-slate-900 dark:text-white mt-0.5">{carbs !== null && carbs !== undefined ? `${carbs}g` : '–'}</p>
                     </div>
-                    <div className="bg-black/60 rounded-2xl p-3 border border-white/10 text-center">
-                      <span className="text-[10px] uppercase font-bold text-slate-300 tracking-wider">Fat</span>
-                      <p className="text-base font-black text-white mt-0.5">{fat !== null && fat !== undefined ? `${fat}g` : '–'}</p>
+                    <div className="bg-white dark:bg-black/30 rounded-2xl p-3 border border-slate-200 dark:border-white/5 text-center">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Fat</span>
+                      <p className="text-base font-black text-slate-900 dark:text-white mt-0.5">{fat !== null && fat !== undefined ? `${fat}g` : '–'}</p>
                     </div>
-                    <div className="bg-black/60 rounded-2xl p-3 border border-white/10 text-center">
-                      <span className="text-[10px] uppercase font-bold text-slate-300 tracking-wider">Sugar</span>
-                      <p className="text-base font-black text-white mt-0.5">{sugar !== null && sugar !== undefined ? `${sugar}g` : '–'}</p>
+                    <div className="bg-white dark:bg-black/30 rounded-2xl p-3 border border-slate-200 dark:border-white/5 text-center">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Sugar</span>
+                      <p className="text-base font-black text-slate-900 dark:text-white mt-0.5">{sugar !== null && sugar !== undefined ? `${sugar}g` : '–'}</p>
                     </div>
-                    <div className="bg-black/60 rounded-2xl p-3 border border-white/10 text-center">
-                      <span className="text-[10px] uppercase font-bold text-slate-300 tracking-wider">Fiber</span>
-                      <p className="text-base font-black text-white mt-0.5">{fiber !== null && fiber !== undefined ? `${fiber}g` : '–'}</p>
+                    <div className="bg-white dark:bg-black/30 rounded-2xl p-3 border border-slate-200 dark:border-white/5 text-center">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Fiber</span>
+                      <p className="text-base font-black text-slate-900 dark:text-white mt-0.5">{fiber !== null && fiber !== undefined ? `${fiber}g` : '–'}</p>
                     </div>
-                    <div className="bg-black/60 rounded-2xl p-3 border border-white/10 text-center">
-                      <span className="text-[10px] uppercase font-bold text-slate-300 tracking-wider">Sodium</span>
-                      <p className="text-base font-black text-white mt-0.5">{sodium_mg !== null && sodium_mg !== undefined ? `${sodium_mg}mg` : '–'}</p>
+                    <div className="bg-white dark:bg-black/30 rounded-2xl p-3 border border-slate-200 dark:border-white/5 text-center">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Sodium</span>
+                      <p className="text-base font-black text-slate-900 dark:text-white mt-0.5">{sodium_mg !== null && sodium_mg !== undefined ? `${sodium_mg}mg` : '–'}</p>
                     </div>
                   </div>
 
                   {/* Vitamins & Minerals */}
                   {(vitamins.length > 0 || minerals.length > 0) && (
                     <div className="space-y-2 pt-1">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-300 block">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 block">
                         Documented Vitamins & Minerals
                       </span>
                       <div className="flex flex-wrap gap-2">
                         {vitamins.map((v, i) => (
-                          <span key={i} className="px-3 py-1.5 bg-vic-blue/20 border border-vic-blue/40 rounded-xl text-xs font-semibold text-vic-blue">
+                          <span key={i} className="px-3 py-1.5 bg-vic-blue/15 border border-vic-blue/30 rounded-xl text-xs font-semibold text-vic-blue">
                             {v}
                           </span>
                         ))}
                         {minerals.map((m, i) => (
-                          <span key={i} className="px-3 py-1.5 bg-emerald-500/20 border border-emerald-500/40 rounded-xl text-xs font-semibold text-emerald-300">
+                          <span key={i} className="px-3 py-1.5 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-xs font-semibold text-emerald-600 dark:text-emerald-300">
                             {m}
                           </span>
                         ))}
@@ -548,23 +690,23 @@ export function ProductDetails({
 
                   {/* Nutrition Narrative Paragraph */}
                   {vitamins_and_nutrition && (
-                    <div className="pt-2 border-t border-white/10 text-slate-100 text-sm sm:text-[15px] leading-relaxed space-y-3 font-medium">
+                    <div className="pt-2 border-t border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300 text-sm sm:text-[15px] leading-relaxed space-y-3 font-normal">
                       {vitamins_and_nutrition.split('\n\n').map((p: string, i: number) => <p key={i}>{p}</p>)}
                     </div>
                   )}
                 </section>
 
                 {/* SECTION 3: RECOMMENDED FOR YOUR PLAN */}
-                <section className="bg-slate-900/90 border border-vic-blue/30 rounded-[2rem] p-6 sm:p-7 shadow-lg space-y-4">
+                <section className="bg-vic-blue/10 border border-vic-blue/20 rounded-[2rem] p-6 sm:p-7 shadow-sm space-y-4">
                   <div className="flex items-center gap-2">
                     <div className="size-8 rounded-xl bg-vic-blue/20 flex items-center justify-center text-vic-blue border border-vic-blue/30">
                       <Check className="w-4 h-4" />
                     </div>
-                    <h2 className="text-xs font-black text-white uppercase tracking-wider">
+                    <h2 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
                       Recommended for Your Plan
                     </h2>
                   </div>
-                  <div className="text-slate-100 text-sm sm:text-[15px] leading-relaxed space-y-3 font-medium">
+                  <div className="text-slate-600 dark:text-slate-300 text-sm sm:text-[15px] leading-relaxed space-y-3 font-normal">
                     {recommendation ? (
                       recommendation.split('\n\n').map((p: string, i: number) => <p key={i}>{p}</p>)
                     ) : (
@@ -573,22 +715,60 @@ export function ProductDetails({
                   </div>
                 </section>
 
-                {/* SECTION 4: LOCALIZED PRICE */}
-                <section className="bg-slate-900/90 border border-white/15 rounded-2xl p-5 flex items-center justify-between shadow-lg">
-                  <div>
-                    <span className="text-xs font-bold uppercase tracking-wider text-slate-300 block">Verified Local Price</span>
-                    {price_metadata?.source && (
-                      <span className="text-[11px] text-slate-400">Source: {price_metadata.source}</span>
-                    )}
+                {/* SECTION 4: LOCALIZED PRICE & BUDGET CONFIRMATION */}
+                <section className="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white block">
+                        {price_metadata?.source?.includes('Cache') ? 'Verified Local Price' : 'Estimated Local Price'}
+                      </span>
+                      {price_metadata?.source && (
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400">Source: {price_metadata.source}</span>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      {isEditingPrice ? (
+                        <div className="flex items-center gap-1.5 justify-end">
+                          <span className="text-xs font-bold text-slate-500 dark:text-slate-400">{price_metadata?.currency || '$'}</span>
+                          <input
+                            type="number"
+                            step="any"
+                            value={userEnteredPrice}
+                            onChange={(e) => setUserEnteredPrice(e.target.value === '' ? '' : parseFloat(e.target.value))}
+                            placeholder="0.00"
+                            className="w-28 px-2 py-1 bg-white dark:bg-black/70 border border-vic-green rounded-lg text-right font-black text-slate-900 dark:text-white text-base focus:outline-none"
+                            autoFocus
+                          />
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setIsEditingPrice(true)}
+                          className="text-right group flex items-baseline gap-1.5 justify-end cursor-pointer"
+                          title="Click to adjust purchase price"
+                        >
+                          <span className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-[#21ff64] group-hover:underline">
+                            {userEnteredPrice !== '' && Number(userEnteredPrice) > 0
+                              ? `${price_metadata?.currency || '$'} ${Number(userEnteredPrice).toLocaleString()}`
+                              : (estimated_price || "Price Unavailable")}
+                          </span>
+                        </button>
+                      )}
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400 block mt-0.5">Tap to adjust shelf price</span>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <span className="text-xl font-black text-[#21ff64]">
-                      {estimated_price || "Price unavailable"}
-                    </span>
-                    {!estimated_price && (
-                      <span className="text-[10px] text-slate-400 block">No verified retailer cache</span>
-                    )}
-                  </div>
+
+                  {isEditingPrice && (
+                    <div className="flex justify-end pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingPrice(false)}
+                        className="text-[11px] font-bold text-emerald-600 dark:text-vic-green hover:underline uppercase tracking-wider"
+                      >
+                        Confirm Price
+                      </button>
+                    </div>
+                  )}
                 </section>
               </>
             )}
@@ -598,7 +778,7 @@ export function ProductDetails({
       </main>
 
       {/* Sticky Bottom Action Dock: ALWAYS VISIBLE AND HORIZONTALLY PROPORTIONED */}
-      <footer className="shrink-0 z-30 bg-[#0b141a]/95 backdrop-blur-xl border-t border-white/10 px-5 py-3.5 shadow-lg max-w-2xl mx-auto w-full">
+      <footer className="shrink-0 z-30 bg-white/95 dark:bg-[#0b141a]/95 backdrop-blur-xl border-t border-slate-200 dark:border-slate-800 px-5 py-3.5 shadow-lg max-w-2xl mx-auto w-full">
         <div className="flex flex-row items-center gap-3 w-full">
           {!isFlagged ? (
             <button

@@ -22,6 +22,8 @@ export interface NormalizedProduct {
   serving_size?: string;
   ingredients?: string;
   allergens?: string[];
+  additives?: string[];
+  coloring?: any;
   nutrition?: NormalizedProductNutrition;
 }
 
@@ -34,6 +36,7 @@ export interface ProductPrice {
   source: string;
   retrievedAt: string;
   confidence: number;
+  needs_user_price?: boolean;
 }
 
 export interface ProductProvider {
@@ -41,5 +44,5 @@ export interface ProductProvider {
 }
 
 export interface PriceProvider {
-  getPrice(barcode: string, countryCode: string): Promise<ProductPrice | null>;
+  getPrice(barcode: string, countryCode: string, productCategory?: string, productName?: string, ipAddress?: string): Promise<ProductPrice | null>;
 }

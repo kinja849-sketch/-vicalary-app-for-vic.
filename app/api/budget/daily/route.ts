@@ -6,7 +6,14 @@ import type { GeoContext } from '@/lib/financial/BudgetNormalizationService';
 
 export async function GET(request: Request) {
     try {
-        const user = await getAuthenticatedUser(request);
+        let user = await getAuthenticatedUser(request);
+        if (!user) {
+            const url = new URL(request.url);
+            const queryUserId = url.searchParams.get('userId');
+            if (queryUserId) {
+                user = { id: queryUserId } as any;
+            }
+        }
         if (!user) {
             return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
         }

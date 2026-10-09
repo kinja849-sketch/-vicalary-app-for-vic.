@@ -3,6 +3,20 @@ import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { SafetyEngine } from '@/lib/services/SafetyEngine';
 import { callChatCompletionWithFallback, getPrimaryApiKey, getBackupApiKey } from '@/lib/ai/ai-fallback';
 
+function parseJSONSafely(text?: string | null, fallback: any = {}) {
+  try {
+    if (!text) return fallback;
+    const jsonStart = text.indexOf('{');
+    const jsonEnd = text.lastIndexOf('}');
+    if (jsonStart !== -1 && jsonEnd !== -1) {
+      return JSON.parse(text.substring(jsonStart, jsonEnd + 1));
+    }
+    return JSON.parse(text);
+  } catch (e) {
+    return fallback;
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -20,8 +34,9 @@ export async function POST(req: NextRequest) {
     }
 
     // 1. Load User Safety Profile from Onboarding & Settings
+    const clientRequestedLang = body.language || locationContext?.language || (locationContext?.languages?.[0]) || 'en';
     const userSafetyProfile = userId 
-      ? await SafetyEngine.getUserSafetyProfile(userId, supabase, locationContext?.language || 'en')
+      ? await SafetyEngine.getUserSafetyProfile(userId, supabase, clientRequestedLang)
       : {
           userId: 'anonymous',
           userGoal: 'stay healthy',
@@ -31,10 +46,10 @@ export async function POST(req: NextRequest) {
           dietaryLifestyle: [],
           isDiabetic: false,
           hasHypertension: false,
-          language: locationContext?.language || 'en'
+          language: clientRequestedLang
         };
 
-    const userLang = userSafetyProfile.language;
+    const userLang = body.language || userSafetyProfile.language || 'en';
 
     // 2. Identify Medication details via OpenAI Vision or GPT
     const systemPrompt = `You are a clinical pharmacologist and medication safety engine.
@@ -85,10 +100,12 @@ Return ONLY a valid JSON object matching this schema:
     const visionResult = await callChatCompletionWithFallback({
       model: 'gpt-4o',
       messages,
+      temperature: 0.1,
+      max_tokens: 350,
       response_format: { type: 'json_object' }
     });
 
-    const medData = JSON.parse(visionResult.choices[0]?.message?.content || '{}');
+    const medData = parseJSONSafely(visionResult.choices[0]?.message?.content);
 
     const medName = medData.name || inputMedName || 'Scanned Medication';
     const genericName = medData.generic_name || 'Pharmaceutical Product';
@@ -174,10 +191,12 @@ Return ONLY a JSON object:
     const synthesisResult = await callChatCompletionWithFallback({
       model: 'gpt-4o-mini',
       messages: [{ role: 'user', content: synthesisPrompt }],
+      temperature: 0.2,
+      max_tokens: 380,
       response_format: { type: 'json_object' }
     });
 
-    const synthData = JSON.parse(synthesisResult.choices[0]?.message?.content || '{}');
+    const synthData = parseJSONSafely(synthesisResult.choices[0]?.message?.content);
 
     return NextResponse.json({
       name: medName,

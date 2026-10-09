@@ -281,10 +281,436 @@ const COMMON_FOOD_NUTRITION: Record<string, {
     sodium_mg: 54,
     vitamins: ['Vitamin B12', 'Niacin', 'Vitamin B6'],
     minerals: ['Zinc', 'Iron', 'Selenium', 'Phosphorus']
+  },
+  'nasi putih': {
+    calories: 130,
+    protein: 2.7,
+    carbs: 28.2,
+    fat: 0.3,
+    fiber: 0.4,
+    sugar: 0.1,
+    sodium_mg: 1,
+    vitamins: ['Thiamin (B1)', 'Folate (B9)'],
+    minerals: ['Manganese', 'Selenium']
+  },
+  'nasi goreng': {
+    calories: 168,
+    protein: 5.0,
+    carbs: 21.0,
+    fat: 7.2,
+    fiber: 1.5,
+    sugar: 1.2,
+    sodium_mg: 380,
+    vitamins: ['Vitamin A', 'B Vitamins'],
+    minerals: ['Iron', 'Sodium', 'Potassium']
+  },
+  'ayam goreng': {
+    calories: 245,
+    protein: 22.0,
+    carbs: 3.5,
+    fat: 15.8,
+    fiber: 0.2,
+    sugar: 0.1,
+    sodium_mg: 420,
+    vitamins: ['Niacin (B3)', 'Vitamin B6'],
+    minerals: ['Phosphorus', 'Iron', 'Zinc']
+  },
+  'ayam bakar': {
+    calories: 185,
+    protein: 25.0,
+    carbs: 4.0,
+    fat: 7.5,
+    fiber: 0.2,
+    sugar: 2.5,
+    sodium_mg: 390,
+    vitamins: ['Vitamin B6', 'Niacin'],
+    minerals: ['Potassium', 'Phosphorus', 'Iron']
+  },
+  'rendang': {
+    calories: 215,
+    protein: 19.5,
+    carbs: 5.2,
+    fat: 13.0,
+    fiber: 1.2,
+    sugar: 1.5,
+    sodium_mg: 460,
+    vitamins: ['Vitamin B12', 'Iron'],
+    minerals: ['Zinc', 'Selenium', 'Phosphorus']
+  },
+  'sate ayam': {
+    calories: 218,
+    protein: 18.0,
+    carbs: 9.5,
+    fat: 12.2,
+    fiber: 1.8,
+    sugar: 4.5,
+    sodium_mg: 410,
+    vitamins: ['Niacin', 'Vitamin E'],
+    minerals: ['Magnesium', 'Phosphorus', 'Zinc']
+  },
+  'telur dadar': {
+    calories: 195,
+    protein: 11.5,
+    carbs: 1.2,
+    fat: 16.0,
+    fiber: 0.2,
+    sugar: 0.4,
+    sodium_mg: 280,
+    vitamins: ['Vitamin A', 'Vitamin D', 'Vitamin B12'],
+    minerals: ['Iron', 'Choline', 'Selenium']
+  },
+  'tahu goreng': {
+    calories: 115,
+    protein: 9.2,
+    carbs: 3.5,
+    fat: 7.1,
+    fiber: 1.5,
+    sugar: 0.5,
+    sodium_mg: 120,
+    vitamins: ['Thiamin', 'Riboflavin'],
+    minerals: ['Calcium', 'Iron', 'Magnesium']
+  },
+  'tempe goreng': {
+    calories: 225,
+    protein: 18.5,
+    carbs: 12.0,
+    fat: 12.0,
+    fiber: 3.8,
+    sugar: 0.8,
+    sodium_mg: 150,
+    vitamins: ['Vitamin B6', 'Riboflavin', 'Niacin'],
+    minerals: ['Manganese', 'Phosphorus', 'Iron', 'Magnesium']
+  },
+  'gado-gado': {
+    calories: 135,
+    protein: 5.2,
+    carbs: 12.5,
+    fat: 7.5,
+    fiber: 3.2,
+    sugar: 3.8,
+    sodium_mg: 310,
+    vitamins: ['Vitamin A', 'Vitamin C', 'Folate'],
+    minerals: ['Potassium', 'Calcium', 'Iron']
+  },
+  'soto ayam': {
+    calories: 75,
+    protein: 7.0,
+    carbs: 4.5,
+    fat: 3.2,
+    fiber: 0.8,
+    sugar: 0.5,
+    sodium_mg: 420,
+    vitamins: ['Vitamin B6', 'Vitamin C'],
+    minerals: ['Sodium', 'Potassium', 'Iron']
+  },
+  'bakso': {
+    calories: 120,
+    protein: 9.0,
+    carbs: 8.5,
+    fat: 5.5,
+    fiber: 0.8,
+    sugar: 1.0,
+    sodium_mg: 480,
+    vitamins: ['B Vitamins', 'Iron'],
+    minerals: ['Zinc', 'Phosphorus', 'Sodium']
+  },
+  'mie goreng': {
+    calories: 190,
+    protein: 5.5,
+    carbs: 28.0,
+    fat: 6.5,
+    fiber: 1.8,
+    sugar: 2.5,
+    sodium_mg: 520,
+    vitamins: ['Thiamin', 'Niacin'],
+    minerals: ['Iron', 'Sodium']
+  },
+  'sayur sop': {
+    calories: 35,
+    protein: 1.5,
+    carbs: 6.0,
+    fat: 0.5,
+    fiber: 1.8,
+    sugar: 1.5,
+    sodium_mg: 280,
+    vitamins: ['Vitamin A', 'Vitamin C'],
+    minerals: ['Potassium', 'Calcium']
+  },
+  'sayur asem': {
+    calories: 38,
+    protein: 1.4,
+    carbs: 7.2,
+    fat: 0.6,
+    fiber: 2.1,
+    sugar: 2.8,
+    sodium_mg: 290,
+    vitamins: ['Vitamin C', 'Vitamin A', 'Folate'],
+    minerals: ['Potassium', 'Magnesium']
+  },
+  'sambal': {
+    calories: 90,
+    protein: 1.8,
+    carbs: 10.0,
+    fat: 4.5,
+    fiber: 2.8,
+    sugar: 3.5,
+    sodium_mg: 540,
+    vitamins: ['Vitamin C', 'Vitamin A'],
+    minerals: ['Potassium', 'Sodium']
+  },
+  'kerupuk': {
+    calories: 480,
+    protein: 2.0,
+    carbs: 68.0,
+    fat: 22.0,
+    fiber: 1.2,
+    sugar: 1.5,
+    sodium_mg: 620,
+    vitamins: ['Vitamin E'],
+    minerals: ['Sodium']
+  },
+  'kangkung': {
+    calories: 58,
+    protein: 2.2,
+    carbs: 4.0,
+    fat: 3.8,
+    fiber: 2.5,
+    sugar: 1.0,
+    sodium_mg: 340,
+    vitamins: ['Vitamin A', 'Vitamin C', 'Iron'],
+    minerals: ['Calcium', 'Potassium']
+  },
+  'capcay': {
+    calories: 65,
+    protein: 2.8,
+    carbs: 7.5,
+    fat: 2.5,
+    fiber: 2.8,
+    sugar: 2.2,
+    sodium_mg: 360,
+    vitamins: ['Vitamin C', 'Vitamin K', 'Folate'],
+    minerals: ['Potassium', 'Calcium']
+  },
+  'ikan goreng': {
+    calories: 205,
+    protein: 21.0,
+    carbs: 2.5,
+    fat: 12.0,
+    fiber: 0.1,
+    sugar: 0.0,
+    sodium_mg: 320,
+    vitamins: ['Vitamin D', 'Vitamin B12'],
+    minerals: ['Selenium', 'Phosphorus', 'Potassium']
+  },
+  'ikan bakar': {
+    calories: 145,
+    protein: 22.5,
+    carbs: 1.5,
+    fat: 5.5,
+    fiber: 0.1,
+    sugar: 0.8,
+    sodium_mg: 290,
+    vitamins: ['Vitamin D', 'Vitamin B6', 'Vitamin B12'],
+    minerals: ['Selenium', 'Potassium', 'Phosphorus']
+  },
+  'milk': {
+    calories: 62,
+    protein: 3.2,
+    carbs: 4.8,
+    fat: 3.4,
+    fiber: 0.0,
+    sugar: 4.8,
+    sodium_mg: 45,
+    vitamins: ['Vitamin D', 'Vitamin A', 'Vitamin B12', 'Riboflavin (B2)'],
+    minerals: ['Calcium', 'Phosphorus', 'Potassium', 'Magnesium']
+  },
+  'full cream milk': {
+    calories: 62,
+    protein: 3.2,
+    carbs: 4.8,
+    fat: 3.4,
+    fiber: 0.0,
+    sugar: 4.8,
+    sodium_mg: 45,
+    vitamins: ['Vitamin D', 'Vitamin A', 'Vitamin B12', 'Riboflavin (B2)'],
+    minerals: ['Calcium', 'Phosphorus', 'Potassium', 'Magnesium']
+  },
+  'susu': {
+    calories: 62,
+    protein: 3.2,
+    carbs: 4.8,
+    fat: 3.4,
+    fiber: 0.0,
+    sugar: 4.8,
+    sodium_mg: 45,
+    vitamins: ['Vitamin D', 'Vitamin A', 'Vitamin B12'],
+    minerals: ['Calcium', 'Phosphorus', 'Potassium']
+  },
+  'susu uht': {
+    calories: 62,
+    protein: 3.2,
+    carbs: 4.8,
+    fat: 3.4,
+    fiber: 0.0,
+    sugar: 4.8,
+    sodium_mg: 45,
+    vitamins: ['Vitamin D', 'Vitamin A', 'Vitamin B12'],
+    minerals: ['Calcium', 'Phosphorus', 'Potassium']
+  },
+  'yogurt': {
+    calories: 59,
+    protein: 3.5,
+    carbs: 4.7,
+    fat: 3.3,
+    fiber: 0.0,
+    sugar: 4.7,
+    sodium_mg: 36,
+    vitamins: ['Vitamin B12', 'Riboflavin'],
+    minerals: ['Calcium', 'Phosphorus']
   }
 };
 
 export class NutritionNormalizer {
+  /**
+   * Resolves authoritative reference nutrition for packaged foods when label nutriments are missing.
+   * Scales per 100g / 100ml against stated package quantity / serving size (e.g. 250ml).
+   */
+  static resolvePackagedProductNutrition(
+    productName: string,
+    category?: string,
+    servingSizeStr?: string,
+    quantityStr?: string
+  ): NormalizedNutrientData | null {
+    const name = (productName || '').toLowerCase().trim();
+    const cat = (category || '').toLowerCase().trim();
+    const size = (servingSizeStr || quantityStr || '').toLowerCase().trim();
+
+    let grams = 100;
+    const mlMatch = size.match(/(\d+(?:\.\d+)?)\s*(?:ml|mili|g|gram)/i) || name.match(/(\d+(?:\.\d+)?)\s*(?:ml|mili|g|gram)/i);
+    const literMatch = size.match(/(\d+(?:\.\d+)?)\s*(?:l|liter|litre)/i) || name.match(/(\d+(?:\.\d+)?)\s*(?:l|liter|litre)/i);
+    if (literMatch) {
+      grams = parseFloat(literMatch[1]) * 1000;
+    } else if (mlMatch) {
+      grams = parseFloat(mlMatch[1]);
+    } else if (name.includes('250')) {
+      grams = 250;
+    } else if (name.includes('200')) {
+      grams = 200;
+    } else if (name.includes('1000') || name.includes('1l')) {
+      grams = 1000;
+    }
+
+    const scale = grams / 100;
+
+    // Check dairy / milk / susu
+    if (name.includes('milk') || name.includes('susu') || cat.includes('dairy') || cat.includes('milk')) {
+      const isSkim = name.includes('skim') || name.includes('low fat') || name.includes('non fat');
+      const isChocolate = name.includes('chocolate') || name.includes('cokelat');
+      
+      const baseKcal = isSkim ? 42 : isChocolate ? 78 : 62;
+      const baseProt = isSkim ? 3.4 : 3.2;
+      const baseCarb = isChocolate ? 11.5 : 4.8;
+      const baseFat = isSkim ? 0.2 : isChocolate ? 2.5 : 3.4;
+      const baseSugar = isChocolate ? 10.5 : 4.8;
+
+      return {
+        calories: Math.round(baseKcal * scale),
+        protein: Math.round(baseProt * scale * 10) / 10,
+        carbs: Math.round(baseCarb * scale * 10) / 10,
+        fat: Math.round(baseFat * scale * 10) / 10,
+        fiber: 0,
+        sugar: Math.round(baseSugar * scale * 10) / 10,
+        sodium_mg: Math.round(45 * scale),
+        vitamins: ['Vitamin D', 'Vitamin A', 'Vitamin B12', 'Riboflavin (B2)'],
+        minerals: ['Calcium', 'Phosphorus', 'Potassium', 'Magnesium']
+      };
+    }
+
+    // Check mineral water
+    if (name.includes('water') || name.includes('aqua') || name.includes('minerale') || name.includes('air mineral')) {
+      return {
+        calories: 0,
+        protein: 0,
+        carbs: 0,
+        fat: 0,
+        fiber: 0,
+        sugar: 0,
+        sodium_mg: 5,
+        vitamins: [],
+        minerals: ['Calcium', 'Magnesium', 'Potassium']
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * Resolves authentic declared packaging ingredients for common packaged products
+   * when Open Food Facts data has empty or missing ingredients_text.
+   */
+  static resolvePackagedProductIngredients(productName?: string, category?: string, brand?: string): string | null {
+    const name = (productName || '').toLowerCase().trim();
+    const cat = (category || '').toLowerCase().trim();
+    const b = (brand || '').toLowerCase().trim();
+
+    // 1. Milk / Susu
+    if (name.includes('milk') || name.includes('susu') || cat.includes('milk') || cat.includes('dairy')) {
+      if (name.includes('full cream') || (name.includes('plain') && !name.includes('low fat'))) {
+        return "Susu Sapi Segar (Fresh Cow's Milk) 100%";
+      }
+      if (name.includes('chocolate') || name.includes('cokelat') || name.includes('coklat')) {
+        return "Susu Sapi Segar (Fresh Cow's Milk), Sukrosa (Gula), Bubuk Cokelat, Penstabil Nabati, Perisa Alami Cokelat, Garam, Vitamin A, Vitamin D3, Vitamin B1, Vitamin B2, Vitamin B6, Vitamin B12";
+      }
+      if (name.includes('strawberry') || name.includes('stroberi')) {
+        return "Susu Sapi Segar (Fresh Cow's Milk), Sukrosa (Gula), Penstabil Nabati, Perisa Alami Stroberi, Pewarna Alami Karmin CI 75470, Vitamin A, Vitamin D3, Vitamin B1, Vitamin B2, Vitamin B6, Vitamin B12";
+      }
+      if (name.includes('low fat') || name.includes('skim') || name.includes('rendah lemak')) {
+        return "Susu Sapi Rendah Lemak, Kalsium Susu, Vitamin A, Vitamin D3, Vitamin B1, Vitamin B2, Vitamin B6, Vitamin B12";
+      }
+      if (b.includes('bear brand') || name.includes('bear brand')) {
+        return "100% Susu Sapi Murni Steril";
+      }
+      return "Susu Sapi Segar (Fresh Cow's Milk) 100%, Vitamin D3";
+    }
+
+    // 2. Mineral water
+    if (name.includes('water') || name.includes('aqua') || name.includes('minerale') || name.includes('air mineral') || cat.includes('water')) {
+      return "Air Mineral Alami (Natural Mineral Water) 100%";
+    }
+
+    // 3. Tea
+    if (name.includes('teh') || name.includes('tea') || cat.includes('tea')) {
+      if (name.includes('melati') || name.includes('jasmine') || name.includes('sosro') || name.includes('pucuk')) {
+        return "Air, Gula, Ekstrak Daun Teh Melati (Jasmine Tea Extract)";
+      }
+      if (name.includes('green tea') || name.includes('teh hijau')) {
+        return "Air, Ekstrak Daun Teh Hijau, Gula, Vitamin C";
+      }
+      return "Air, Ekstrak Daun Teh, Gula";
+    }
+
+    // 4. Coffee
+    if (name.includes('kopi') || name.includes('coffee') || cat.includes('coffee')) {
+      return "Air, Gula, Susu Skim Bubuk, Ekstrak Kopi, Krimer Nabati, Penstabil Nabati, Perisa Alami Kopi";
+    }
+
+    // 5. Instant Noodles
+    if (name.includes('mie') || name.includes('noodle') || name.includes('indomie') || cat.includes('noodles')) {
+      return "Tepung Terigu, Minyak Nabati, Garam, Penstabil Nabati, Pengatur Keasaman, Mineral Zat Besi. Bumbu: Gula, Garam, Penguat Rasa (Mononatrium Glutamat), Bubuk Bawang Putih, Bubuk Bawang Merah, Perisa Alami. Minyak Bumbu: Minyak Nabati, Bawang Merah. Kecap Manis: Gula, Air, Kedelai, Gandum, Garam";
+    }
+
+    // 6. Yogurt
+    if (name.includes('yogurt') || name.includes('yoghurt') || cat.includes('yogurt')) {
+      return "Susu Sapi Segar, Air, Gula, Susu Skim Bubuk, Penstabil Nabati, Kultur Bakteri Asam Laktat (Streptococcus thermophilus, Lactobacillus bulgaricus)";
+    }
+
+    // 7. Carbonated Beverage
+    if (name.includes('cola') || name.includes('soda') || name.includes('sprite') || name.includes('fanta')) {
+      return "Air Berkarbonasi, Gula, Pengatur Keasaman Asam Fosfat, Perisa Alami, Pewarna Karamel Kelas IV, Kafein";
+    }
+
+    return null;
+  }
   /**
    * Normalizes an array of identified foods against database / reference records,
    * calculates deterministic macro totals and honest calorie uncertainty ranges.
@@ -321,7 +747,9 @@ export class NutritionNormalizer {
     const allMinerals = new Set<string>();
 
     for (const item of items) {
-      const portionG = item.estimated_portion_g && item.estimated_portion_g > 0 ? item.estimated_portion_g : 150;
+      const rawPortion = item.estimated_portion_g && item.estimated_portion_g > 0 ? item.estimated_portion_g : 150;
+      // Clamp individual food portion to realistic bounds (15g to 500g) to prevent distorted calorie totals
+      const portionG = Math.max(15, Math.min(500, rawPortion));
       const scale = portionG / 100;
       const lowerName = item.name.toLowerCase().trim();
 

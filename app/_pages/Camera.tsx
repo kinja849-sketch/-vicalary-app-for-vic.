@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { requestCameraAccess } from "@/lib/api/permissions";
 import { useNotificationStore } from "@/store/notificationStore";
 import { useCoachInjectionStore } from "@/store/coachInjectionStore";
+import { useAuth } from "@/lib/AuthContext";
 import { MealAnalysis } from "@/components/MealAnalysis";
 import { ProductDetails } from "@/components/ProductDetails";
 
@@ -24,6 +25,7 @@ export default function Camera({ initialMode }: CameraProps = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
+  const { user } = useAuth();
 
   const isScanner = initialMode === "BARCODE" ||
     searchParams?.get("mode") === "scanner" ||
@@ -35,6 +37,7 @@ export default function Camera({ initialMode }: CameraProps = {}) {
   const setLatestAnalysis = useCoachInjectionStore(state => state.setLatestAnalysis);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const cropCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
@@ -45,11 +48,58 @@ export default function Camera({ initialMode }: CameraProps = {}) {
   const [userId, setUserId] = useState<string | null>(null);
   const [isScanningBarcode, setIsScanningBarcode] = useState(false);
   const barcodeIntervalRef = useRef<number | null>(null);
+  const scanFrameIdRef = useRef<number | null>(null);
+  const isScanningRef = useRef<boolean>(false);
+  const zxingReaderRef = useRef<any>(null);
+  const barcodeDetectorRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
+
+  // Initialize BarcodeDetector and ZXing singleton reader once
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
+      try {
+        (window as any).BarcodeDetector.getSupportedFormats().then((formats: string[]) => {
+          barcodeDetectorRef.current = new (window as any).BarcodeDetector({ formats });
+        }).catch(() => {
+          barcodeDetectorRef.current = new (window as any).BarcodeDetector();
+        });
+      } catch (e) {
+        try {
+          barcodeDetectorRef.current = new (window as any).BarcodeDetector();
+        } catch (err) {
+          barcodeDetectorRef.current = null;
+        }
+      }
+    }
+    // Preload ZXing reader with TRY_HARDER and broad 1D/2D formats
+    Promise.all([
+      import('@zxing/browser'),
+      import('@zxing/library')
+    ]).then(([{ BrowserMultiFormatReader }, { DecodeHintType, BarcodeFormat }]) => {
+      const hints = new Map();
+      hints.set(DecodeHintType.TRY_HARDER, true);
+      hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+        BarcodeFormat.EAN_13,
+        BarcodeFormat.UPC_A,
+        BarcodeFormat.EAN_8,
+        BarcodeFormat.UPC_E,
+        BarcodeFormat.CODE_128,
+        BarcodeFormat.CODE_39,
+        BarcodeFormat.ITF,
+        BarcodeFormat.QR_CODE
+      ]);
+      zxingReaderRef.current = new BrowserMultiFormatReader(hints);
+    }).catch(() => {
+      import('@zxing/browser').then(({ BrowserMultiFormatReader }) => {
+        zxingReaderRef.current = new BrowserMultiFormatReader();
+      }).catch(() => {});
+    });
+  }, []);
 
   const handleGalleryUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !userId || isAnalyzing) return;
+    if (!file || isAnalyzing) return;
+    const activeUserId = user?.id || userId || 'anon';
 
     setIsAnalyzing(true);
     const imageUrl = URL.createObjectURL(file);
@@ -100,13 +150,13 @@ export default function Camera({ initialMode }: CameraProps = {}) {
         }
 
         // Fallback: analyze medication / product image directly if barcode not readable in photo
-        const result = await analyzeMedication(userId, file);
+        const result = await analyzeMedication(activeUserId, file);
         const fullResult = { ...result, type: result.type || 'BARCODE' as const };
         setAnalysisResult(fullResult);
         setLatestAnalysis(fullResult);
         addNotification('success', "Product analysis complete!");
       } else {
-        const result = await analyzeFoodImage(userId, file);
+        const result = await analyzeFoodImage(activeUserId, file);
         const fullResult = { ...result, type: 'FOOD' as const };
         setAnalysisResult(fullResult);
         setLatestAnalysis(fullResult);
@@ -130,6 +180,7 @@ export default function Camera({ initialMode }: CameraProps = {}) {
     startCamera('environment');
     return () => {
       stopCamera();
+      if (scanFrameIdRef.current) cancelAnimationFrame(scanFrameIdRef.current);
       if (barcodeIntervalRef.current) clearInterval(barcodeIntervalRef.current);
     };
   }, []);
@@ -216,70 +267,158 @@ export default function Camera({ initialMode }: CameraProps = {}) {
     }
   };
 
-  // Continuous Barcode Scanning Logic for Food Products
+  // Real-time Automatic Barcode Detection Loop (Throttled at ~120ms with downscaled canvas)
   useEffect(() => {
-    if (scanMode === "BARCODE" && stream && !isAnalyzing && !analysisResult && !isScanningBarcode) {
-      barcodeIntervalRef.current = window.setInterval(scanForBarcode, 400);
-    } else {
-      if (barcodeIntervalRef.current) {
-        clearInterval(barcodeIntervalRef.current);
-        barcodeIntervalRef.current = null;
+    let lastScanTime = 0;
+    let isActive = true;
+
+    const loop = (timestamp: number) => {
+      if (!isActive) return;
+      if (
+        scanMode === "BARCODE" &&
+        stream &&
+        !isAnalyzing &&
+        !analysisResult &&
+        !isScanningBarcode &&
+        timestamp - lastScanTime >= 120
+      ) {
+        lastScanTime = timestamp;
+        scanForBarcode();
       }
+      scanFrameIdRef.current = requestAnimationFrame(loop);
+    };
+
+    if (scanMode === "BARCODE" && stream && !isAnalyzing && !analysisResult && !isScanningBarcode) {
+      scanFrameIdRef.current = requestAnimationFrame(loop);
     }
+
     return () => {
-      if (barcodeIntervalRef.current) clearInterval(barcodeIntervalRef.current);
+      isActive = false;
+      if (scanFrameIdRef.current) {
+        cancelAnimationFrame(scanFrameIdRef.current);
+        scanFrameIdRef.current = null;
+      }
     };
   }, [scanMode, stream, isAnalyzing, analysisResult, isScanningBarcode]);
 
   const scanForBarcode = async () => {
-    if (!videoRef.current || !canvasRef.current || isAnalyzing || analysisResult || isScanningBarcode) return;
+    if (!videoRef.current || isAnalyzing || analysisResult || isScanningBarcode || isScanningRef.current) return;
 
-    const canvas = canvasRef.current;
     const video = videoRef.current;
-    if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
+    if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) return;
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return;
-
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-    if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
-      try {
-        const detector = new (window as any).BarcodeDetector({
-          formats: ['ean_13', 'upc_a', 'upc_e', 'ean_8', 'code_128', 'code_39', 'code_93', 'itf', 'qr_code', 'data_matrix']
-        });
-        const barcodes = await detector.detect(canvas);
-        if (barcodes.length > 0 && barcodes[0]?.rawValue) {
-          handleBarcodeDetected(barcodes[0].rawValue);
-          return;
-        }
-      } catch (e) {
-        // fallback to zxing
-      }
-    }
-
+    isScanningRef.current = true;
     try {
-      const { BrowserMultiFormatReader } = await import("@zxing/browser");
-      const reader = new BrowserMultiFormatReader();
-      const result = reader.decodeFromCanvas(canvas);
-      if (result && result.getText()) {
-        handleBarcodeDetected(result.getText());
+      const videoW = video.videoWidth;
+      const videoH = video.videoHeight;
+
+      // Tier 1: Native BarcodeDetector directly on raw video element (hardware accelerated zero-copy Chromium)
+      if (barcodeDetectorRef.current) {
+        try {
+          const barcodes = await barcodeDetectorRef.current.detect(video);
+          if (barcodes && barcodes.length > 0 && barcodes[0]?.rawValue) {
+            handleBarcodeDetected(barcodes[0].rawValue);
+            return;
+          }
+        } catch (e) {
+          // Fall through to canvas detection if raw video detection throws
+        }
       }
-    } catch (e) {
-      // frame didn't contain a barcode, ignore
+
+      // Tier 2: Sharp 1:1 center viewfinder crop (65% width x 50% height)
+      // Maintains 100% pixel crispness for dense 1D barcodes without downsampling blur
+      if (!cropCanvasRef.current) {
+        cropCanvasRef.current = document.createElement("canvas");
+      }
+      const cropCanvas = cropCanvasRef.current;
+      const cropW = Math.round(videoW * 0.65);
+      const cropH = Math.round(videoH * 0.50);
+      const cropX = Math.round((videoW - cropW) / 2);
+      const cropY = Math.round((videoH - cropH) / 2);
+
+      if (cropCanvas.width !== cropW || cropCanvas.height !== cropH) {
+        cropCanvas.width = cropW;
+        cropCanvas.height = cropH;
+      }
+      const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
+      if (cropCtx) {
+        cropCtx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+        // Try native detector on viewfinder crop
+        if (barcodeDetectorRef.current) {
+          try {
+            const cropBarcodes = await barcodeDetectorRef.current.detect(cropCanvas);
+            if (cropBarcodes && cropBarcodes.length > 0 && cropBarcodes[0]?.rawValue) {
+              handleBarcodeDetected(cropBarcodes[0].rawValue);
+              return;
+            }
+          } catch (e) {}
+        }
+
+        // Try ZXing reader on viewfinder crop
+        if (zxingReaderRef.current) {
+          try {
+            const zxingCropRes = zxingReaderRef.current.decodeFromCanvas(cropCanvas);
+            if (zxingCropRes && zxingCropRes.getText()) {
+              handleBarcodeDetected(zxingCropRes.getText());
+              return;
+            }
+          } catch (e) {}
+        }
+      }
+
+      // Tier 3: Full resolution canvas fallback
+      const canvas = canvasRef.current;
+      if (canvas) {
+        if (canvas.width !== videoW || canvas.height !== videoH) {
+          canvas.width = videoW;
+          canvas.height = videoH;
+        }
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, videoW, videoH);
+
+          if (zxingReaderRef.current) {
+            try {
+              const fullResult = zxingReaderRef.current.decodeFromCanvas(canvas);
+              if (fullResult && fullResult.getText()) {
+                handleBarcodeDetected(fullResult.getText());
+                return;
+              }
+            } catch (e) {}
+          }
+        }
+      }
+    } finally {
+      isScanningRef.current = false;
     }
   };
 
   const handleBarcodeDetected = async (barcode: string) => {
-    if (!userId || isAnalyzing || isScanningBarcode) return;
+    if (isAnalyzing || isScanningBarcode) return;
+    const activeUserId = user?.id || userId || 'anon';
     setIsScanningBarcode(true);
     setIsAnalyzing(true);
-    setCapturedImage(canvasRef.current?.toDataURL("image/jpeg") || null);
+
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      try { navigator.vibrate(100); } catch (e) {}
+    }
+
+    // Capture current frame for preview image
+    if (videoRef.current && canvasRef.current) {
+      const v = videoRef.current;
+      const c = canvasRef.current;
+      c.width = v.videoWidth || 640;
+      c.height = v.videoHeight || 480;
+      const ctx = c.getContext("2d");
+      if (ctx) {
+        ctx.drawImage(v, 0, 0, c.width, c.height);
+        setCapturedImage(c.toDataURL("image/jpeg"));
+      }
+    }
 
     try {
-      const result = await scanProduct(userId, barcode);
+      const result = await scanProduct(activeUserId, barcode);
       if (result.error) throw new Error(result.error);
       const fullResult = { ...result, barcode, type: result.type || 'BARCODE' as const };
       setAnalysisResult(fullResult);
@@ -290,14 +429,15 @@ export default function Camera({ initialMode }: CameraProps = {}) {
       console.error("Barcode scan failed:", err);
       toast.error(err.message || "Failed to identify product.");
       setCapturedImage(null);
-      setIsScanningBarcode(false);
     } finally {
       setIsAnalyzing(false);
+      setIsScanningBarcode(false);
     }
   };
 
   const takePhoto = async () => {
-    if (!videoRef.current || !canvasRef.current || !userId || isAnalyzing) return;
+    if (!videoRef.current || !canvasRef.current || isAnalyzing) return;
+    const activeUserId = user?.id || userId || 'anon';
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -318,8 +458,8 @@ export default function Camera({ initialMode }: CameraProps = {}) {
       const file = new File([blob], "capture.jpg", { type: "image/jpeg" });
 
       const result = scanMode === "BARCODE"
-        ? await analyzeMedication(userId, file)
-        : await analyzeFoodImage(userId, file);
+        ? await analyzeMedication(activeUserId, file)
+        : await analyzeFoodImage(activeUserId, file);
 
       const fullResult = { ...result, type: (result.type || (scanMode === "BARCODE" ? 'MEDICATION' : 'FOOD')) as any };
       setAnalysisResult(fullResult);
@@ -336,9 +476,10 @@ export default function Camera({ initialMode }: CameraProps = {}) {
   };
 
   const handleSave = async () => {
-    if (!userId || !analysisResult) return;
+    const activeUserId = user?.id || userId;
+    if (!activeUserId || !analysisResult) return;
     try {
-      await saveFoodAnalysis(userId, analysisResult);
+      await saveFoodAnalysis(activeUserId, analysisResult);
       addNotification('success', "Logged to your diary successfully!");
       router.push("/dashboard");
     } catch (err) {
@@ -410,9 +551,6 @@ export default function Camera({ initialMode }: CameraProps = {}) {
                     className="absolute left-0 right-0 h-0.5 bg-vic-green shadow-[0_0_12px_2px_rgba(33,255,100,0.6)]"
                   />
                 </div>
-                <p className="text-xs font-bold uppercase tracking-widest text-slate-300 mt-6 px-4 py-1.5 bg-black/50 backdrop-blur-md rounded-full border border-white/10">
-                  Align product barcode to auto-detect
-                </p>
               </div>
             )}
 
@@ -440,15 +578,21 @@ export default function Camera({ initialMode }: CameraProps = {}) {
                   <div className="w-16 h-16 rounded-full border-2 border-white/50 pointer-events-none" />
                 </button>
               ) : (
-                <button
-                  onClick={takePhoto}
-                  className="w-20 h-20 bg-vic-green rounded-full flex items-center justify-center border-4 border-white/30 shadow-lg shadow-vic-green/50 hover:scale-105 active:scale-95 transition-all shrink-0 cursor-pointer"
-                  aria-label="Capture barcode photo"
-                >
-                  <div className="w-16 h-16 rounded-full border-2 border-slate-900/60 flex items-center justify-center pointer-events-none">
-                    <CameraIcon className="w-6 h-6 text-slate-900" />
-                  </div>
-                </button>
+                <div className="flex flex-col items-center gap-1.5">
+                  <button
+                    onClick={takePhoto}
+                    className="w-20 h-20 bg-emerald-600 rounded-full flex items-center justify-center border-4 border-white/30 shadow-lg shadow-emerald-500/40 hover:scale-105 active:scale-95 transition-all shrink-0 cursor-pointer"
+                    aria-label="Capture medicine packaging"
+                    title="Capture medicine packaging"
+                  >
+                    <div className="w-16 h-16 rounded-full border-2 border-slate-900/60 flex items-center justify-center pointer-events-none">
+                      <CameraIcon className="w-6 h-6 text-white" />
+                    </div>
+                  </button>
+                  <span className="text-[10px] font-bold tracking-wider text-slate-300 uppercase bg-black/60 px-2 py-0.5 rounded-full border border-white/10">
+                    Medicine Photo
+                  </span>
+                </div>
               )}
 
               {!isScanner && scanMode !== "BARCODE" && (

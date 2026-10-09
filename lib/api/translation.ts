@@ -128,6 +128,15 @@ export const useTranslation = () => {
     // Location-only effect removed in favor of direct finalLang syncing to app_lang below
 
     useEffect(() => {
+        if (settings && (settings as any).is_language_auto === false && (settings as any).language) {
+            if (typeof window !== 'undefined') {
+                localStorage.setItem('has_user_selected_lang', 'true');
+                localStorage.setItem('app_lang', (settings as any).language);
+            }
+        }
+    }, [settings]);
+
+    useEffect(() => {
         if (user && detectedLoc && isAuto && !hasUserSelectedLang) {
             const syncKey = `location_synced_${user.id}`;
             const toastKey = `location_toasted_${user.id}`;

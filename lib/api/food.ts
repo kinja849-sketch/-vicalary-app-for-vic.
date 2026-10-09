@@ -97,6 +97,8 @@ export const analyzeFoodImage = async (userId: string, file: File, options?: any
             locationPromise
         ]);
 
+        const clientLang = options?.language || (typeof window !== 'undefined' ? (localStorage.getItem('app_lang') || 'en') : 'en');
+
         // 2. Call Next.js API route
         const res = await fetch('/api/analyze-food-image', {
             method: 'POST',
@@ -106,6 +108,7 @@ export const analyzeFoodImage = async (userId: string, file: File, options?: any
                 imageBase64: base64Data,
                 userId: userId,
                 locationContext: loc,
+                language: clientLang,
                 ...options
             })
         });
@@ -166,6 +169,8 @@ export const analyzeMedication = async (userId: string, file: File, options?: an
             locationPromise
         ]);
 
+        const clientLang = options?.language || (typeof window !== 'undefined' ? (localStorage.getItem('app_lang') || 'en') : 'en');
+
         const res = await fetch('/api/analyze-medication', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -174,6 +179,7 @@ export const analyzeMedication = async (userId: string, file: File, options?: an
                 imageBase64: base64Data,
                 userId,
                 locationContext: loc,
+                language: clientLang,
                 ...options
             })
         });
@@ -195,7 +201,8 @@ const CACHE_TTL_MS = 1000 * 60 * 5;
 
 export const scanProduct = async (userId: string, barcode: string, options?: any) => {
     const loc = await getUserLocation();
-    const cacheKey = `${barcode}_${loc?.country_code || 'DEF'}`;
+    const clientLang = options?.language || (typeof window !== 'undefined' ? (localStorage.getItem('app_lang') || 'en') : 'en');
+    const cacheKey = `${barcode}_${loc?.country_code || 'DEF'}_${clientLang}`;
 
     // If forcing a reload, skip the cache
     if (!options?.forceReload) {
@@ -216,7 +223,8 @@ export const scanProduct = async (userId: string, barcode: string, options?: any
         body: JSON.stringify({
             barcode,
             userId,
-            locationContext: loc
+            locationContext: loc,
+            language: clientLang
         })
     });
 
@@ -301,32 +309,39 @@ export const saveFoodAnalysis = async (userId: string, analysis: any, isPurchase
         }
     }
 
-    // Update daily_progress table automatically for Today's Progress
-    await updateDailyProgress(
-        userId,
-        Number(analysis.calories || 0),
-        Number(analysis.protein || 0),
-        Number(analysis.carbs || 0),
-        Number(analysis.fat || 0),
-        Number(analysis.fiber || 0),
-        Number(analysis.sugar || 0)
-    ).catch(err => console.warn("[Food] Failed to sync daily progress:", err));
+    // Update daily_progress ONLY for meals you eat (Camera meals), NOT for scanner product purchases
+    if (!analysis.is_scanner_product) {
+        await updateDailyProgress(
+            userId,
+            Number(analysis.calories || 0),
+            Number(analysis.protein || 0),
+            Number(analysis.carbs || 0),
+            Number(analysis.fat || 0),
+            Number(analysis.fiber || 0),
+            Number(analysis.sugar || 0)
+        ).catch(err => console.warn("[Food] Failed to sync daily progress:", err));
+    }
 
-    // 3. PHASE 8: Standardized PurchaseEvent (Record Expense) - STRICTLY ONLY UPON USER LOG CONFIRMATION
+    // 3. Purchase Event (Record Expense) - STRICTLY ONLY UPON USER LOG CONFIRMATION
     if (isPurchaseConfirmed) {
-        const price = Number(analysis.price || (typeof analysis.estimated_price === 'number' ? analysis.estimated_price : 0) || 0);
+        const rawPrice = analysis.price ?? analysis.estimated_price;
+        const price = typeof rawPrice === 'number' && !isNaN(rawPrice)
+            ? rawPrice
+            : (rawPrice ? parseInt(String(rawPrice).replace(/[^0-9]/g, ''), 10) || 0 : 0);
         if (price > 0) {
             try {
                 // Resolve user's currency dynamically instead of hardcoding
                 let expenseCurrency = 'USD';
+                let expenseCountry = 'US';
                 try {
                     const { data: userSettings } = await supabase
                         .from('user_settings')
-                        .select('currency')
+                        .select('currency, country_code')
                         .eq('user_id', userId)
-                        .single();
+                        .maybeSingle();
                     if (userSettings?.currency) {
                         expenseCurrency = userSettings.currency;
+                        expenseCountry = userSettings.country_code || expenseCountry;
                     } else {
                         const { data: budgetProfile } = await supabase
                             .from('user_budget_profiles')
@@ -342,17 +357,86 @@ export const saveFoodAnalysis = async (userId: string, analysis: any, isPurchase
                     console.warn("[Food] Could not resolve user currency, defaulting to USD:", currErr);
                 }
 
-                await supabase.from('financial_transactions').insert({
-                    user_id: userId,
-                    transaction_date: new Date().toISOString(),
-                    amount: price,
-                    currency: expenseCurrency,
-                    category: 'Food & Dining',
-                    merchant_name: analysis.name || 'Scanned Item',
-                    description: `Purchase: ${analysis.name}`,
-                    source: 'barcode_scan',
-                    reconciliation_status: 'pending',
-                } as any);
+                // Record expense via server API /api/expenses (uses server admin client to bypass client RLS)
+                try {
+                    const { data: { session } } = await supabase.auth.getSession();
+                    const expRes = await fetch('/api/expenses', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            ...(session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {})
+                        },
+                        body: JSON.stringify({
+                            user_id: userId,
+                            product_name: analysis.name || 'Scanned Item',
+                            quantity: 1,
+                            unit_price: price,
+                            total_amount: price,
+                            currency: expenseCurrency,
+                            barcode: analysis.barcode,
+                            category: 'Food & Dining',
+                            source: 'barcode_scan'
+                        })
+                    });
+                    const expData = await expRes.json();
+                    if (!expRes.ok || !expData.success) {
+                        console.error("[Food] Expenses API failed to persist transaction:", expData);
+                    } else {
+                        console.log("[Food] Successfully recorded scanned purchase transaction via server API:", expData.expense);
+                    }
+                } catch (apiErr) {
+                    console.error("[Food] Network error calling /api/expenses:", apiErr);
+                }
+
+                // Secondary sync with user_budgets and budget_transactions if available
+                try {
+                    const { data: activeBudget } = await supabase
+                        .from('user_budgets')
+                        .select('id, remaining_budget')
+                        .eq('user_id', userId)
+                        .eq('is_active', true)
+                        .order('created_at', { ascending: false })
+                        .limit(1)
+                        .maybeSingle();
+
+                    if (activeBudget?.id) {
+                        await supabase.from('budget_transactions').insert({
+                            budget_id: activeBudget.id,
+                            food_analysis_id: foodItem.id,
+                            amount: price,
+                            description: `Purchase: ${analysis.name}`,
+                            transaction_date: new Date().toISOString()
+                        } as any);
+
+                        if (activeBudget.remaining_budget !== null && activeBudget.remaining_budget !== undefined) {
+                            const newRemaining = Math.max(0, Number(activeBudget.remaining_budget) - price);
+                            await supabase.from('user_budgets')
+                                .update({ remaining_budget: newRemaining })
+                                .eq('id', activeBudget.id);
+                        }
+                    }
+                } catch (bErr) {
+                    console.warn("[Food] Could not sync budget_transactions:", bErr);
+                }
+
+                // Seed product_price_cache with this authentic user-confirmed price
+                if (analysis.barcode) {
+                    try {
+                        await supabase.from('product_price_cache').upsert({
+                            product_id: analysis.barcode,
+                            retailer: analysis.brand || analysis.manufacturer || 'Local Market',
+                            country: expenseCountry,
+                            currency: expenseCurrency,
+                            price: price,
+                            source: 'User Confirmed Log',
+                            confidence: 1.0,
+                            retrieved_at: new Date().toISOString()
+                        }, { onConflict: 'product_id,country' });
+                    } catch (cacheErr) {
+                        console.warn("[Food] Failed to seed product_price_cache:", cacheErr);
+                    }
+                }
+
                 console.log(`[Food] Confirmed scanner expense recorded: ${expenseCurrency} ${price}`);
             } catch (txErr) {
                 console.error("Failed to record scanner expense:", txErr);

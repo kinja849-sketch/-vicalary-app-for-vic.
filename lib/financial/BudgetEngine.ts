@@ -132,6 +132,9 @@ export class BudgetEngine {
       }
     }
 
+    // Sort recent expenses so latest scanned items appear first
+    recentExpenses.sort((a, b) => new Date(b.transaction_date).getTime() - new Date(a.transaction_date).getTime());
+
     // ── 5. Calculate remaining budget and daily allocation ──
     const remainingBudget = Math.max(0, monthlyBudget - spentThisMonth);
     const daysRemaining = Math.max(1, Math.ceil((endOfCycle.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));

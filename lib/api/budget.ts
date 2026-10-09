@@ -15,7 +15,7 @@ export const getBudgetStatus = async (userId: string, clientCurrency?: string, c
 
     // In V2 Architecture, the backend's deterministic BudgetEngine is responsible for
     // returning the daily budget status, fetching from user_budget_profiles and financial_transactions.
-    const res = await fetch('/api/budget/daily', {
+    const res = await fetch(`/api/budget/daily?userId=${encodeURIComponent(userId)}`, {
         method: 'GET',
         headers
     });

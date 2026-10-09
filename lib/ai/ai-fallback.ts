@@ -126,8 +126,8 @@ export function mapModelForBackup(model?: string): string {
 
   if (model && model.startsWith('gemini-') && model !== 'gemini-2.5-flash' && model !== 'gemini-3.8-flash') return model;
 
-  // Prioritize high-performance, responsive Gemini 3.7 Flash
-  return 'gemini-3.7-flash';
+  // Prioritize high-performance, responsive Gemini 3.1 Flash Lite
+  return 'gemini-3.1-flash-lite';
 }
 
 /**
@@ -213,11 +213,10 @@ export async function callChatCompletionWithFallback(
 
   const fallbackModels = Array.from(new Set([
     mapModelForBackup(request.model),
-    'gemini-3.7-flash',
-    'gemini-3.6-flash',
-    'gemini-3.5-flash',
+    'gemini-3.1-flash-lite',
+    'gemini-3.5-flash-lite',
     'gemini-flash-latest',
-    'gemini-3.8-flash',
+    'gemini-3.7-flash',
   ]));
 
   let lastBackupErr = '';

@@ -4,6 +4,20 @@ import { NutritionNormalizer, IdentifiedFoodItem } from '@/lib/nutrition/Nutriti
 import { SafetyEngine } from '@/lib/services/SafetyEngine';
 import { callChatCompletionWithFallback, getPrimaryApiKey, getBackupApiKey } from '@/lib/ai/ai-fallback';
 
+function parseJSONSafely(text?: string | null, fallback: any = {}) {
+  try {
+    if (!text) return fallback;
+    const jsonStart = text.indexOf('{');
+    const jsonEnd = text.lastIndexOf('}');
+    if (jsonStart !== -1 && jsonEnd !== -1) {
+      return JSON.parse(text.substring(jsonStart, jsonEnd + 1));
+    }
+    return JSON.parse(text);
+  } catch (e) {
+    return fallback;
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -26,7 +40,7 @@ export async function POST(req: NextRequest) {
     let dietaryRestrictions: string[] = [];
     let allergies: string[] = [];
     let healthConditions = 'None reported';
-    let userLanguage = 'en';
+    let userLanguage = body.language || locationContext?.language || (locationContext?.languages?.[0]) || 'en';
     let todaySuggestedMeals: Array<{ name: string; calories: number; image?: string; session?: string }> = [];
 
     if (userId) {
@@ -38,7 +52,7 @@ export async function POST(req: NextRequest) {
         { data: dailyPlan }
       ] = await Promise.all([
         supabase.from('onboarding_responses').select('*').eq('user_id', userId).maybeSingle(),
-        supabase.from('user_settings').select('language').eq('user_id', userId).maybeSingle(),
+        supabase.from('user_settings').select('language, is_language_auto').eq('user_id', userId).maybeSingle(),
         supabase.from('user_profiles').select('*').eq('id', userId).maybeSingle(),
         supabase.from('user_daily_meal_plans')
           .select('breakfast, lunch, dinner, snacks')
@@ -62,7 +76,15 @@ export async function POST(req: NextRequest) {
         allergies = Array.isArray((onboarding as any).allergies) ? (onboarding as any).allergies : [(onboarding as any).allergies];
       }
 
-      userLanguage = userSettings?.language || locationContext?.language || (locationContext?.languages?.[0]) || 'en';
+      // Strict Language Hierarchy:
+      // 1. Explicit request language from client
+      // 2. User settings manual selection
+      // 3. Location-derived language
+      // 4. Fallback 'en'
+      userLanguage = body.language || 
+        (userSettings?.is_language_auto === false && userSettings?.language ? userSettings.language : null) ||
+        userSettings?.language || 
+        userLanguage;
 
       if (dailyPlan) {
         const sessions = ['breakfast', 'lunch', 'dinner', 'snacks'];
@@ -119,10 +141,12 @@ Return ONLY a valid JSON object matching this schema:
           }
         ]
       }],
+      temperature: 0.1,
+      max_tokens: 280,
       response_format: { type: 'json_object' }
     });
 
-    const visionParsed = JSON.parse(visionResult.choices[0]?.message?.content || '{}');
+    const visionParsed = parseJSONSafely(visionResult.choices[0]?.message?.content);
     const mealTitle = visionParsed.meal_title || 'Meal Analysis';
     const visualUncertainties = visionParsed.visual_uncertainties || 'Portion sizes and preparation fats estimated from visual appearance.';
     const identifiedFoods: IdentifiedFoodItem[] = Array.isArray(visionParsed.foods) && visionParsed.foods.length > 0
@@ -138,8 +162,33 @@ Return ONLY a valid JSON object matching this schema:
 ${todaySuggestedMeals.slice(0, 8).map(m => `- ${m.name} (~${m.calories} kcal, ${m.session})`).join('\n')}`
       : `NO PRE-EXISTING MEAL PLAN FOUND FOR TODAY.`;
 
+    const languageNames: Record<string, string> = {
+      en: 'English',
+      id: 'Indonesian (Bahasa Indonesia)',
+      ar: 'Arabic (العربية)',
+      ur: 'Urdu (اردو)',
+      bn: 'Bengali (বাংলা)',
+      hi: 'Hindi (हिन्दी)',
+      zh: 'Mandarin Chinese (中文)',
+      es: 'Spanish (Español)',
+      fr: 'French (Français)',
+      pt: 'Portuguese (Português)',
+      ru: 'Russian (Русский)',
+      sw: 'Swahili (Kiswahili)',
+      mr: 'Marathi (मराठी)',
+      te: 'Telugu (తెలుగు)',
+      ta: 'Tamil (தமிழ்)',
+      vi: 'Vietnamese (Tiếng Việt)',
+      so: 'Somali (Soomaali)',
+      my: 'Burmese (မြန်မာ)',
+      ko: 'Korean (한국어)',
+      tr: 'Turkish (Türkçe)',
+      de: 'German (Deutsch)'
+    };
+    const targetLangName = languageNames[userLanguage.toLowerCase()] || userLanguage;
+
     const synthesisPrompt = `You are the lead nutritional intelligence engine for VicCalary.
-You write detailed, comprehensive, clinical-grade nutritional explanations in natural paragraphs.
+You write clear, comprehensive, clinical-grade nutritional explanations in natural paragraphs.
 
 USER HEALTH CONTEXT:
 - Primary Goal: ${userGoal}
@@ -161,18 +210,20 @@ AUTHENTICATED NUTRITIONAL FACTS (DO NOT INVENT NUMBERS, USE THESE EXACT TOTALS):
 - Key Vitamins & Minerals present: ${[...nutritionCalculation.prominent_vitamins, ...nutritionCalculation.prominent_minerals].join(', ')}
 - Visual Uncertainties: ${visualUncertainties}
 
-${canonicalMealsContext}
+CRITICAL LANGUAGE REQUIREMENT:
+You MUST write all output fields (meal_title, meal_description, vitamins_and_nutrition, recommendation) EXCLUSIVELY in fluent ${targetLangName} (code '${userLanguage}').
+Under no circumstances should you output in English if another language is specified.
 
-TASK: Write three substantial, clinical, readable PARAGRAPHS in language code '${userLanguage}':
+TASK: Write three concise, clinical, readable PARAGRAPHS in fluent ${targetLangName}. Keep each paragraph focused (2 to 4 sentences).
 
 1. "meal_description":
-   A thorough, articulate paragraph explaining what you observe in the image. Describe each distinct component, their estimated portion volumes or piece counts, and explicitly acknowledge visual uncertainties (such as whether fries are deep-fried or air-fried, or sausage meat blends). Do NOT use brief one-liners.
+   A thorough, articulate paragraph explaining what you observe in the image. Describe each distinct component, their estimated portion volumes or piece counts, and acknowledge visual uncertainties.
 
 2. "vitamins_and_nutrition":
-   A substantial nutritional narrative paragraph. Explain what the macronutrient balance means for sustained energy, satiety, and blood sugar. Discuss the specific micronutrients identified (e.g. Potassium and Vitamin C in potatoes, B vitamins and Iron in sausages/meats) and note relevant considerations such as sodium or saturated fat content.
+   A focused nutritional narrative paragraph. Explain what the macronutrient balance means for sustained energy, satiety, and blood sugar. Discuss specific micronutrients identified (e.g. Potassium, Vitamin C, Iron) and relevant considerations like sodium or saturated fat.
 
 3. "recommendation":
-   A thorough paragraph assessing whether this meal fits the user's current plan and objective (${userGoal}, ${dailyCalorieGoal} kcal/day). 
+   A clear clinical paragraph assessing whether this meal fits the user's current plan and objective (${userGoal}, ${dailyCalorieGoal} kcal/day). 
    - State clearly if it is recommended (verdict GOOD/MODERATE) or not recommended (verdict POOR).
    - Explain WHY based on calorie density, macronutrients, and declared restrictions/allergies.
    - Suggest sensible portion adjustments or side modifications that would improve suitability.
@@ -180,9 +231,10 @@ TASK: Write three substantial, clinical, readable PARAGRAPHS in language code '$
 
 Return ONLY a JSON object:
 {
-  "meal_description": "Thorough paragraph...",
-  "vitamins_and_nutrition": "Substantial paragraph...",
-  "recommendation": "Thorough paragraph...",
+  "meal_title": "Translated dish name in ${targetLangName}",
+  "meal_description": "Thorough paragraph in ${targetLangName}...",
+  "vitamins_and_nutrition": "Focused paragraph in ${targetLangName}...",
+  "recommendation": "Clear recommendation in ${targetLangName}...",
   "verdict": "GOOD" | "MODERATE" | "POOR",
   "is_recommended": true | false,
   "alternative_meal_name": "Exact canonical meal name from today's plan if not recommended, or null if recommended"
@@ -191,10 +243,12 @@ Return ONLY a JSON object:
     const synthesisResult = await callChatCompletionWithFallback({
       model: 'gpt-4o-mini',
       messages: [{ role: 'user', content: synthesisPrompt }],
+      temperature: 0.2,
+      max_tokens: 420,
       response_format: { type: 'json_object' }
     });
 
-    const synthesisData = JSON.parse(synthesisResult.choices[0]?.message?.content || '{}');
+    const synthesisData = parseJSONSafely(synthesisResult.choices[0]?.message?.content);
 
     // ─── 5. DETERMINISTIC SAFETY GATE (ALLERGIES & MEDICAL CONDITIONS) ───
     const userSafetyProfile = userId 
@@ -240,7 +294,7 @@ Return ONLY a JSON object:
     }
 
     return NextResponse.json({
-      name: mealTitle,
+      name: synthesisData.meal_title || mealTitle,
       type: 'FOOD',
       description: synthesisData.meal_description || visualUncertainties,
       vitamins_and_nutrition: synthesisData.vitamins_and_nutrition,

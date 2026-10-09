@@ -27,8 +27,34 @@ export class ProductAdvisor {
 - Identified Minerals: ${nutrition.minerals?.length ? nutrition.minerals.join(', ') : 'None listed'}
 ` : 'Nutritional data not documented on packaging.';
 
+    const languageNames: Record<string, string> = {
+      en: 'English',
+      id: 'Indonesian (Bahasa Indonesia)',
+      ar: 'Arabic (العربية)',
+      ur: 'Urdu (اردو)',
+      bn: 'Bengali (বাংলা)',
+      hi: 'Hindi (हिन्दी)',
+      zh: 'Mandarin Chinese (中文)',
+      es: 'Spanish (Español)',
+      fr: 'French (Français)',
+      pt: 'Portuguese (Português)',
+      ru: 'Russian (Русский)',
+      sw: 'Swahili (Kiswahili)',
+      mr: 'Marathi (मराठी)',
+      te: 'Telugu (తెలుగు)',
+      ta: 'Tamil (தமிழ்)',
+      vi: 'Vietnamese (Tiếng Việt)',
+      so: 'Somali (Soomaali)',
+      my: 'Burmese (မြန်မာ)',
+      ko: 'Korean (한국어)',
+      tr: 'Turkish (Türkçe)',
+      de: 'German (Deutsch)'
+    };
+    const langName = languageNames[language.toLowerCase()] || language;
+
     const prompt = `You are a clinical nutritionist and packaged-food advisor for VicCalary.
-Write three substantial, high-quality, readable PARAGRAPHS in fluent '${language}' based on verified product data.
+Write three clear, articulate, clinical paragraphs ENTIRELY in fluent ${langName} (language code: '${language}') based strictly on verified product data.
+Do NOT write in English unless English is requested. All JSON string values must be in ${langName}.
 
 PRODUCT DETAILS:
 - Name: ${product.name}
@@ -49,15 +75,16 @@ USER HEALTH PROFILE:
 - Health Context: ${healthConcerns}
 
 RULES:
-1. DO NOT invent fictional nutrition figures. Ground your text in the facts above.
-2. If nutrition shows 0g or minimal calories for water or black coffee, explain that factually rather than treating it as missing.
-3. Write in rich, articulate, readable PARAGRAPHS. DO NOT write one-liners or fragment sentences.
+1. Ground your text in the facts above. DO NOT invent fictional numbers.
+2. If nutrition shows 0g or minimal calories for water or black coffee, explain that factually.
+3. Keep each paragraph focused, concise, and informative (2 to 4 sentences each). Avoid long rambling filler.
+4. Output language MUST be ${langName}.
 
 Return ONLY a JSON object:
 {
-  "description": "A comprehensive paragraph describing what this product is, its brand, category, serving size, and key manufacturing or ingredient characteristics.",
-  "vitamins_and_nutrition": "A substantial paragraph discussing the nutritional composition based on the product's serving basis. Explain the calories, macronutrient balance (protein, carbs, fats, sugars, fiber, sodium), and any notable vitamins and minerals present.",
-  "recommendation": "A thorough paragraph analyzing whether this packaged food fits the user's specific health objective (${userGoal}, ${calorieGoal} kcal/day), dietary restrictions, and allergies. Explain why it is suitable or unsuitable, and advise on appropriate serving frequency.",
+  "description": "A concise paragraph describing what this product is, its brand, category, serving size, and key manufacturing or ingredient characteristics.",
+  "vitamins_and_nutrition": "A focused paragraph discussing the nutritional composition based on the product's serving basis. Explain the calories, macronutrient balance (protein, carbs, fats, sugars, fiber, sodium), and any notable vitamins and minerals present.",
+  "recommendation": "A clear clinical paragraph analyzing whether this packaged food fits the user's specific health objective (${userGoal}, ${calorieGoal} kcal/day), dietary restrictions, and allergies. State why it is suitable or unsuitable, and advise on appropriate serving frequency.",
   "healthStatus": "GOOD" | "MODERATE" | "POOR"
 }`;
 
@@ -65,6 +92,8 @@ Return ONLY a JSON object:
       const response = await callChatCompletionWithFallback({
         model: 'gpt-4o-mini',
         messages: [{ role: 'user', content: prompt }],
+        temperature: 0.2,
+        max_tokens: 380,
         response_format: { type: 'json_object' }
       });
 
