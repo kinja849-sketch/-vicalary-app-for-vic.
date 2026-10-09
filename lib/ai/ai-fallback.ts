@@ -608,71 +608,8 @@ export async function synthesizeVoiceAudioWithFallback(
   }
 }
 
-  console.info('[AI Fallback] Cloud preview TTS exhausted. Using Kokoro-82M studio-grade human neural voice engine (voice: af_heart)...');
-  try {
-    const wavBuffer = await synthesizeKokoroNeuralSpeech(cleanText, 'af_heart');
-    if (wavBuffer && wavBuffer.length > 0) {
-      const base64 = wavBuffer.toString('base64');
-      return {
-        buffer: wavBuffer,
-        audioBase64: base64,
-        dataUri: `data:audio/wav;base64,${base64}`,
-        mimeType: 'audio/wav',
-        provider: 'backup',
-      };
-    }
-  } catch (err: any) {
-    console.error('[AI Fallback] Kokoro-82M human neural speech exception:', err?.message || err);
-  }
-
   console.error('[AI Fallback] All neural TTS models failed.');
   return null;
-}
-
-let kokoroInstance: any = null;
-let kokoroLoadingPromise: Promise<any> | null = null;
-
-async function getKokoroInstance(): Promise<any> {
-  if (kokoroInstance) return kokoroInstance;
-  if (kokoroLoadingPromise) return kokoroLoadingPromise;
-
-  kokoroLoadingPromise = (async () => {
-    try {
-      const { KokoroTTS } = await import('kokoro-js');
-      kokoroInstance = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-ONNX', {
-        dtype: 'q8'
-      });
-      console.info('[AI Fallback] Kokoro-82M studio-grade neural voice engine loaded successfully.');
-      return kokoroInstance;
-    } catch (err) {
-      console.error('[AI Fallback] Failed to initialize Kokoro neural voice engine:', err);
-      kokoroLoadingPromise = null;
-      return null;
-    }
-  })();
-
-  return kokoroLoadingPromise;
-}
-
-/**
- * Synthesizes ultra-realistic human neural speech via Kokoro-82M (voice: af_heart / af_bella)
- * Zero quota limits, zero external dependencies, 100% human-sounding conversational voice
- */
-async function synthesizeKokoroNeuralSpeech(text: string, voice = 'af_heart'): Promise<Buffer | null> {
-  try {
-    const tts = await getKokoroInstance();
-    if (!tts) return null;
-
-    const audio = await tts.generate(text, { voice });
-    if (!audio || !audio.toBlob) return null;
-
-    const blob = audio.toBlob();
-    const arrayBuf = await blob.arrayBuffer();
-    return Buffer.from(arrayBuf);
-  } catch (e) {
-    console.warn('[AI Fallback] synthesizeKokoroNeuralSpeech error:', e);
-    return null;
-  }
 }
 
 

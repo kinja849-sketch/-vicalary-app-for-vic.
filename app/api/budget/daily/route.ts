@@ -3,6 +3,7 @@ import { getAuthenticatedUser, createServerSupabaseClient, createAdminSupabaseCl
 import { BudgetEngine } from '@/lib/financial/BudgetEngine';
 import { BudgetNormalizationService } from '@/lib/financial/BudgetNormalizationService';
 import type { GeoContext } from '@/lib/financial/BudgetNormalizationService';
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
     try {

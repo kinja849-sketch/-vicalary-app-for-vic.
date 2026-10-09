@@ -1,7 +1,13 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   experimental: {
-    serverComponentsExternalPackages: ['kokoro-js', 'onnxruntime-node', '@huggingface/transformers'],
+    outputFileTracingExcludes: {
+      '*': [
+        'node_modules/@swc/**',
+        'node_modules/esbuild/**',
+        'node_modules/webpack/**',
+      ],
+    },
   },
   images: {
     remotePatterns: [
@@ -9,24 +15,6 @@ const nextConfig = {
       { protocol: "https", hostname: "*.supabase.in" },
       { protocol: "https", hostname: "edamam-product-images.s3.amazonaws.com" },
     ],
-  },
-  webpack: (config, { isServer }) => {
-    if (!isServer) {
-      config.resolve.alias = {
-        ...config.resolve.alias,
-        'kokoro-js': false,
-        '@huggingface/transformers': false,
-        'onnxruntime-web': false,
-        'onnxruntime-node': false,
-      };
-      config.resolve.fallback = {
-        ...config.resolve.fallback,
-        fs: false,
-        path: false,
-        crypto: false,
-      };
-    }
-    return config;
   },
 };
 
