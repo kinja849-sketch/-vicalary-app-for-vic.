@@ -864,9 +864,7 @@ export const initiateCallV2 = async (conversationId: string, callerId: string, r
 
     let roomUrl = (roomData as any)?.room_url;
     if (!roomUrl) {
-        const sanitizedConvId = conversationId.replace(/[^a-zA-Z0-9_-]/g, '_');
-        const dailyDomain = process.env.NEXT_PUBLIC_DAILY_DOMAIN || 'najibking';
-        roomUrl = `https://${dailyDomain}.daily.co/vicalary_call_${sanitizedConvId}`;
+        throw new Error('Unable to create a valid video/audio call room. Please verify network or Daily configuration.');
     }
 
     const { data, error } = await (supabase as any)

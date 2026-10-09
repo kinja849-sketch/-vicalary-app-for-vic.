@@ -94,11 +94,11 @@ export async function POST(req: NextRequest) {
             }
         }
 
-        // Attempt C: Fallback URL generation if neither API nor RPC produced a room URL
+        // Fail explicitly if neither API nor RPC produced a room URL
         if (!roomUrl) {
-            const sanitizedConvId = conversation_id.replace(/[^a-zA-Z0-9_-]/g, '_');
-            const dailyDomain = process.env.NEXT_PUBLIC_DAILY_DOMAIN || 'vicalary';
-            roomUrl = `https://${dailyDomain}.daily.co/vicalary_call_${sanitizedConvId}`;
+            return NextResponse.json({
+                error: 'Failed to create a valid Daily room. Please verify DAILY_API_KEY configuration.'
+            }, { status: 502 });
         }
 
         // 4. Insert call record into Supabase database
