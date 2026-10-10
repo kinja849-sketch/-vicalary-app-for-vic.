@@ -369,10 +369,9 @@ export default function ChatConversation() {
     const [recordingStartY, setRecordingStartY] = useState<number | null>(null);
     const [recordingStartX, setRecordingStartX] = useState<number | null>(null);
     const [recordingDuration, setRecordingDuration] = useState(0);
-    const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
     const [isMenuOpen, setIsMenuOpen] = useState(false);
 
-    const { startCall } = useCall();
+    const { startCall, onlineUsers } = useCall();
     const [showAiVoiceModal, setShowAiVoiceModal] = useState(false);
 
     const [showLastSeen, setShowLastSeen] = useState(true);
@@ -688,32 +687,7 @@ export default function ChatConversation() {
         }
     }, [lastMessageContent, isAI, otherUserTyping]);
 
-    // Presence Logic
-    useEffect(() => {
-        if (!user?.id) return;
 
-        const presenceChannel = supabase.channel('online-users');
-        presenceChannel
-            .on('presence', { event: 'sync' }, () => {
-                const state = presenceChannel.presenceState();
-                const online = new Set<string>();
-                Object.values(state).forEach((presences: any) => {
-                    presences.forEach((p: any) => {
-                        if (p.user_id) online.add(p.user_id);
-                    });
-                });
-                setOnlineUsers(online);
-            })
-            .subscribe(async (status) => {
-                if (status === 'SUBSCRIBED') {
-                    await presenceChannel.track({ user_id: user.id, online_at: new Date().toISOString() });
-                }
-            });
-
-        return () => {
-            supabase.removeChannel(presenceChannel);
-        };
-    }, [user?.id]);
 
 
     const resolvedOtherUserId = otherParticipant?.user_id || virtualTargetId;
