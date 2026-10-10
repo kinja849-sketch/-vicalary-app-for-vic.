@@ -1,5 +1,6 @@
 import { supabase } from '../supabase'
 import { logInfo, logError } from './logging'
+import { format } from 'date-fns'
 // Removed gemini import
 
 // ============================================================================
@@ -7,7 +8,7 @@ import { logInfo, logError } from './logging'
 // ============================================================================
 
 export const addMeasurement = async (userId: string, weight: number, height?: number, notes?: string) => {
-    const today = new Date().toISOString().split('T')[0]
+    const today = format(new Date(), 'yyyy-MM-dd')
 
     const { data: dataRows, error } = await supabase
         .from('progress_measurements')
@@ -92,9 +93,10 @@ export const getDailySummary = async (userId: string) => {
 // ============================================================================
 
 export const getMonthlyAnalysis = async (userId: string, year: number, month: number) => {
-    // Fetch measurements for the month
-    const startDate = new Date(year, month - 1, 1).toISOString().split('T')[0]
-    const endDate = new Date(year, month, 0).toISOString().split('T')[0]
+    // Fetch measurements for the month without timezone corruption
+    const lastDay = new Date(year, month, 0).getDate()
+    const startDate = `${year}-${String(month).padStart(2, '0')}-01`
+    const endDate = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
 
     const { data: measurements } = await supabase
         .from('progress_measurements')
@@ -291,8 +293,8 @@ export const logMeal = async (userId: string, mealData: any) => {
 // MILESTONES (Calendar)
 // ============================================================================
 
-export const upsertMilestone = async (userId: string, date: Date, data: any) => {
-    const dateString = date.toISOString().split('T')[0];
+export const upsertMilestone = async (userId: string, date: Date | string, data: any) => {
+    const dateString = typeof date === 'string' ? date : format(date, 'yyyy-MM-dd');
 
     const { data: milestoneRows, error } = await (supabase
         .from('user_milestones' as any) as any)
@@ -311,8 +313,8 @@ export const upsertMilestone = async (userId: string, date: Date, data: any) => 
     return milestoneRows && milestoneRows.length > 0 ? milestoneRows[0] : null;
 };
 
-export const getMilestone = async (userId: string, date: Date) => {
-    const dateString = date.toISOString().split('T')[0];
+export const getMilestone = async (userId: string, date: Date | string) => {
+    const dateString = typeof date === 'string' ? date : format(date, 'yyyy-MM-dd');
 
     const { data, error } = await (supabase
         .from('user_milestones' as any) as any)

@@ -1,5 +1,6 @@
 "use client"
 import { useState } from 'react';
+import { format } from 'date-fns';
 import { useAuth } from '@/lib/AuthContext';
 import { supabase } from '@/lib/supabase';
 import { toast } from 'sonner';
@@ -33,15 +34,17 @@ export function ManualProgressInput({ onClose, onSuccess, initialDate = new Date
 
         setIsSubmitting(true);
         try {
-            const dateStr = initialDate.toISOString().split('T')[0];
+            const dateStr = format(initialDate, 'yyyy-MM-dd');
 
-            // 1. Log to progress_measurements
+            // 1. Log to progress_measurements using the validated 'notes' text field
+            const notesPayload = JSON.stringify({ mood: mood || '', reflection: reflection || '' });
             const { error: measError } = await supabase.from('progress_measurements').upsert({
                 user_id: user.id,
                 measurement_date: dateStr,
                 weight: weight ? parseFloat(weight) : undefined,
-                mood,
-                reflection
+                notes: notesPayload
+            }, {
+                onConflict: 'user_id,measurement_date'
             });
 
             if (measError) throw measError;
@@ -54,12 +57,29 @@ export function ManualProgressInput({ onClose, onSuccess, initialDate = new Date
                 .eq('progress_date', dateStr)
                 .maybeSingle();
 
-            if (!existingProgress) {
+            if (existingProgress) {
+                const currentData = typeof existingProgress.progress_data === 'object' && existingProgress.progress_data !== null
+                    ? existingProgress.progress_data
+                    : {};
+                await supabase.from('daily_progress').update({
+                    progress_data: {
+                        ...currentData,
+                        mood: mood || (currentData as any).mood,
+                        reflection: reflection || (currentData as any).reflection,
+                        weight: weight ? parseFloat(weight) : (currentData as any).weight
+                    }
+                }).eq('id', existingProgress.id);
+            } else {
                 await supabase.from('daily_progress').insert({
                     user_id: user.id,
                     progress_date: dateStr,
                     calories_consumed: 0,
-                    meals_logged: 0
+                    meals_logged: 0,
+                    progress_data: {
+                        mood: mood || '',
+                        reflection: reflection || '',
+                        weight: weight ? parseFloat(weight) : null
+                    }
                 });
             }
 

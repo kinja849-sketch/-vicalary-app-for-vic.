@@ -122,8 +122,12 @@ export const CheckpointCalendar: React.FC<CheckpointCalendarProps> = ({ joinDate
         return Math.floor(differenceInDays(current, start) / 7);
     };
 
-    const handleDayClick = (date: Date, isMilestone: boolean) => {
-        if (isMilestone) {
+    const handleDayClick = (date: Date, isMilestone: boolean, isToday: boolean) => {
+        if (isToday) {
+            if (onEditProgress) {
+                onEditProgress(date);
+            }
+        } else if (isMilestone) {
             setSelectedDate(date);
             setIsModalOpen(true);
         } else if (onEditProgress) {
@@ -184,7 +188,7 @@ export const CheckpointCalendar: React.FC<CheckpointCalendarProps> = ({ joinDate
                         <div
                             key={date.toISOString()}
                             ref={isToday ? todayRef : null}
-                            onClick={() => handleDayClick(date, isMilestone)}
+                            onClick={() => handleDayClick(date, isMilestone, isToday)}
                             className={`
                                 flex flex-col items-center justify-center min-w-[72px] h-[100px] rounded-2xl snap-center transition-all cursor-pointer relative overflow-hidden flex-shrink-0
                                 ${isToday
@@ -228,12 +232,29 @@ export const CheckpointCalendar: React.FC<CheckpointCalendarProps> = ({ joinDate
                 })}
             </div>
 
-            <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-xl p-3 flex items-start gap-3 mt-2 border border-indigo-100 dark:border-indigo-800/30 animate-in fade-in slide-in-from-bottom-2">
-                <Info className="text-indigo-500 mt-0.5 shrink-0" size={18} />
-                <p className="text-xs text-indigo-900 dark:text-indigo-200 leading-relaxed font-medium">
-                    {t('today_is')} <span className="font-bold">{getHijriDateString(today)}</span>. {t('milestone_info')}
-                </p>
-            </div>
+            {isMilestoneDay(today) ? (
+                <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-xl p-3 flex items-center justify-between mt-2 border border-indigo-100 dark:border-indigo-800/30 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="flex items-start gap-3">
+                        <Info className="text-indigo-500 mt-0.5 shrink-0" size={18} />
+                        <p className="text-xs text-indigo-900 dark:text-indigo-200 leading-relaxed font-medium">
+                            {t('today_is')} <span className="font-bold">{getHijriDateString(today)}</span>. {t('milestone_week')} {getMilestoneWeek(today)}!
+                        </p>
+                    </div>
+                    <button
+                        onClick={() => { setSelectedDate(today); setIsModalOpen(true); }}
+                        className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-sm shrink-0 ml-2 transition-all active:scale-95"
+                    >
+                        {t('milestones_label')}
+                    </button>
+                </div>
+            ) : (
+                <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-xl p-3 flex items-start gap-3 mt-2 border border-indigo-100 dark:border-indigo-800/30 animate-in fade-in slide-in-from-bottom-2">
+                    <Info className="text-indigo-500 mt-0.5 shrink-0" size={18} />
+                    <p className="text-xs text-indigo-900 dark:text-indigo-200 leading-relaxed font-medium">
+                        {t('today_is')} <span className="font-bold">{getHijriDateString(today)}</span>. {t('milestone_info')}
+                    </p>
+                </div>
+            )}
 
             {user && selectedDate && (
                 <MilestoneModal

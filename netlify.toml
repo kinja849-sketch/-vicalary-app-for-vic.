@@ -17,3 +17,6 @@
 [[plugins]]
   package = "@netlify/plugin-nextjs"
 
+[functions."daily-summary-cron"]
+  schedule = "*/15 * * * *"
+
