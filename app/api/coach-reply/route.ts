@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
 import { WebResearchService } from '@/lib/services/WebResearchService'
 import { callChatCompletionWithFallback, streamChatCompletionWithFallback, getPrimaryApiKey, getBackupApiKey } from '@/lib/ai/ai-fallback'
+import { resolveUserLanguage, buildAILanguageDirective, LANGUAGE_META } from '@/lib/api/serverLanguage'
 
 const COACH_ID = '00000000-0000-0000-0000-000000000001'
 
@@ -166,10 +167,22 @@ export async function POST(req: NextRequest) {
       const { data: profile } = await supabase.from('user_profiles').select('*').eq('id', userId).maybeSingle();
       const userName = payload.user_name || profile?.full_name || profile?.username || 'there';
 
+      const targetLang = await resolveUserLanguage({
+        userId,
+        requestLanguage: payload.language || payload.lang,
+        locationContext: payload.locationContext,
+        supabase
+      });
+      const meta = LANGUAGE_META[targetLang] || LANGUAGE_META.en;
+      const langDirective = targetLang === 'en'
+        ? `Respond in English.`
+        : `CRITICAL LANGUAGE REQUIREMENT: You MUST generate this greeting EXCLUSIVELY in fluent ${meta.name} (${meta.native}, language code: '${targetLang}'). Under NO circumstance should you write in English.`;
+
       const welcomePrompt = `You are Vee, ${userName}'s personal Health Coach inside VICALARY.
 This is a brand new, empty conversation and ${userName} has just opened the coach chat.
 Generate a single, warm, friendly 1-2 sentence welcome greeting that introduces yourself as Vee, their supportive health coach, and asks what nutrition, workout, or wellness habit they'd like to work on today.
-DO NOT use markdown symbols, bullet points, or robotic slogans. Keep it natural, human, and inviting.`;
+DO NOT use markdown symbols, bullet points, or robotic slogans. Keep it natural, human, and inviting.
+${langDirective}`;
 
       const aiRes = await callChatCompletionWithFallback({
         model: process.env.NEXT_PUBLIC_OPENAI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o',
@@ -178,7 +191,16 @@ DO NOT use markdown symbols, bullet points, or robotic slogans. Keep it natural,
         max_tokens: 150,
       });
 
-      const welcomeText = aiRes.choices[0]?.message?.content?.trim() || `Hi ${userName}! I'm Vee, your personal health coach. What nutrition or wellness goal would you like to focus on today?`;
+      const defaultGreetings: Record<string, string> = {
+        en: `Hi ${userName}! I'm Vee, your personal health coach. What nutrition or wellness goal would you like to focus on today?`,
+        id: `Halo ${userName}! Saya Vee, pelatih kesehatan pribadi Anda. Tujuan nutrisi atau kebugaran apa yang ingin Anda fokuskan hari ini?`,
+        ar: `مرحبًا ${userName}! أنا في، مدربك الصحي الشخصي. ما هو هدف التغذية أو العافية الذي ترغب في التركيز عليه اليوم؟`,
+        ur: `ہیلو ${userName}! میں وی ہوں، آپ کا ذاتی ہیلتھ کوچ۔ آج آپ کس غذائیت یا تندرستی کے مقصد پر توجہ مرکوز کرنا چاہتے ہیں؟`,
+        es: `¡Hola ${userName}! Soy Vee, tu coach de salud personal. ¿En qué objetivo de nutrición o bienestar te gustaría enfocarte hoy?`,
+        fr: `Bonjour ${userName} ! Je suis Vee, votre coach de santé personnel. Sur quel objectif de nutrition ou de bien-être souhaitez-vous vous concentrer aujourd'hui ?`
+      };
+
+      const welcomeText = aiRes.choices[0]?.message?.content?.trim() || defaultGreetings[targetLang] || defaultGreetings.en;
 
       // Save the generated welcome message to Supabase
       const { data: newMsg, error: insertErr } = await supabase.from('messages').insert({
@@ -269,12 +291,18 @@ DO NOT use markdown symbols, bullet points, or robotic slogans. Keep it natural,
     const recentMessages = ((messagesRes.data || []) as any[]).reverse()
     const recentScans = scannedProductsRes.data || []
     const userSettings = settingsRes.data || {}
-    const userLanguage = userSettings.language || (geoInfo.country_code ? countryToLangMap[geoInfo.country_code]?.[0] : null) || 'en'
+    const userLanguage = await resolveUserLanguage({
+      userId,
+      requestLanguage: payload.language || payload.lang || payload.locale || system_context?.language,
+      locationContext: loc || geoInfo,
+      supabase
+    });
+    const languageDirective = buildAILanguageDirective(userLanguage);
     const userCurrency = userSettings.currency || geoInfo.currency_code || 'USD'
 
     const userName = payload.user_name || payload.userName || profile?.full_name || profile?.username || 'there'
     const rawTime = system_context?.current_time || new Date().toISOString()
-    const currentTime = new Date(rawTime).toLocaleString(system_context?.language || 'en-US', {
+    const currentTime = new Date(rawTime).toLocaleString(userLanguage, {
       timeZone: system_context?.time_zone || geoInfo.timezone || 'UTC',
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit',
     })
@@ -307,6 +335,8 @@ DO NOT use markdown symbols, bullet points, or robotic slogans. Keep it natural,
 
     const systemPrompt = `You are Vee, ${userName}'s personal Health Coach inside VICALARY — warm, clear, human, non-robotic, supportive, and practical. You behave like a trusted conversational partner (ChatGPT-style health coach) who genuinely listens, understands, and responds directly.
 
+${languageDirective}
+
 CORE TOPICS & DOMAINS:
 - Habits, nutrition, daily activity, sleep, stress, hydration, and sustainable routines.
 
@@ -320,6 +350,7 @@ CONVERSATION MECHANICS & ANTI-BOILERPLATE RULES:
 4. CLARIFY WHEN VAGUE: If ${userName}'s request is ambiguous, ask a short, helpful clarifying question instead of guessing or lecturing.
 5. NO REPETITION: Never repeat the same opening sentence or recycled paragraph across turns.
 6. SYNTHESIZE FACTS: If scientific/web research is provided below, synthesize it naturally into your advice — never dump raw search data.
+7. LANGUAGE ADHERENCE: ${languageDirective}
 
 LIVE RESEARCH FINDINGS:
 ${liveResearchData ? liveResearchData : 'None needed for this conversational turn.'}

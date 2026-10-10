@@ -21,6 +21,7 @@ import {
   getPrimaryApiKey,
   getBackupApiKey
 } from '@/lib/ai/ai-fallback';
+import { resolveUserLanguage, buildAILanguageDirective, LANGUAGE_META, SupportedLanguage } from '@/lib/api/serverLanguage';
 
 const COACH_ID = '00000000-0000-0000-0000-000000000001';
 export const DEFAULT_COACH_VOICE = 'nova';
@@ -148,6 +149,13 @@ export async function processConversationStream(
     }
 
     // 3. Build System Prompt
+    const effectiveLang = await resolveUserLanguage({
+      userId,
+      requestLanguage: locale,
+      locationContext,
+      supabase
+    });
+
     const systemPrompt = buildSystemPrompt({
       classification,
       profileContext,
@@ -155,7 +163,7 @@ export async function processConversationStream(
       budgetContext,
       affiliationContext,
       locationContext,
-      locale,
+      locale: effectiveLang,
       voiceMode,
       toolResults,
       isDynamicGreeting
@@ -402,6 +410,13 @@ export async function processConversation(
     toolResults = toolsRes || [];
 
     // 3. Build Capability-Specific System Prompt
+    const effectiveLang = await resolveUserLanguage({
+      userId,
+      requestLanguage: locale,
+      locationContext,
+      supabase
+    });
+
     const systemPrompt = buildSystemPrompt({
       classification,
       profileContext,
@@ -409,7 +424,7 @@ export async function processConversation(
       budgetContext,
       affiliationContext,
       locationContext,
-      locale,
+      locale: effectiveLang,
       voiceMode,
       toolResults,
       isDynamicGreeting
@@ -593,9 +608,16 @@ function buildSystemPrompt(params: {
     // fallback
   }
 
+  const effectiveLang = (params.locale || 'en') as SupportedLanguage;
+  const langMeta = LANGUAGE_META[effectiveLang] || LANGUAGE_META.en;
+  const langDirective = buildAILanguageDirective(effectiveLang);
+
   const resolvedUserName = profileContext?.fullName || 'User';
   let prompt = `You are Vee, the VICALARY Health Coach & Nutrition Companion.
 You are having a direct, personal 1-on-1 conversation with ${resolvedUserName}.
+
+${langDirective}
+All conversation, advice, questions, and spoken text MUST be in ${langMeta.name} (${langMeta.native}).
 
 Core Guidelines:
 - You know ${resolvedUserName} personally. Address them naturally by name when appropriate.
@@ -626,11 +648,11 @@ Rule: When asked about the date, day, month, time, or year, ALWAYS answer accura
     const hour = now.getHours();
     const timeOfDay = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening';
     prompt += `\n[ACTION REQUIRED: DYNAMIC OPENING GREETING]:
-- Generate a warm, personal, 1-sentence opening greeting for ${resolvedUserName}.
+- Generate a warm, personal, 1-sentence opening greeting for ${resolvedUserName} EXCLUSIVELY in fluent ${langMeta.name} (${langMeta.native}).
 - Time of day: ${timeOfDay}.
 - Naturally welcome ${resolvedUserName} back, mention supporting their health or nutrition journey today, and invite them to speak.
 - Speak in a calm, conversational woman's voice like ChatGPT. Avoid generic scripted clichés, presenter hype, or robotic templates.
-- Output ONLY the single spoken opening greeting sentence.
+- Output ONLY the single spoken opening greeting sentence in ${langMeta.name}.
 `;
   }
 
@@ -638,6 +660,7 @@ Rule: When asked about the date, day, month, time, or year, ALWAYS answer accura
     prompt += `\n[VOICE MODE - CRITICAL DIRECTIVES]:
 - You are speaking directly to the user in a live audio conversation.
 - You must speak in a calm, natural, friendly, conversational woman's voice like ChatGPT, with normal pacing and subtle expression.
+- LANGUAGE MANDATE: You MUST speak EXCLUSIVELY in ${langMeta.name} (${langMeta.native}). Do NOT speak in English if another language is specified.
 - Avoid robotic pronunciation, exaggerated excitement, and an artificial presenter tone.
 - Directly, accurately, and thoughtfully address the user's exact words in 1 to 3 spoken sentences.
 - DO NOT DIVERGE: Stay 100% on topic with what the user just asked. Do NOT bring up calories, budgets, or unsolicited advice unless directly requested.

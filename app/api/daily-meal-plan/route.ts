@@ -2,15 +2,23 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServerSupabaseClient, createAdminSupabaseClient } from '@/lib/supabase-server';
 import { recipeProvider } from '@/lib/services/RecipeProviderService';
 import { callChatCompletionWithFallback } from '@/lib/ai/ai-fallback';
+import { resolveUserLanguage, buildAILanguageDirective } from '@/lib/api/serverLanguage';
 
 const CATEGORIES = ['breakfast', 'lunch', 'dinner', 'snacks', 'drinks', 'desserts'];
 
 export async function POST(req: NextRequest) {
   try {
-    const { userId, locationContext, localHour, forceRefresh } = await req.json();
+    const { userId, locationContext, localHour, forceRefresh, language } = await req.json();
     
     // 1. Fetch User Profile & Constraints
     const supabase = createAdminSupabaseClient();
+    const resolvedLang = await resolveUserLanguage({
+      userId,
+      requestLanguage: language,
+      locationContext,
+      supabase,
+    });
+
     let allergies = [];
     let intolerances = [];
     let calorieTarget = 2000;

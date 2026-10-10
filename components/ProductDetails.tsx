@@ -10,6 +10,7 @@ import { toast } from 'sonner';
 import { CrowdsourceForm } from '@/components/CrowdsourceForm';
 import { useQueryClient } from '@tanstack/react-query';
 import { getOrCreateCoachConversation } from '@/lib/api/chat';
+import { useTranslation } from '@/lib/api/translation';
 
 export interface ProductDetailsProps {
   productImage?: string;
@@ -126,6 +127,7 @@ export function ProductDetails({
   const router = useRouter();
   const queryClient = useQueryClient();
   const { user } = useAuth();
+  const { t } = useTranslation();
   const setPendingAnalysisContext = useAnalysisStore(state => state.setPendingAnalysisContext);
   const setNavbarHidden = useAnalysisStore(state => state.setNavbarHidden);
   const [isLogging, setIsLogging] = useState(false);
@@ -419,10 +421,10 @@ export function ProductDetails({
                   </div>
                   <div>
                     <h2 className="text-base font-black text-rose-600 dark:text-rose-400 uppercase tracking-wider">
-                      Ethical Responsibility Alert — Flagged
+                      {t('ethical_alert_flagged')}
                     </h2>
                     <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 font-medium">
-                      Normal purchase recommendation is suspended at this safety gate.
+                      {t('ethical_recommendation_suspended')}
                     </p>
                   </div>
                 </div>
@@ -480,7 +482,7 @@ export function ProductDetails({
               <div className="flex items-center gap-2 p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl">
                 <ShieldCheck className="w-5 h-5 text-emerald-500 dark:text-emerald-400 shrink-0" />
                 <p className="text-xs font-bold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider">
-                  Ethically Cleared — No active boycott or conflict flags on record
+                  {t('ethically_cleared')}
                 </p>
               </div>
             )}
@@ -495,7 +497,7 @@ export function ProductDetails({
                       <ShoppingCart className="w-4 h-4" />
                     </div>
                     <h2 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
-                      Product Description
+                      {t('product_description')}
                     </h2>
                   </div>
                   <div className="text-slate-600 dark:text-slate-300 text-sm sm:text-[15px] leading-relaxed space-y-3 font-normal">
@@ -514,7 +516,7 @@ export function ProductDetails({
                       <Sparkles className="w-4 h-4" />
                     </div>
                     <h2 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
-                      Ingredients & Food Coloring
+                      {t('ingredients_food_coloring')}
                     </h2>
                   </div>
 
@@ -565,7 +567,7 @@ export function ProductDetails({
                   {/* Accurate Food Coloring Detection */}
                   <div className="space-y-2 pt-1">
                     <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 block">
-                      Food Coloring Analysis
+                      {t('food_coloring_analysis')}
                     </span>
                     <div className="flex flex-wrap gap-2">
                       {coloring?.has_synthetic && coloring.synthetic_colors && coloring.synthetic_colors.length > 0 ? (
@@ -589,7 +591,7 @@ export function ProductDetails({
                       {!coloring?.has_colorings && (
                         <span className="px-3 py-1.5 bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
                           <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                          No added food colorings detected
+                          {t('no_added_colorings')}
                         </span>
                       )}
                     </div>
@@ -605,7 +607,7 @@ export function ProductDetails({
                       </div>
                       <div>
                         <h2 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
-                          Vitamins & Nutrition
+                          {t('vitamins_nutrition')}
                         </h2>
                         <span className="text-[11px] text-slate-500 dark:text-slate-400 font-semibold">
                           {servingSize ? `Basis: ${servingSize}` : (serving_basis === 'serving' ? 'Per Serving' : 'Per 100g')}
@@ -617,7 +619,7 @@ export function ProductDetails({
                   {/* Calories Card */}
                   <div className="bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-2xl p-5 text-center shadow-inner">
                     <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest block mb-1">
-                      Nutritional Energy
+                      {t('nutritional_energy')}
                     </span>
                     <div className="text-4xl sm:text-5xl font-black text-slate-900 dark:text-white tracking-tight my-1">
                       {calories !== null && calories !== undefined ? (
@@ -634,27 +636,27 @@ export function ProductDetails({
                   {/* Macros Grid */}
                   <div className="grid grid-cols-3 sm:grid-cols-6 gap-2.5">
                     <div className="bg-white dark:bg-black/30 rounded-2xl p-3 border border-slate-200 dark:border-white/5 text-center">
-                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Protein</span>
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">{t('protein_label')}</span>
                       <p className="text-base font-black text-slate-900 dark:text-white mt-0.5">{protein !== null && protein !== undefined ? `${protein}g` : '–'}</p>
                     </div>
                     <div className="bg-white dark:bg-black/30 rounded-2xl p-3 border border-slate-200 dark:border-white/5 text-center">
-                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Carbs</span>
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">{t('carbs_label')}</span>
                       <p className="text-base font-black text-slate-900 dark:text-white mt-0.5">{carbs !== null && carbs !== undefined ? `${carbs}g` : '–'}</p>
                     </div>
                     <div className="bg-white dark:bg-black/30 rounded-2xl p-3 border border-slate-200 dark:border-white/5 text-center">
-                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Fat</span>
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">{t('fat_label')}</span>
                       <p className="text-base font-black text-slate-900 dark:text-white mt-0.5">{fat !== null && fat !== undefined ? `${fat}g` : '–'}</p>
                     </div>
                     <div className="bg-white dark:bg-black/30 rounded-2xl p-3 border border-slate-200 dark:border-white/5 text-center">
-                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Sugar</span>
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">{t('sugar_label')}</span>
                       <p className="text-base font-black text-slate-900 dark:text-white mt-0.5">{sugar !== null && sugar !== undefined ? `${sugar}g` : '–'}</p>
                     </div>
                     <div className="bg-white dark:bg-black/30 rounded-2xl p-3 border border-slate-200 dark:border-white/5 text-center">
-                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Fiber</span>
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">{t('fiber_label')}</span>
                       <p className="text-base font-black text-slate-900 dark:text-white mt-0.5">{fiber !== null && fiber !== undefined ? `${fiber}g` : '–'}</p>
                     </div>
                     <div className="bg-white dark:bg-black/30 rounded-2xl p-3 border border-slate-200 dark:border-white/5 text-center">
-                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Sodium</span>
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">{t('sodium_label')}</span>
                       <p className="text-base font-black text-slate-900 dark:text-white mt-0.5">{sodium_mg !== null && sodium_mg !== undefined ? `${sodium_mg}mg` : '–'}</p>
                     </div>
                   </div>
@@ -663,7 +665,7 @@ export function ProductDetails({
                   {(vitamins.length > 0 || minerals.length > 0) && (
                     <div className="space-y-2 pt-1">
                       <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 block">
-                        Documented Vitamins & Minerals
+                        {t('identified_vitamins_minerals')}
                       </span>
                       <div className="flex flex-wrap gap-2">
                         {vitamins.map((v, i) => (
@@ -695,7 +697,7 @@ export function ProductDetails({
                       <Check className="w-4 h-4" />
                     </div>
                     <h2 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
-                      Recommended for Your Plan
+                      {t('recommended_for_plan')}
                     </h2>
                   </div>
                   <div className="text-slate-600 dark:text-slate-300 text-sm sm:text-[15px] leading-relaxed space-y-3 font-normal">
@@ -712,7 +714,7 @@ export function ProductDetails({
                   <div className="flex items-center justify-between">
                     <div>
                       <span className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white block">
-                        {price_metadata?.source?.includes('Cache') ? 'Verified Local Price' : 'Estimated Local Price'}
+                        {price_metadata?.source?.includes('Cache') ? t('verified_local_price') : t('estimated_local_price')}
                       </span>
                       {price_metadata?.source && (
                         <span className="text-[11px] text-slate-500 dark:text-slate-400">Source: {price_metadata.source}</span>
@@ -790,7 +792,7 @@ export function ProductDetails({
                   }}
                 />
               )}
-              <span className="tracking-wide">Health Coach</span>
+              <span className="tracking-wide">{t('health_coach') || "Health Coach"}</span>
             </button>
           ) : (
             <>
@@ -805,7 +807,7 @@ export function ProductDetails({
                   ) : (
                     <Check className="w-5 h-5 text-slate-900" strokeWidth={3} />
                   )}
-                  <span>Budget</span>
+                  <span>{t('budget')}</span>
                 </button>
               ) : (
                 <button
@@ -813,7 +815,7 @@ export function ProductDetails({
                   className="flex-1 h-14 px-4 bg-rose-600 hover:bg-rose-500 active:scale-[0.98] text-white rounded-2xl font-black text-sm shadow-md flex items-center justify-center gap-2.5 transition-all whitespace-nowrap cursor-pointer"
                 >
                   <AlertCircle className="w-5 h-5" />
-                  <span>Avoid Product</span>
+                  <span>{t('avoid_product_btn')}</span>
                 </button>
               )}
 
@@ -834,7 +836,7 @@ export function ProductDetails({
                     }}
                   />
                 )}
-                <span className="tracking-wide">Health Coach</span>
+                <span className="tracking-wide">{t('health_coach') || "Health Coach"}</span>
               </button>
             </>
           )}

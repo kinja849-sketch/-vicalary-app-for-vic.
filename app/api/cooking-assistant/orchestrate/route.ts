@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { callChatCompletionWithFallback } from '@/lib/ai/ai-fallback';
+import { resolveUserLanguage, buildAILanguageDirective } from '@/lib/api/serverLanguage';
 
 export async function POST(req: NextRequest) {
     try {
         const payload = await req.json();
-        const { recipe, userId } = payload;
+        const { recipe, userId, language } = payload;
 
         if (!recipe || !recipe.title) {
             return NextResponse.json({ error: 'Missing recipe data' }, { status: 400 });
@@ -13,6 +14,13 @@ export async function POST(req: NextRequest) {
 
         // Fetch User Profile to get VCalorie Context
         const supabase = createServerSupabaseClient();
+        const resolvedLang = await resolveUserLanguage({
+            userId,
+            requestLanguage: language,
+            supabase,
+        });
+        const langDirective = buildAILanguageDirective(resolvedLang);
+
         let userContext = '';
         if (userId) {
             const { data: userProfile } = await supabase.from('user_profiles').select('goal, dietary_lifestyle').eq('id', userId).maybeSingle();
@@ -55,7 +63,10 @@ Output a strictly valid JSON object matching this schema:
       "image_prompt": "A highly detailed, photorealistic prompt for an AI image generator showing exactly what the food looks like AT THIS SPECIFIC STAGE of cooking (e.g., 'Close up of diced onions sautéing in a pan, golden brown')."
     }
   ]
-}`;
+}
+
+${langDirective}
+All user-facing text fields ("overview.text", "steps[].instruction") MUST be translated and written strictly in the specified target language!`;
 
         const openAiRes = await callChatCompletionWithFallback({
             model: 'gpt-4o',

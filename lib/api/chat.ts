@@ -652,13 +652,15 @@ export const sendMessage = async (
         const { getUserLocation } = await import('./location');
         const loc = await getUserLocation();
 
+        const currentAppLang = (typeof window !== 'undefined' ? localStorage.getItem('app_lang') : null) || 'en';
+
         const orchestratorPayload = {
             conversation_id: conversationId,
             user_id: userId,
             content: content,
             media_url: metadata?.url || null,
             location_context: loc,
-            locale: typeof navigator !== 'undefined' ? navigator.language : 'en'
+            locale: currentAppLang
         };
 
         try {
@@ -689,7 +691,7 @@ export const sendMessage = async (
                 system_context: {
                     current_time: now,
                     time_zone: typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC',
-                    language: typeof navigator !== 'undefined' ? navigator.language : 'en-US',
+                    language: currentAppLang,
                     locationContext: loc
                 }
             };

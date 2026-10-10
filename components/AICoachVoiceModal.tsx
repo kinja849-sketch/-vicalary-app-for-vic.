@@ -9,6 +9,8 @@ import { supabase } from '@/lib/supabase';
 import HealthCoachAvatar, { CoachState } from '@/components/avatar/HealthCoachAvatar';
 import { permissionManager } from '@/lib/services/PermissionManager';
 import { normalizeSpokenInput } from '@/lib/services/ai/SpeechNormalizer';
+import { useTranslation } from '@/lib/api/translation';
+import { LANGUAGE_META } from '@/lib/api/serverLanguage';
 const DEFAULT_COACH_VOICE = 'nova';
 
 interface AICoachVoiceModalProps {
@@ -62,9 +64,18 @@ export default function AICoachVoiceModal({
   const [permissionBlocked, setPermissionBlocked] = useState(false);
 
   // Authoritative State Machine & Turn Lock
+  const { lang: appLang } = useTranslation();
   const [state, setState] = useState<CoachState>('speaking');
   const [isMuted, setIsMuted] = useState(false);
-  const [voiceLang, setVoiceLang] = useState<'en-US' | 'id-ID' | 'es-ES' | 'ar-SA' | 'fr-FR'>('en-US');
+  const [voiceLang, setVoiceLang] = useState<string>(() => {
+    return (LANGUAGE_META[appLang as any]?.speechCode || 'en-US');
+  });
+
+  useEffect(() => {
+    const code = LANGUAGE_META[appLang as any]?.speechCode || 'en-US';
+    setVoiceLang(code);
+  }, [appLang]);
+
   const [liveInterim, setLiveInterim] = useState<string>('');
   const [showDebugHUD, setShowDebugHUD] = useState(false);
   

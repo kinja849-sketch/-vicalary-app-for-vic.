@@ -191,6 +191,8 @@ export const useTranslation = () => {
 
     const finalLang = langMap[rawLang.toLowerCase()] || (translations[rawLang as Language] ? rawLang : 'en') as Language;
 
+    const isRTL = finalLang === 'ar' || finalLang === 'ur';
+
     useEffect(() => {
         if (i18n.language !== finalLang) {
             i18n.changeLanguage(finalLang);
@@ -198,8 +200,9 @@ export const useTranslation = () => {
         if (typeof window !== 'undefined' && finalLang) {
             localStorage.setItem('app_lang', finalLang);
             document.documentElement.lang = finalLang;
+            document.documentElement.dir = isRTL ? 'rtl' : 'ltr';
         }
-    }, [finalLang]);
+    }, [finalLang, isRTL]);
 
     const lang = finalLang;
     const currency = (settings as any)?.currency || detectedLoc?.currency || 'USD';
@@ -258,11 +261,12 @@ export const useTranslation = () => {
     return { 
         t, 
         lang: finalLang, 
+        isRTL,
         currency, 
         currencySymbol, 
         timezone, 
         country, 
-        countryCode,
+        countryCode, 
         countryFlag,
         localHour, 
         formatCurrency, 
@@ -271,3 +275,45 @@ export const useTranslation = () => {
         isAuto 
     };
 };
+
+export const setManualLanguage = async (newLang: Language, userId?: string) => {
+    if (typeof window !== 'undefined') {
+        localStorage.setItem('has_user_selected_lang', 'true');
+        localStorage.setItem('app_lang', newLang);
+        document.documentElement.lang = newLang;
+        document.documentElement.dir = (newLang === 'ar' || newLang === 'ur') ? 'rtl' : 'ltr';
+    }
+    if (i18n.language !== newLang) {
+        await i18n.changeLanguage(newLang);
+    }
+    if (userId) {
+        await updateSettings(userId, {
+            language: newLang,
+            is_language_auto: false
+        });
+    }
+};
+
+export const setAutoLanguage = async (userId?: string, fallbackLang: Language = 'en') => {
+    if (typeof window !== 'undefined') {
+        localStorage.removeItem('has_user_selected_lang');
+    }
+    const loc = await detectLocation().catch(() => null);
+    const targetLang = (getPrimaryLanguage(loc?.languages) || fallbackLang) as Language;
+    if (typeof window !== 'undefined') {
+        localStorage.setItem('app_lang', targetLang);
+        document.documentElement.lang = targetLang;
+        document.documentElement.dir = (targetLang === 'ar' || targetLang === 'ur') ? 'rtl' : 'ltr';
+    }
+    if (i18n.language !== targetLang) {
+        await i18n.changeLanguage(targetLang);
+    }
+    if (userId) {
+        await updateSettings(userId, {
+            language: targetLang,
+            is_language_auto: true
+        });
+    }
+    return targetLang;
+};
+

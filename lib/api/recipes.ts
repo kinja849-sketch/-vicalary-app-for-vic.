@@ -491,10 +491,12 @@ export const getDailyMealSuggestions = async (userId?: string, forceRefresh = fa
         const { getUserLocation } = await import('./location');
         const loc = await getUserLocation();
 
+        const currentLang = typeof window !== 'undefined' ? (localStorage.getItem('app_lang') || 'en') : 'en';
+
         const res = await fetch('/api/daily-meal-plan', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: isUuid ? userId : undefined, locationContext: loc, localHour, forceRefresh })
+            body: JSON.stringify({ userId: isUuid ? userId : undefined, locationContext: loc, localHour, forceRefresh, language: currentLang })
         });
         
         if (!res.ok) throw new Error("Failed to fetch daily meal plan");

@@ -3,6 +3,7 @@ import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { NutritionNormalizer, IdentifiedFoodItem } from '@/lib/nutrition/NutritionNormalizer';
 import { SafetyEngine } from '@/lib/services/SafetyEngine';
 import { callChatCompletionWithFallback, getPrimaryApiKey, getBackupApiKey } from '@/lib/ai/ai-fallback';
+import { resolveUserLanguage } from '@/lib/api/serverLanguage';
 
 function parseJSONSafely(text?: string | null, fallback: any = {}) {
   try {
@@ -76,15 +77,12 @@ export async function POST(req: NextRequest) {
         allergies = Array.isArray((onboarding as any).allergies) ? (onboarding as any).allergies : [(onboarding as any).allergies];
       }
 
-      // Strict Language Hierarchy:
-      // 1. Explicit request language from client
-      // 2. User settings manual selection
-      // 3. Location-derived language
-      // 4. Fallback 'en'
-      userLanguage = body.language || 
-        (userSettings?.is_language_auto === false && userSettings?.language ? userSettings.language : null) ||
-        userSettings?.language || 
-        userLanguage;
+      userLanguage = await resolveUserLanguage({
+        userId,
+        requestLanguage: body.language,
+        locationContext,
+        supabase
+      });
 
       if (dailyPlan) {
         const sessions = ['breakfast', 'lunch', 'dinner', 'snacks'];

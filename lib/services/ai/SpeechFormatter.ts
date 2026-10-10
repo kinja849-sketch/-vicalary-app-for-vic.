@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Speech Formatter for natural Text-to-Speech pronunciation
  * Converts raw numbers, calories, weights, and units into natural spoken English
  */
@@ -46,7 +46,7 @@ function numberToWords(num: number): string {
   return result.trim();
 }
 
-export function formatForSpeech(text: string): string {
+export function formatForSpeech(text: string, lang: string = 'en'): string {
   if (!text) return '';
 
   let spoken = text;
@@ -54,30 +54,33 @@ export function formatForSpeech(text: string): string {
   // 1. Remove markdown artifacts
   spoken = spoken.replace(/[*#_~`>]/g, '');
 
-  // 2. Format calories: e.g. "1,912 kcal" or "1912 calories"
-  spoken = spoken.replace(/(\d{1,3}(?:,\d{3})*|\d+)\s*(?:kcal|calories|cal)/gi, (_, numStr) => {
-    const rawNum = parseInt(numStr.replace(/,/g, ''), 10);
-    if (!isNaN(rawNum)) {
-      return `${numberToWords(rawNum)} calories`;
-    }
-    return `${numStr} calories`;
-  });
+  // 2. English-specific number and unit pronunciation expansions
+  if (!lang || lang === 'en') {
+    // Format calories: e.g. "1,912 kcal" or "1912 calories"
+    spoken = spoken.replace(/(\d{1,3}(?:,\d{3})*|\d+)\s*(?:kcal|calories|cal)/gi, (_, numStr) => {
+      const rawNum = parseInt(numStr.replace(/,/g, ''), 10);
+      if (!isNaN(rawNum)) {
+        return `${numberToWords(rawNum)} calories`;
+      }
+      return `${numStr} calories`;
+    });
 
-  // 3. Format standalone comma-separated numbers: e.g. "1,912" or "2,500"
-  spoken = spoken.replace(/\b(\d{1,3}(?:,\d{3})+)\b/g, (_, numStr) => {
-    const rawNum = parseInt(numStr.replace(/,/g, ''), 10);
-    if (!isNaN(rawNum)) {
-      return numberToWords(rawNum);
-    }
-    return numStr;
-  });
+    // Format standalone comma-separated numbers: e.g. "1,912" or "2,500"
+    spoken = spoken.replace(/\b(\d{1,3}(?:,\d{3})+)\b/g, (_, numStr) => {
+      const rawNum = parseInt(numStr.replace(/,/g, ''), 10);
+      if (!isNaN(rawNum)) {
+        return numberToWords(rawNum);
+      }
+      return numStr;
+    });
 
-  // 4. Format units: kg, lbs, g, ml, %
-  spoken = spoken.replace(/(\d+)\s*kg\b/gi, '$1 kilograms');
-  spoken = spoken.replace(/(\d+)\s*lbs\b/gi, '$1 pounds');
-  spoken = spoken.replace(/(\d+)\s*g\b/gi, '$1 grams');
-  spoken = spoken.replace(/(\d+)\s*ml\b/gi, '$1 milliliters');
-  spoken = spoken.replace(/(\d+)\s*%/g, '$1 percent');
+    // Format units: kg, lbs, g, ml, %
+    spoken = spoken.replace(/(\d+)\s*kg\b/gi, '$1 kilograms');
+    spoken = spoken.replace(/(\d+)\s*lbs\b/gi, '$1 pounds');
+    spoken = spoken.replace(/(\d+)\s*g\b/gi, '$1 grams');
+    spoken = spoken.replace(/(\d+)\s*ml\b/gi, '$1 milliliters');
+    spoken = spoken.replace(/(\d+)\s*%/g, '$1 percent');
+  }
 
   return spoken.trim();
 }

@@ -167,7 +167,7 @@ export function MealAnalysis({
             </h1>
             <p className="text-xs text-slate-300 font-medium mt-1 flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5 text-vic-green" />
-              Multi-Food Visual Analysis & Normalization
+              {t('multi_food_visual_analysis')}
             </p>
           </div>
         </div>
@@ -179,7 +179,7 @@ export function MealAnalysis({
               <Apple className="w-4 h-4" />
             </div>
             <h2 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
-              Meal Description
+              {t('meal_description')}
             </h2>
           </div>
           <div className="text-slate-600 dark:text-slate-300 text-sm sm:text-[15px] leading-relaxed font-normal space-y-3">
@@ -201,23 +201,23 @@ export function MealAnalysis({
             </div>
             <div>
               <h2 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
-                Vitamins & Nutrition
+                {t('vitamins_nutrition')}
               </h2>
-              <span className="text-[11px] text-slate-500 dark:text-slate-400">Authoritative Food Normalization</span>
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">{t('authoritative_normalization')}</span>
             </div>
           </div>
 
           {/* Calorie Card with Sensible Range & Estimate Label */}
           <div className="bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-2xl p-5 text-center shadow-inner">
             <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-1 flex items-center justify-center gap-1.5">
-              <span>Estimated Total Calories</span>
+              <span>{t('estimated_total_calories')}</span>
               <Info className="w-3.5 h-3.5 text-slate-400" />
             </div>
             <div className="text-4xl sm:text-5xl font-black text-slate-900 dark:text-white tracking-tight my-1">
               ~{calories} <span className="text-2xl font-bold text-slate-400">kcal</span>
             </div>
             <div className="text-xs text-slate-600 dark:text-slate-300 font-medium">
-              Estimated range: <span className="text-slate-900 dark:text-white font-bold">{minCal} – {maxCal} kcal</span> based on portion variance
+              {t('estimated_range')}: <span className="text-slate-900 dark:text-white font-bold">{minCal} – {maxCal} kcal</span> {t('based_on_portion_variance')}
             </div>
             {dailyCalorieGoal > 0 && (
               <div className="mt-3 inline-block px-3 py-1 bg-slate-100 dark:bg-white/10 rounded-full text-[11px] font-semibold text-slate-700 dark:text-slate-300">
@@ -229,27 +229,27 @@ export function MealAnalysis({
           {/* Structured Macros Grid */}
           <div className="grid grid-cols-3 sm:grid-cols-6 gap-2.5">
             <div className="bg-white dark:bg-black/30 rounded-2xl p-3 border border-slate-200 dark:border-white/5 text-center">
-              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Protein</span>
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">{t('protein_label')}</span>
               <p className="text-base font-black text-slate-900 dark:text-white mt-0.5">{protein}g</p>
             </div>
             <div className="bg-white dark:bg-black/30 rounded-2xl p-3 border border-slate-200 dark:border-white/5 text-center">
-              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Carbs</span>
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">{t('carbs_label')}</span>
               <p className="text-base font-black text-slate-900 dark:text-white mt-0.5">{carbs}g</p>
             </div>
             <div className="bg-white dark:bg-black/30 rounded-2xl p-3 border border-slate-200 dark:border-white/5 text-center">
-              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Fat</span>
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">{t('fat_label')}</span>
               <p className="text-base font-black text-slate-900 dark:text-white mt-0.5">{fat}g</p>
             </div>
             <div className="bg-white dark:bg-black/30 rounded-2xl p-3 border border-slate-200 dark:border-white/5 text-center">
-              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Fiber</span>
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">{t('fiber_label')}</span>
               <p className="text-base font-black text-slate-900 dark:text-white mt-0.5">{fiber}g</p>
             </div>
             <div className="bg-white dark:bg-black/30 rounded-2xl p-3 border border-slate-200 dark:border-white/5 text-center">
-              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Sugar</span>
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">{t('sugar_label')}</span>
               <p className="text-base font-black text-slate-900 dark:text-white mt-0.5">{sugar}g</p>
             </div>
             <div className="bg-white dark:bg-black/30 rounded-2xl p-3 border border-slate-200 dark:border-white/5 text-center">
-              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Sodium</span>
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">{t('sodium_label')}</span>
               <p className="text-base font-black text-slate-900 dark:text-white mt-0.5">{sodium}mg</p>
             </div>
           </div>
@@ -257,7 +257,7 @@ export function MealAnalysis({
           {/* Meaningful Vitamins & Minerals Badges */}
           <div className="space-y-3 pt-1">
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 block">
-              Identified Vitamins & Minerals
+              {t('identified_vitamins_minerals')}
             </span>
             <div className="flex flex-wrap gap-2">
               {vitamins.map((v, i) => (
@@ -295,9 +295,9 @@ export function MealAnalysis({
             </div>
             <div>
               <h2 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
-                Recommended for Your Plan
+                {t('recommended_for_plan')}
               </h2>
-              <span className="text-[11px] text-slate-500 dark:text-slate-400">Personalized Health Context & Goal Fit</span>
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">{t('personalized_health_context')}</span>
             </div>
           </div>
 
@@ -316,7 +316,7 @@ export function MealAnalysis({
           {!isRecommended && alternativeMeal && (
             <div className="mt-4 p-5 bg-white dark:bg-black/40 border border-slate-200 dark:border-white/10 rounded-2xl space-y-3">
               <span className="text-[11px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5" /> Recommended Alternative From Today's Plan
+                <Sparkles className="w-3.5 h-3.5" /> {t('recommended_alternative')}
               </span>
               <div className="flex items-center gap-4">
                 {alternativeMeal.image && (
@@ -351,7 +351,7 @@ export function MealAnalysis({
             ) : (
               <Check className="w-5 h-5 text-slate-900" strokeWidth={3} />
             )}
-            <span>Log Meal</span>
+            <span>{t('log_meal_btn')}</span>
           </button>
 
           <button

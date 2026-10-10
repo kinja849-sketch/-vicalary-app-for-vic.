@@ -4,6 +4,7 @@ import { ScannerDecisionEngine } from '@/lib/scanner/ScannerDecisionEngine';
 import { ProductAdvisor } from '@/lib/ai/ProductAdvisor';
 import { SafetyEngine } from '@/lib/services/SafetyEngine';
 import { FoodColoringService } from '@/lib/products/FoodColoringService';
+import { resolveUserLanguage } from '@/lib/api/serverLanguage';
 
 export async function POST(req: NextRequest) {
   try {
@@ -29,17 +30,12 @@ export async function POST(req: NextRequest) {
       supabase.from('user_profiles').select('allergies').eq('id', userId).maybeSingle()
     ]);
 
-    // Strict Language Hierarchy:
-    // 1. Explicitly chosen language from client request body
-    // 2. User settings language (manual override)
-    // 3. Location-derived language from IP
-    // 4. Default 'en'
-    const lang = body.language || 
-      (userSettings?.is_language_auto === false && userSettings?.language ? userSettings.language : null) ||
-      userSettings?.language || 
-      locationContext?.language || 
-      locationContext?.languages?.[0] || 
-      'en';
+    const lang = await resolveUserLanguage({
+      userId,
+      requestLanguage: body.language,
+      locationContext,
+      supabase
+    });
 
     const country = userSettings?.country_code || locationContext?.country_code || locationContext?.country || 'US';
 
@@ -56,14 +52,26 @@ export async function POST(req: NextRequest) {
         en: 'Unable to identify product in database. You can report this product to add it.',
         id: 'Tidak dapat mengidentifikasi produk di database. Anda dapat melaporkan produk ini untuk menambahkannya.',
         ar: 'تعذر التعرف على المنتج في قاعدة البيانات. يمكنك الإبلاغ عن هذا المنتج لإضافته.',
+        ur: 'ڈیٹا بیس میں مصنوعات کی شناخت کرنے میں ناکام۔ آپ اسے شامل کرنے کے لیے رپورٹ کر سکتے ہیں۔',
         es: 'No se puede identificar el producto en la base de datos. Puede reportar este producto para agregarlo.',
-        fr: 'Impossible d\'identifier le produit dans la base de données. Vous pouvez le signaler pour l\'ajouter.'
+        fr: 'Impossible d\'identifier le produit dans la base de données. Vous pouvez le signaler pour l\'ajouter.',
+        de: 'Produkt konnte nicht in der Datenbank identifiziert werden. Sie können dieses Produkt melden, um es hinzuzufügen.',
+        tr: 'Ürün veritabanında tanımlanamadı. Eklemek için bu ürünü bildirebilirsiniz.'
+      };
+      const notFoundNames: Record<string, string> = {
+        en: 'Product Not Found',
+        id: 'Produk Tidak Ditemukan',
+        ar: 'المنتج غير موجود',
+        ur: 'پروڈکٹ نہیں ملا',
+        es: 'Producto no encontrado',
+        fr: 'Produit non trouvé',
+        de: 'Produkt nicht gefunden'
       };
       return NextResponse.json({
         found: false,
         barcode,
         type: 'food',
-        name: lang === 'id' ? 'Produk Tidak Ditemukan' : 'Product Not Found',
+        name: notFoundNames[lang] || notFoundNames['en'],
         description: notFoundMsgs[lang] || notFoundMsgs['en'],
         is_compliant: undefined,
         needs_crowdsourcing: true

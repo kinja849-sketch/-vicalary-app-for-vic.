@@ -325,7 +325,7 @@ export default function RecipeDetails() {
             const res = await fetch('/api/cooking-assistant/orchestrate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ recipe, userId: user?.id })
+                body: JSON.stringify({ recipe, userId: user?.id, language: lang })
             });
             const data = await res.json();
             if (data.session) {
@@ -494,7 +494,9 @@ export default function RecipeDetails() {
                     query,
                     recipeTitle: recipe.title,
                     currentStepIdx: idx,
-                    currentInstruction: instr
+                    currentInstruction: instr,
+                    language: lang,
+                    userId: user?.id
                 })
             });
             const data = await res.json();

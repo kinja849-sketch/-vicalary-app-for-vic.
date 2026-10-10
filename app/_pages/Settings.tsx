@@ -7,7 +7,7 @@ import { MyQRCode } from "@/components/MyQRCode";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/AuthContext";
 import { getUserSettings, updateSettings } from "@/lib/api/settings";
-import { useTranslation } from "@/lib/api/translation";
+import { useTranslation, setManualLanguage, setAutoLanguage, Language } from "@/lib/api/translation";
 import { useCurrency } from "@/lib/CurrencyContext";
 import { toast } from "sonner";
 
@@ -179,12 +179,15 @@ export default function Settings() {
               </div>
               <div className="max-h-[60vh] overflow-y-auto">
                 <button
-                  onClick={() => {
-                    if (typeof window !== 'undefined') {
-                      localStorage.removeItem('has_user_selected_lang');
-                    }
+                  onClick={async () => {
+                    await setAutoLanguage(user?.id);
                     updateSettingsMutation.mutate({ is_language_auto: true });
+                    queryClient.invalidateQueries({ queryKey: ['daily-meal-plan'] });
+                    queryClient.invalidateQueries({ queryKey: ['active-budget'] });
+                    queryClient.invalidateQueries({ queryKey: ['daily-progress'] });
+                    queryClient.invalidateQueries({ queryKey: ['personalized-recommendations'] });
                     setShowLanguageModal(false);
+                    toast.success("Set to Auto Detect (IP Location)");
                   }}
                   className={`w-full p-4 text-left flex items-center justify-between border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors ${((settings as any)?.is_language_auto !== false && (typeof window === 'undefined' || localStorage.getItem('has_user_selected_lang') !== 'true')) ? 'bg-vic-green/10 text-vic-green font-bold' : ''}`}
                 >
@@ -197,12 +200,13 @@ export default function Settings() {
                 {languages.map((l) => (
                   <button
                     key={l.code}
-                    onClick={() => {
-                      if (typeof window !== 'undefined') {
-                        localStorage.setItem('has_user_selected_lang', 'true');
-                        localStorage.setItem('app_lang', l.code);
-                      }
+                    onClick={async () => {
+                      await setManualLanguage(l.code as Language, user?.id);
                       updateSettingsMutation.mutate({ language: l.code, is_language_auto: false });
+                      queryClient.invalidateQueries({ queryKey: ['daily-meal-plan'] });
+                      queryClient.invalidateQueries({ queryKey: ['active-budget'] });
+                      queryClient.invalidateQueries({ queryKey: ['daily-progress'] });
+                      queryClient.invalidateQueries({ queryKey: ['personalized-recommendations'] });
                       setShowLanguageModal(false);
                     }}
                     className={`w-full p-4 text-left flex items-center justify-between border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors ${(((settings as any)?.is_language_auto === false || (typeof window !== 'undefined' && localStorage.getItem('has_user_selected_lang') === 'true')) && lang === l.code) ? 'bg-vic-green/10 text-vic-green font-bold' : ''}`}

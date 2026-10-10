@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import { getAuthenticatedUser } from '@/lib/supabase-server';
+import { getAuthenticatedUser, createServerSupabaseClient } from '@/lib/supabase-server';
 import { getAICompletionText } from '@/lib/ai/ai-fallback';
+import { resolveUserLanguage, buildAILanguageDirective } from '@/lib/api/serverLanguage';
 
 export async function POST(request: Request) {
     try {
@@ -8,14 +9,25 @@ export async function POST(request: Request) {
         if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
         const body = await request.json().catch(() => ({}));
-        const { daily_budget, daily_spending, remaining_budget, currency, recent_expenses } = body;
+        const { daily_budget, daily_spending, remaining_budget, currency, recent_expenses, language, locationContext } = body;
 
         if (daily_budget === undefined || daily_spending === undefined) {
             return NextResponse.json({ success: false, error: 'Missing budget context' }, { status: 400 });
         }
 
+        const supabase = createServerSupabaseClient();
+        const resolvedLang = await resolveUserLanguage({
+            userId: user.id,
+            requestLanguage: language,
+            locationContext,
+            supabase,
+        });
+        const langDirective = buildAILanguageDirective(resolvedLang);
+
         const prompt = `
 You are an empathetic financial and nutritional coach for the Vicalary app.
+${langDirective}
+
 The user has exceeded their daily budget. 
 Daily Budget: ${daily_budget} ${currency || 'USD'}
 Daily Spending: ${daily_spending} ${currency || 'USD'}

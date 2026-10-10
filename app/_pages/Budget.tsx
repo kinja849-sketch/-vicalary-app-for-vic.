@@ -76,8 +76,8 @@ export default function Budget() {
                 {isError || !activeBudget ? (
                     <div className="bg-red-50 dark:bg-red-900/20 p-6 rounded-2xl mb-8 border border-red-100 dark:border-red-800">
                         <AlertTriangle className="text-red-500 mb-2" />
-                        <h2 className="text-lg font-bold text-red-700 dark:text-red-400">Budget Profile Missing</h2>
-                        <p className="text-sm text-red-600 dark:text-red-300 mb-4">You have not completed your onboarding budget setup. Please complete onboarding to set your intended monthly spending goal.</p>
+                        <h2 className="text-lg font-bold text-red-700 dark:text-red-400">{t('budget_profile_missing')}</h2>
+                        <p className="text-sm text-red-600 dark:text-red-300 mb-4">{t('budget_profile_missing_desc')}</p>
                     </div>
                 ) : (
                     <>
@@ -90,14 +90,14 @@ export default function Budget() {
                                 <div className="flex-1">
                                     <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
                                         <h3 className="text-base font-black text-rose-700 dark:text-rose-300 uppercase tracking-wider">
-                                            Daily Budget Exceeded Alert
+                                            {t('daily_budget_alert')}
                                         </h3>
                                         <span className="px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-700 dark:text-rose-300 text-xs font-black uppercase tracking-wider">
-                                            Over Allowance
+                                            {t('over_allowance')}
                                         </span>
                                     </div>
                                     <p className="text-sm font-bold text-rose-800 dark:text-rose-200">
-                                        You have exceeded your daily food allowance by{" "}
+                                        {t('exceeded_daily_allowance')}{" "}
                                         <span className="font-black underline text-rose-600 dark:text-rose-300">
                                             {formatBudgetCurrency(activeBudget.spentToday - activeBudget.recommendedDailySpend)}
                                         </span>
@@ -105,15 +105,15 @@ export default function Budget() {
                                     </p>
                                     <div className="mt-3 p-3 bg-white/70 dark:bg-black/40 rounded-xl text-xs font-medium text-slate-700 dark:text-slate-300 border border-rose-500/20 grid grid-cols-3 gap-2">
                                         <div>
-                                            <span className="text-slate-500 dark:text-slate-400 block font-bold uppercase text-[10px]">Daily Limit</span>
+                                            <span className="text-slate-500 dark:text-slate-400 block font-bold uppercase text-[10px]">{t('daily_limit')}</span>
                                             <span className="font-black text-slate-900 dark:text-white">{formatBudgetCurrency(activeBudget.recommendedDailySpend)}</span>
                                         </div>
                                         <div>
-                                            <span className="text-slate-500 dark:text-slate-400 block font-bold uppercase text-[10px]">Total Spent</span>
+                                            <span className="text-slate-500 dark:text-slate-400 block font-bold uppercase text-[10px]">{t('total_spent')}</span>
                                             <span className="font-black text-rose-600 dark:text-rose-400">{formatBudgetCurrency(activeBudget.spentToday)}</span>
                                         </div>
                                         <div>
-                                            <span className="text-slate-500 dark:text-slate-400 block font-bold uppercase text-[10px]">Remaining</span>
+                                            <span className="text-slate-500 dark:text-slate-400 block font-bold uppercase text-[10px]">{t('remaining')}</span>
                                             <span className="font-black text-rose-600 dark:text-rose-400">{formatBudgetCurrency(0)}</span>
                                         </div>
                                     </div>
@@ -129,7 +129,7 @@ export default function Budget() {
                             
                             <div className="relative z-10">
                                 <div className="flex justify-between items-center mb-1">
-                                    <p className="text-sm font-bold opacity-80 uppercase tracking-wider">Daily Budget</p>
+                                    <p className="text-sm font-bold opacity-80 uppercase tracking-wider">{t('daily_budget_label')}</p>
                                     <p className="text-xs font-semibold opacity-90">{activeBudget.currentDateStr}</p>
                                 </div>
                                 <h2 className="text-4xl font-black mb-6">
@@ -138,19 +138,19 @@ export default function Budget() {
                                 
                                 <div className="grid grid-cols-2 gap-4">
                                     <div className="bg-white/20 p-3 rounded-xl backdrop-blur-sm">
-                                        <p className="text-xs font-bold opacity-80 uppercase mb-1">Daily Allowance</p>
+                                        <p className="text-xs font-bold opacity-80 uppercase mb-1">{t('daily_allowance_label')}</p>
                                         <p className="font-black text-lg">{formatBudgetCurrency(activeBudget.recommendedDailySpend)}</p>
                                     </div>
                                     <div className="bg-white/20 p-3 rounded-xl backdrop-blur-sm">
-                                        <p className="text-xs font-bold opacity-80 uppercase mb-1">Spent Today</p>
+                                        <p className="text-xs font-bold opacity-80 uppercase mb-1">{t('spent_today')}</p>
                                         <p className="font-black text-lg">{formatBudgetCurrency(activeBudget.spentToday)}</p>
                                     </div>
                                 </div>
                                 
                                 <div className="mt-6 pt-4 border-t border-white/20">
                                     <div className="flex justify-between mb-2">
-                                        <p className="text-xs font-bold opacity-80 uppercase">Monthly Cycle Overview</p>
-                                        <p className="text-xs font-bold opacity-80">{activeBudget.daysRemaining} days left in cycle</p>
+                                        <p className="text-xs font-bold opacity-80 uppercase">{t('monthly_cycle_overview')}</p>
+                                        <p className="text-xs font-bold opacity-80">{activeBudget.daysRemaining} {t('days_left_cycle')}</p>
                                     </div>
                                     <div className="w-full bg-white/30 h-2 rounded-full overflow-hidden mb-2">
                                         <div 
@@ -159,8 +159,8 @@ export default function Budget() {
                                         ></div>
                                     </div>
                                     <div className="flex justify-between text-xs font-bold opacity-90">
-                                        <span>Spent: {formatBudgetCurrency(activeBudget.spentThisMonth)}</span>
-                                        <span>Total: {formatBudgetCurrency(activeBudget.monthlyBudget)}</span>
+                                        <span>{t('budget_spent')}: {formatBudgetCurrency(activeBudget.spentThisMonth)}</span>
+                                        <span>{t('budget_total')}: {formatBudgetCurrency(activeBudget.monthlyBudget)}</span>
                                     </div>
                                 </div>
                             </div>
@@ -173,9 +173,9 @@ export default function Budget() {
                     <div className="bg-yellow-50 dark:bg-yellow-900/20 p-4 rounded-xl mb-6 border border-yellow-200 dark:border-yellow-800 flex items-start gap-3">
                         <AlertTriangle className="text-yellow-600 dark:text-yellow-500 shrink-0 mt-0.5" size={20} />
                         <div>
-                            <h3 className="font-bold text-yellow-800 dark:text-yellow-500">⚠ Budget Alert</h3>
+                            <h3 className="font-bold text-yellow-800 dark:text-yellow-500">⚠ {t('budget_warning_alert')}</h3>
                             <p className="text-sm text-yellow-700 dark:text-yellow-600 mt-1">
-                                You have spent {activeBudget.percentUsed.toFixed(0)}% of your monthly budget.
+                                {activeBudget.percentUsed.toFixed(0)}%
                             </p>
                         </div>
                     </div>
@@ -185,9 +185,9 @@ export default function Budget() {
                     <div className="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-xl mb-6 border border-orange-200 dark:border-orange-800 flex items-start gap-3">
                         <AlertTriangle className="text-orange-600 dark:text-orange-500 shrink-0 mt-0.5" size={20} />
                         <div>
-                            <h3 className="font-bold text-orange-800 dark:text-orange-500">⚠ Approaching Limit</h3>
+                            <h3 className="font-bold text-orange-800 dark:text-orange-500">⚠ {t('approaching_limit')}</h3>
                             <p className="text-sm text-orange-700 dark:text-orange-600 mt-1">
-                                You are approaching your daily budget. Remaining: {formatBudgetCurrency(activeBudget.remainingToday)}.
+                                {t('approaching_daily_budget')} {formatBudgetCurrency(activeBudget.remainingToday)}.
                             </p>
                         </div>
                     </div>
@@ -198,11 +198,11 @@ export default function Budget() {
                     <div className="mt-8">
                         <div className="flex items-center justify-between mb-4">
                             <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-                                Recent Scanned Products
+                                {t('recent_scanned_products')}
                             </h3>
                             {activeBudget.recentExpenses?.length > 0 && (
                                 <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                                    {activeBudget.recentExpenses.length} deducted today
+                                    {activeBudget.recentExpenses.length} {t('deducted_today')}
                                 </span>
                             )}
                         </div>
@@ -226,7 +226,7 @@ export default function Budget() {
                                                         {expense.merchant_name}
                                                     </p>
                                                     <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                                                        Deducted today at {timeStr}
+                                                        {t('deducted_today_at')} {timeStr}
                                                     </p>
                                                 </div>
                                             </div>
@@ -235,7 +235,7 @@ export default function Budget() {
                                                     − {formatBudgetCurrency(expense.amount)}
                                                 </div>
                                                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                                                    Deduction
+                                                    {t('deduction')}
                                                 </span>
                                             </div>
                                         </div>

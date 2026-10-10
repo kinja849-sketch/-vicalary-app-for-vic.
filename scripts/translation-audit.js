@@ -22,7 +22,7 @@ function runAudit() {
     function getKeys(filePath) {
         const content = fs.readFileSync(filePath, 'utf-8');
         const keys = [];
-        const regex = /^\s*([a-zA-Z0-9_]+)\s*:/gm;
+        const regex = /^\s*["']?([a-zA-Z0-9_]+)["']?\s*:/gm;
         let match;
         while ((match = regex.exec(content)) !== null) {
             keys.push(match[1]);

@@ -142,7 +142,7 @@ export const togglePushNotifications = async (userId: string, enabled: boolean) 
 }
 
 export const updateLanguage = async (userId: string, language: string) => {
-    return updateSettings(userId, { language })
+    return updateSettings(userId, { language, is_language_auto: false })
 }
 
 export const updateCurrency = async (userId: string, currency: string) => {

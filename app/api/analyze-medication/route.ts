@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { SafetyEngine } from '@/lib/services/SafetyEngine';
 import { callChatCompletionWithFallback, getPrimaryApiKey, getBackupApiKey } from '@/lib/ai/ai-fallback';
+import { resolveUserLanguage, buildAILanguageDirective } from '@/lib/api/serverLanguage';
 
 function parseJSONSafely(text?: string | null, fallback: any = {}) {
   try {
@@ -33,10 +34,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'AI provider API key not configured (neither primary nor backup)' }, { status: 500 });
     }
 
-    // 1. Load User Safety Profile from Onboarding & Settings
-    const clientRequestedLang = body.language || locationContext?.language || (locationContext?.languages?.[0]) || 'en';
+    // 1. Resolve Authoritative User Language
+    const resolvedLang = await resolveUserLanguage({
+      userId,
+      requestLanguage: body.language,
+      locationContext,
+      supabase,
+    });
+    const langDirective = buildAILanguageDirective(resolvedLang);
+
+    // Load User Safety Profile from Onboarding & Settings
     const userSafetyProfile = userId 
-      ? await SafetyEngine.getUserSafetyProfile(userId, supabase, clientRequestedLang)
+      ? await SafetyEngine.getUserSafetyProfile(userId, supabase, resolvedLang)
       : {
           userId: 'anonymous',
           userGoal: 'stay healthy',
@@ -46,10 +55,10 @@ export async function POST(req: NextRequest) {
           dietaryLifestyle: [],
           isDiabetic: false,
           hasHypertension: false,
-          language: clientRequestedLang
+          language: resolvedLang
         };
 
-    const userLang = body.language || userSafetyProfile.language || 'en';
+    const userLang = resolvedLang;
 
     // 2. Identify Medication details via OpenAI Vision or GPT
     const systemPrompt = `You are an expert clinical pharmacologist and patient medication safety intelligence engine.
@@ -158,7 +167,7 @@ Return ONLY a valid JSON object matching this schema:
 
     // 4. Clinical Recommendation & Alternative Medication Synthesis
     const synthesisPrompt = `You are the chief medical & pharmacological officer for VicCalary.
-Write a clinical evaluation and recommendation for the scanned medication in language code '${userLang}'.
+${langDirective}
 
 MEDICATION PACKET:
 - Trade Name: ${medName}
