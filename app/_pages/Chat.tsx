@@ -5,6 +5,7 @@ import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { MessageCircle, ArrowLeft, MoreVertical, Search, Bookmark, CheckCheck, Image, Mic, Video, VideoOff, Phone, PhoneOff, FileText, MessageSquarePlus, Trash2, X, ScanLine, UserSearch, UserPlus, UserRound } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/AuthContext";
+import { useCall } from "@/lib/CallContext";
 import { getConversationsV2, isChatVerified, findUserByIdentifier, softDeleteConversation, getMyQRCodeData, getContacts, addContactPure } from "@/lib/api/chat";
 import { searchUsers, getUserProfile } from "@/lib/api/auth";
 import { MyQRCode } from "@/components/MyQRCode";
@@ -53,7 +54,7 @@ export default function Chat() {
   const [manualIdentifier, setManualIdentifier] = useState("");
   const [isSearchingIdentifier, setIsSearchingIdentifier] = useState(false);
   const [contactFound, setContactFound] = useState<any>(null);
-  const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
+  const { onlineUsers } = useCall();
   const [showMyQR, setShowMyQR] = useState(false);
   const [qrData, setQrData] = useState<string>("");
 
@@ -111,23 +112,6 @@ export default function Chat() {
       router.replace(pathname);
     }
 
-    // Online presence
-    const presenceChannel = supabase.channel('online-users');
-    presenceChannel
-      .on('presence', { event: 'sync' }, () => {
-        const state = presenceChannel.presenceState();
-        const online = new Set<string>();
-        Object.values(state).forEach((presences: any) => {
-          presences.forEach((p: any) => { if (p.user_id) online.add(p.user_id); });
-        });
-        setOnlineUsers(online);
-      })
-      .subscribe(async (status) => {
-        if (status === 'SUBSCRIBED') {
-          await presenceChannel.track({ user_id: user.id, online_at: new Date().toISOString() });
-        }
-      });
-
     // V10: Unified Real-time Manager for the Sidebar/Chat List
     const listUpdateChannel = supabase
       .channel('chat-list-global-manager')
@@ -169,7 +153,6 @@ export default function Chat() {
 
     return () => {
       window.removeEventListener('focus', handleFocus);
-      supabase.removeChannel(presenceChannel);
       supabase.removeChannel(listUpdateChannel);
     };
   }, [user?.id, verified, queryClient, router, pathname, searchParams]);

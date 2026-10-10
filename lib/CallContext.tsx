@@ -25,6 +25,8 @@ interface CallSession {
 
 interface CallContextType {
     activeCall: CallSession | null;
+    onlineUsers: Set<string>;
+    isUserOnline: (userId: string) => boolean;
     startCall: (params: {
         conversationId: string;
         receiverId: string;
@@ -146,9 +148,20 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     const ringtoneRef = useRef<RingtonePlayer>(new RingtonePlayer());
     const isAcceptingRef = useRef(false);
 
+    const isUserOnline = useCallback((userId: string) => {
+        return onlineUsers.has(userId);
+    }, [onlineUsers]);
+
     // Track global online presence with sync, join, and leave events
     useEffect(() => {
         if (!user?.id) return;
+
+        // Clean up any stale channels before re-creating
+        const existingChannels = supabase.getChannels().filter(ch => ch.topic === 'realtime:online-users' || ch.topic === 'online-users');
+        for (const ch of existingChannels) {
+            try { supabase.removeChannel(ch); } catch (_) {}
+        }
+
         const presenceChannel = supabase.channel('online-users');
 
         const recomputeOnline = () => {
@@ -600,7 +613,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     }, []);
 
     return (
-        <CallContext.Provider value={{ activeCall: callSession, startCall, endCall }}>
+        <CallContext.Provider value={{ activeCall: callSession, onlineUsers, isUserOnline, startCall, endCall }}>
             {children}
 
             {callSession && (

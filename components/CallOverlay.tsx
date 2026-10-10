@@ -15,6 +15,7 @@ import {
     MoreHorizontal,
     MessageSquare,
     ChevronUp,
+    ChevronDown,
     SwitchCamera,
     Bluetooth,
     User,
@@ -715,22 +716,32 @@ export default function CallOverlay({
 
     // ===== 6. ACTIVE VOICE CALL =====
     return (
-        <div className="fixed inset-0 z-[100] bg-[#0b141a] text-white flex flex-col justify-between items-center p-8 select-none animate-in fade-in duration-300">
+        <div className="fixed inset-0 z-[100] bg-[#0b141a] text-white flex flex-col justify-between items-center select-none overflow-hidden h-[100dvh] animate-in fade-in duration-300">
             {AudioElement}
 
-            {/* Top Bar */}
-            <div className="w-full pt-8 flex items-center justify-between text-xs text-[#8696a0]">
-                <span>VicCalary voice call</span>
+            {/* Top Band: Safe-area top padding, title, and clear minimize affordance */}
+            <div
+                className="w-full px-6 flex items-center justify-between text-xs text-[#8696a0] shrink-0"
+                style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}
+            >
+                <span className="font-medium tracking-wide">VicCalary voice call</span>
                 {onToggleMinimize && (
-                    <button onClick={onToggleMinimize} className="p-2 hover:bg-white/10 rounded-full transition-colors" title="Minimize">
-                        <Minimize2 size={18} />
+                    <button
+                        type="button"
+                        onClick={onToggleMinimize}
+                        className="size-9 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 flex items-center justify-center text-white transition-all shadow-sm"
+                        title="Minimize call"
+                        aria-label="Minimize call"
+                    >
+                        <ChevronDown size={20} className="text-white" />
                     </button>
                 )}
             </div>
 
-            {/* Center: Avatar & Duration */}
-            <div className="flex flex-col items-center gap-5 my-auto">
-                <div className="size-36 md:size-40 rounded-full overflow-hidden bg-[#202c33] ring-4 ring-[#00A884]/30 shadow-2xl flex items-center justify-center">
+            {/* Middle Band: Flex-centered Avatar, Caller Name, and Timer */}
+            <div className="flex-1 flex flex-col items-center justify-center gap-4 px-6 w-full my-0">
+                {/* Deliberate, clean circular avatar with subtle outer ring */}
+                <div className="size-36 sm:size-44 rounded-full overflow-hidden bg-[#202c33] ring-4 ring-white/10 shadow-2xl flex items-center justify-center">
                     {caller.avatar ? (
                         <img src={caller.avatar} alt={caller.name} className="w-full h-full object-cover" />
                     ) : (
@@ -738,9 +749,9 @@ export default function CallOverlay({
                     )}
                 </div>
 
-                <div className="text-center">
-                    <h2 className="text-3xl font-light text-white mb-2">{caller.name || 'User'}</h2>
-                    <p className="text-sm font-medium text-[#8696a0]">
+                <div className="text-center mt-2">
+                    <h1 className="text-3xl sm:text-4xl font-normal text-white tracking-wide">{caller.name || 'User'}</h1>
+                    <p className="text-sm font-medium text-[#8696a0] mt-1.5">
                         {!peerJoined
                             ? 'Connecting...'
                             : isRemoteAudioMuted
@@ -750,9 +761,12 @@ export default function CallOverlay({
                 </div>
             </div>
 
-            {/* Bottom Controls: Speaker, Mic, End Call in clean layout */}
-            <div className="flex flex-col items-center gap-8 pb-10 w-full max-w-sm">
-                <div className="bg-[#202c33]/80 backdrop-blur-xl border border-white/10 rounded-full px-6 py-3.5 flex items-center justify-around gap-6 shadow-2xl w-full">
+            {/* Bottom Band: Fixed control dock with safe-area bottom padding */}
+            <div
+                className="w-full max-w-sm px-6 shrink-0 flex flex-col items-center"
+                style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1.5rem)' }}
+            >
+                <div className="bg-[#202c33]/90 backdrop-blur-xl border border-white/10 rounded-full px-6 py-3.5 flex items-center justify-around gap-6 shadow-2xl w-full">
                     {/* Speaker */}
                     <button
                         type="button"

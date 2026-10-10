@@ -1419,6 +1419,12 @@ export default function ChatConversation() {
         const targetPeerId = otherParticipantId || (isVirtual ? virtualTargetId : null);
         presenceTargetRef.current = targetPeerId;
 
+        // Clean up any existing channel with the same topic to prevent re-attaching presence to an already-joined channel
+        const existingChannels = supabase.getChannels().filter(ch => ch.topic === `realtime:${channelName}` || ch.topic === channelName);
+        for (const ch of existingChannels) {
+            try { supabase.removeChannel(ch); } catch (_) {}
+        }
+
         const channel = supabase.channel(channelName);
 
         // Presence only tracks online status — never clears peer typing!
