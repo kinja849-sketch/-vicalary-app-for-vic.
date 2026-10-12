@@ -122,12 +122,12 @@ export function getBackupApiKey(): string | null {
  */
 export function mapModelForBackup(model?: string): string {
   const configuredBackup = process.env.BACKUP_AI_MODEL;
-  if (configuredBackup && configuredBackup !== 'gemini-2.5-flash' && configuredBackup !== 'gemini-3.8-flash') return configuredBackup;
+  if (configuredBackup && configuredBackup !== 'gemini-3.8-flash') return configuredBackup;
 
-  if (model && model.startsWith('gemini-') && model !== 'gemini-2.5-flash' && model !== 'gemini-3.8-flash') return model;
+  if (model && model.startsWith('gemini-') && model !== 'gemini-3.8-flash') return model;
 
-  // Prioritize high-performance, responsive Gemini 3.1 Flash Lite
-  return 'gemini-3.1-flash-lite';
+  // Prioritize active, responsive, high-capacity Gemini 3.5 Flash
+  return 'gemini-3.5-flash';
 }
 
 /**
@@ -212,11 +212,12 @@ export async function callChatCompletionWithFallback(
   }
 
   const fallbackModels = Array.from(new Set([
-    mapModelForBackup(request.model),
-    'gemini-3.1-flash-lite',
-    'gemini-3.5-flash-lite',
     'gemini-flash-latest',
     'gemini-3.7-flash',
+    'gemini-3-flash-preview',
+    mapModelForBackup(request.model),
+    'gemini-3.5-flash',
+    'gemini-3.1-flash-lite',
   ]));
 
   let lastBackupErr = '';
@@ -520,21 +521,13 @@ export async function synthesizeVoiceAudioWithFallback(
     console.info('[AI Engine] Primary OpenAI TTS circuit open (bypassing dead round-trip). Directing TTS straight to backup provider.');
   }
 
-  // 2. Try Backup Provider (Gemini 3.8 Flash Human Neural TTS)
-  if (!backupKey) {
-    console.error('[AI Engine] Backup TTS failed: No BACKUP_AI_API_KEY configured.');
-    return null;
-  }
-
-  if (!isGeminiTtsAvailable()) {
-    console.info('[AI Engine] Gemini TTS circuit open (quota exhausted). Directing voice straight to resilient natural speech engine.');
-  } else {
+  // 2. Try Gemini 3.8 Flash Human Neural TTS (Prioritize gemini-3.8-flash-lite-tts with prebuilt female voice Aoede)
+  if (backupKey) {
     const ttsModels = [
       'gemini-3.1-flash-tts-preview',
       'gemini-3.8-flash-lite-tts',
       'gemini-3.8-flash-tts',
       'gemini-2.5-flash-preview-tts',
-      'gemini-2.5-pro-preview-tts',
     ];
 
     for (const ttsModel of ttsModels) {
@@ -548,7 +541,7 @@ export async function synthesizeVoiceAudioWithFallback(
           body: JSON.stringify({
             contents: [
               {
-                parts: [{ text: cleanText }], // Pass clean text directly without any "Read aloud" prefix
+                parts: [{ text: cleanText }],
               },
             ],
             generationConfig: {
@@ -556,7 +549,7 @@ export async function synthesizeVoiceAudioWithFallback(
               speechConfig: {
                 voiceConfig: {
                   prebuiltVoiceConfig: {
-                    voiceName: 'Aoede', // Natural, calm, articulate, conversational woman's voice like ChatGPT
+                    voiceName: 'Aoede', // Official Gemini Live female voice from Google Showcase
                   },
                 },
               },
@@ -567,46 +560,74 @@ export async function synthesizeVoiceAudioWithFallback(
         if (!res.ok) {
           const errText = await res.text();
           console.warn(`[AI Fallback] ${ttsModel} returned HTTP ${res.status}: ${errText.substring(0, 150)}`);
-          if (res.status === 429 || errText.includes('RESOURCE_EXHAUSTED') || errText.includes('quota')) {
-            tripGeminiTtsCircuit();
-            break; // Stop immediately since all Gemini TTS preview models share the same daily quota
-          }
           continue;
         }
 
-      const json = await res.json();
-      const inlineData = json.candidates?.[0]?.content?.parts?.[0]?.inlineData;
-      const rawAudioBase64 = inlineData?.data;
-      if (!rawAudioBase64) {
-        console.warn(`[AI Fallback] ${ttsModel} returned empty inlineData.`);
-        continue;
+        const json = await res.json();
+        const inlineData = json.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+        const rawAudioBase64 = inlineData?.data;
+        if (!rawAudioBase64) {
+          continue;
+        }
+
+        const inlineMime = (inlineData?.mimeType || 'audio/wav').toLowerCase();
+        const rawBuffer = Buffer.from(rawAudioBase64, 'base64');
+        let wavBuffer: Buffer;
+        let wavBase64: string;
+
+        if (inlineMime.includes('wav')) {
+          wavBuffer = rawBuffer;
+          wavBase64 = rawAudioBase64;
+        } else {
+          wavBuffer = pcmToWavBuffer(rawBuffer, 24000, 1, 16);
+          wavBase64 = wavBuffer.toString('base64');
+        }
+
+        return {
+          buffer: wavBuffer,
+          audioBase64: wavBase64,
+          dataUri: `data:audio/wav;base64,${wavBase64}`,
+          mimeType: 'audio/wav',
+          provider: 'backup',
+        };
+      } catch (err: any) {
+        console.warn(`[AI Fallback] ${ttsModel} exception:`, err?.message || err);
       }
-
-      const inlineMime = (inlineData?.mimeType || 'audio/wav').toLowerCase();
-      const rawBuffer = Buffer.from(rawAudioBase64, 'base64');
-      let wavBuffer: Buffer;
-      let wavBase64: string;
-
-      if (inlineMime.includes('wav')) {
-        wavBuffer = rawBuffer;
-        wavBase64 = rawAudioBase64;
-      } else {
-        wavBuffer = pcmToWavBuffer(rawBuffer, 24000, 1, 16);
-        wavBase64 = wavBuffer.toString('base64');
-      }
-
-      return {
-        buffer: wavBuffer,
-        audioBase64: wavBase64,
-        dataUri: `data:audio/wav;base64,${wavBase64}`,
-        mimeType: 'audio/wav',
-        provider: 'backup',
-      };
-    } catch (err: any) {
-      console.warn(`[AI Fallback] ${ttsModel} exception:`, err?.message || err);
     }
   }
-}
+
+  // 3. Ultra-resilient Neural Voice Backup via MsEdgeTTS (hyper-realistic studio human voice: en-US-JennyNeural)
+  try {
+    const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
+    const tts = new MsEdgeTTS();
+    await tts.setMetadata('en-US-JennyNeural', OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+    const { audioStream } = tts.toStream(cleanText);
+
+    const audioBuffer = await new Promise<Buffer>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      audioStream.on('data', (c: Buffer) => chunks.push(c));
+      audioStream.on('end', () => resolve(Buffer.concat(chunks)));
+      audioStream.on('error', (err: any) => reject(err));
+      setTimeout(() => {
+        if (chunks.length > 0) resolve(Buffer.concat(chunks));
+        else reject(new Error('Edge TTS stream timeout'));
+      }, 7000);
+    });
+
+    if (audioBuffer && audioBuffer.length > 0) {
+      const b64 = audioBuffer.toString('base64');
+      console.info('[AI Fallback] Synthesized lifelike human voice via MsEdgeTTS (JennyNeural).');
+      return {
+        buffer: audioBuffer,
+        audioBase64: b64,
+        dataUri: `data:audio/mp3;base64,${b64}`,
+        mimeType: 'audio/mpeg',
+        provider: 'backup',
+      };
+    }
+  } catch (edgeErr: any) {
+    console.warn('[AI Fallback] MsEdgeTTS backup exception:', edgeErr?.message || edgeErr);
+  }
 
   console.error('[AI Fallback] All neural TTS models failed.');
   return null;

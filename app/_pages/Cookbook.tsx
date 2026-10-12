@@ -171,10 +171,12 @@ export default function Cookbook() {
                         </div>
                     ) : activeTab === "favorites" ? (
                         <div className="grid grid-cols-1 gap-4">
-                            {favorites && favorites.length > 0 ? (
-                                favorites.map((fav: any) => (
-                                    <CookbookCard key={fav.id || fav.recipes?.id} item={fav.recipes} />
-                                ))
+                            {favorites && favorites.filter((fav: any) => fav?.recipes != null).length > 0 ? (
+                                favorites
+                                    .filter((fav: any) => fav?.recipes != null)
+                                    .map((fav: any) => (
+                                        <CookbookCard key={fav.id || fav.recipes?.id || fav.recipe_id} item={fav.recipes} />
+                                    ))
                             ) : (
                                 <div className="text-center py-24 text-slate-400 italic">
                                     <Heart className="mx-auto mb-4 opacity-20" size={48} />
@@ -250,7 +252,9 @@ function validateMealImages(recipes: any[]) {
 
 function CookbookCard({ item }: { item: any }) {
     const { t } = useTranslation();
-    const id = item.internal_id || item.id;
+    if (!item) return null;
+    const id = item.internal_id || item.external_id || item.id;
+    if (!id) return null;
     const title = item.title || item.name || t('untitled_recipe');
     const image = item.image_url || item.image || getFoodImageUrl(title, item.cuisine, item.meal_type);
     const calories = item.total_calories || item.calories || 350;

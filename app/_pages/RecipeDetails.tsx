@@ -4,7 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import { 
     AlertCircle, ArrowLeft, Mic, Play, Pause, 
     ChevronRight, ChevronLeft, Timer, Flame, Droplets, 
-    Wheat, Beef, Share2, Loader2, Ear
+    Wheat, Beef, Share2, Loader2, Ear, Camera, CheckCircle2, RefreshCw, X, SwitchCamera, Volume2
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/AuthContext";
@@ -40,10 +40,41 @@ export default function RecipeDetails() {
     const [typedText, setTypedText] = useState("");
     const typewriterRef = useRef<NodeJS.Timeout | null>(null);
 
+    // Two-Way Interactive Dialogue Flow
+    interface CookingChatMessage {
+        id: string;
+        sender: 'chef' | 'user';
+        text: string;
+        photo?: string;
+        timestamp: number;
+    }
+    const [chatMessages, setChatMessages] = useState<CookingChatMessage[]>([]);
+    const chatContainerRef = useRef<HTMLDivElement | null>(null);
+
     // Chat / Voice State
     const [userSpeech, setUserSpeech] = useState("");
     const [isChefThinking, setIsChefThinking] = useState(false);
     const [isListening, setIsListening] = useState(false);
+
+    // Auto-scroll chat to latest message smoothly
+    useEffect(() => {
+        if (chatContainerRef.current) {
+            chatContainerRef.current.scrollTo({
+                top: chatContainerRef.current.scrollHeight,
+                behavior: 'smooth'
+            });
+        }
+    }, [chatMessages, userSpeech, isChefThinking, typedText]);
+
+    // Step Photo Authentication State & Native Device Camera Viewpoint
+    const [isVerifyingPhoto, setIsVerifyingPhoto] = useState(false);
+    const [stepVerificationPhoto, setStepVerificationPhoto] = useState<string | null>(null);
+    const [stepVerificationStatus, setStepVerificationStatus] = useState<'idle' | 'success' | 'retry'>('idle');
+    const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
+    const videoRef = useRef<HTMLVideoElement | null>(null);
+    const cameraStreamRef = useRef<MediaStream | null>(null);
+    const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+    const recognitionRef = useRef<any>(null);
 
     // Media State
     const [isSpeaking, setIsSpeaking] = useState(false);
@@ -73,6 +104,7 @@ export default function RecipeDetails() {
         return () => {
             if (audioRef.current) audioRef.current.pause();
             if (typewriterRef.current) clearInterval(typewriterRef.current);
+            stopCamera();
             stopListening();
         };
     }, []);
@@ -117,8 +149,179 @@ export default function RecipeDetails() {
         }
     };
 
-    // --- VAD & RECORDING ENGINE (WHISPER) ---
-    const startListening = async () => {
+    // --- NATIVE CAMERA ENGINE (MATCHING Camera.tsx) ---
+    const startCamera = async (facing: 'environment' | 'user' = facingMode) => {
+        try {
+            if (cameraStreamRef.current) {
+                cameraStreamRef.current.getTracks().forEach(track => {
+                    try { track.stop(); } catch (e) {}
+                });
+                cameraStreamRef.current = null;
+            }
+
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    facingMode: { ideal: facing },
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                },
+                audio: false
+            });
+
+            cameraStreamRef.current = stream;
+            if (videoRef.current) {
+                videoRef.current.srcObject = stream;
+                try {
+                    await videoRef.current.play();
+                } catch (playErr) {
+                    console.warn("Camera auto-play warning:", playErr);
+                }
+            }
+        } catch (err) {
+            console.warn("Native camera stream unavailable:", err);
+        }
+    };
+
+    const stopCamera = () => {
+        if (cameraStreamRef.current) {
+            cameraStreamRef.current.getTracks().forEach(track => {
+                try { track.stop(); } catch (e) {}
+            });
+            cameraStreamRef.current = null;
+        }
+        if (videoRef.current) {
+            videoRef.current.srcObject = null;
+        }
+    };
+
+    const switchCamera = async () => {
+        const nextFacing: 'environment' | 'user' = facingMode === 'environment' ? 'user' : 'environment';
+        setFacingMode(nextFacing);
+        await startCamera(nextFacing);
+    };
+
+    const takeLiveViewPhoto = async () => {
+        if (!videoRef.current) return;
+        const video = videoRef.current;
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const base64Data = canvas.toDataURL('image/jpeg', 0.85);
+
+        // Freeze snapshot into preview frame
+        setStepVerificationPhoto(base64Data);
+
+        // Submit to Vision AI verification
+        await verifyStepWithPhoto(base64Data);
+    };
+
+    // --- HEALTH COACH DIALOGUE ENGINE (SPEECH RECOGNITION + VAD BARGE-IN) ---
+    const startListening = () => {
+        const SpeechRecognition = typeof window !== 'undefined'
+            ? ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
+            : null;
+
+        if (SpeechRecognition) {
+            try {
+                if (recognitionRef.current) {
+                    try { recognitionRef.current.abort(); } catch (e) {}
+                }
+
+                const recognition = new SpeechRecognition();
+                recognitionRef.current = recognition;
+                recognition.lang = lang === 'ar' ? 'ar-SA' : lang === 'fr' ? 'fr-FR' : 'en-US';
+                recognition.interimResults = true;
+                recognition.continuous = true;
+
+                recognition.onstart = () => {
+                    setIsListening(true);
+                };
+
+                recognition.onresult = (event: any) => {
+                    // Instant Speech Interruption / Barge-in
+                    // Guard against self-echo: only trigger interruption if user is genuinely speaking distinct words
+                    if (isSpeakingRef.current) {
+                        let bargeInWords = '';
+                        for (let i = 0; i < event.results.length; ++i) {
+                            if (event.results[i].isFinal || (event.results[i][0]?.confidence ?? 1) > 0.4) {
+                                bargeInWords += (event.results[i][0]?.transcript || '') + ' ';
+                            }
+                        }
+                        const trimmedBarge = bargeInWords.trim();
+                        // Require at least two distinct syllables/words to avoid tripping on speaker acoustics
+                        if (trimmedBarge.length >= 4 && trimmedBarge.split(' ').length >= 2) {
+                            if (audioRef.current && !audioRef.current.paused) {
+                                audioRef.current.pause();
+                            }
+                            setIsSpeaking(false);
+                            isSpeakingRef.current = false;
+                            if (typewriterRef.current) clearInterval(typewriterRef.current);
+                            setTypedText(""); // Clear old reply immediately for correction
+                        }
+                    }
+
+                    let fullTranscript = '';
+                    let interimTranscript = '';
+                    for (let i = 0; i < event.results.length; ++i) {
+                        const res = event.results[i];
+                        const part = res[0]?.transcript || '';
+                        if (res.isFinal) {
+                            fullTranscript += (fullTranscript ? ' ' : '') + part.trim();
+                        } else {
+                            interimTranscript += (interimTranscript ? ' ' : '') + part.trim();
+                        }
+                    }
+
+                    const currentText = (fullTranscript + (interimTranscript ? ' ' + interimTranscript : '')).trim();
+                    if (currentText) {
+                        setUserSpeech(currentText);
+                    }
+
+                    if (currentText.length >= 2) {
+                        if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+                        // Instant 400ms response latency
+                        silenceTimeoutRef.current = setTimeout(() => {
+                            if (recognitionRef.current) {
+                                try { recognitionRef.current.abort(); } catch (e) {}
+                            }
+                            setIsListening(false);
+                            submitVoiceQuery(currentText);
+                        }, 400);
+                    }
+                };
+
+                recognition.onerror = (e: any) => {
+                    if (e.error !== 'no-speech' && e.error !== 'aborted') {
+                        console.warn("Speech recognition notice:", e.error);
+                    }
+                };
+
+                recognition.onend = () => {
+                    setIsListening(false);
+                    // Automatically restart listening if in voice mode and Chef is not speaking or thinking
+                    if (isVoiceModeRef.current && !isSpeakingRef.current && !isChefThinkingRef.current) {
+                        try {
+                            recognition.start();
+                            setIsListening(true);
+                        } catch (e) {}
+                    }
+                };
+
+                recognition.start();
+                return;
+            } catch (err) {
+                console.warn("Web Speech API failed, falling back to MediaStream VAD:", err);
+            }
+        }
+
+        // Fallback to MediaStream VAD loop
+        startMediaStreamVAD();
+    };
+
+    const startMediaStreamVAD = async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
             audioStreamRef.current = stream;
@@ -136,39 +339,49 @@ export default function RecipeDetails() {
             source.connect(analyser);
             sourceNodeRef.current = source;
 
-            const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+            let selectedMime = 'audio/webm';
+            if (typeof MediaRecorder !== 'undefined' && typeof MediaRecorder.isTypeSupported === 'function') {
+                if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+                    selectedMime = 'audio/webm;codecs=opus';
+                } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+                    selectedMime = 'audio/webm';
+                } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+                    selectedMime = 'audio/mp4';
+                }
+            }
+
+            const mediaRecorder = new MediaRecorder(stream, { mimeType: selectedMime });
             mediaRecorderRef.current = mediaRecorder;
 
             mediaRecorder.ondataavailable = (e) => {
-                if (e.data.size > 0) chunksRef.current.push(e.data);
+                if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
             };
 
             mediaRecorder.onstop = async () => {
                 setIsListening(false);
-                const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
-                chunksRef.current = []; // reset
+                const audioBlob = new Blob(chunksRef.current, { type: selectedMime });
+                chunksRef.current = [];
 
-                // Only transcribe if we have a reasonable amount of audio
-                if (audioBlob.size > 2000) { 
+                if (audioBlob.size > 1200) { 
                     await transcribeAudio(audioBlob);
                 } else {
-                    // Restart listening if they just bumped the mic
                     if (isVoiceModeRef.current) startVADLoop();
                 }
             };
 
-            setIsListening(true); // Wait, this just means mic is active.
+            setIsListening(true);
             startVADLoop();
-
         } catch (err) {
-            console.error("Microphone access denied or error:", err);
+            console.error("Microphone access error:", err);
             toast.error("Please allow microphone access to talk to the Chef.");
         }
     };
 
     const startVADLoop = () => {
+        if (vadFrameRef.current) cancelAnimationFrame(vadFrameRef.current);
+
         const checkVolume = () => {
-            if (!analyserRef.current || !dataArrayRef.current || isSpeakingRef.current) {
+            if (!analyserRef.current || !dataArrayRef.current) {
                 vadFrameRef.current = requestAnimationFrame(checkVolume);
                 return;
             }
@@ -179,38 +392,40 @@ export default function RecipeDetails() {
                 sum += dataArrayRef.current[i];
             }
             const average = sum / dataArrayRef.current.length;
-
-            const THRESHOLD = 40; // Increased threshold to avoid hallucinated noise triggers
+            const THRESHOLD = isSpeakingRef.current ? 45 : 18;
 
             if (average > THRESHOLD) {
-                // USER MADE A SOUND
-                
-                // 1. Pause AI instantly if it's talking
-                if (audioRef.current && !audioRef.current.paused) {
-                    audioRef.current.pause();
-                    setIsSpeaking(false);
-                    if (typewriterRef.current) clearInterval(typewriterRef.current);
+                if (isSpeakingRef.current && average > 55) {
+                    if (audioRef.current && !audioRef.current.paused) {
+                        audioRef.current.pause();
+                        setIsSpeaking(false);
+                        isSpeakingRef.current = false;
+                        if (typewriterRef.current) clearInterval(typewriterRef.current);
+                    }
                 }
 
-                // 2. Start recording if we aren't already
-                if (!isRecordingRef.current && mediaRecorderRef.current) {
+                if (!isRecordingRef.current && mediaRecorderRef.current && mediaRecorderRef.current.state === 'inactive') {
                     isRecordingRef.current = true;
                     chunksRef.current = [];
-                    mediaRecorderRef.current.start();
-                    setIsListening(true);
+                    try {
+                        mediaRecorderRef.current.start();
+                        setIsListening(true);
+                    } catch (recErr) {
+                        isRecordingRef.current = false;
+                    }
                 }
 
-                // 3. Reset silence timeout
                 if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
                 
                 silenceTimeoutRef.current = setTimeout(() => {
-                    // Silence detected for 800ms -> Stop recording immediately to reduce latency!
-                    if (isRecordingRef.current && mediaRecorderRef.current) {
+                    if (isRecordingRef.current && mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
                         isRecordingRef.current = false;
-                        mediaRecorderRef.current.stop();
-                        setIsListening(false); // UI hides "LISTENING..." while processing
+                        try {
+                            mediaRecorderRef.current.stop();
+                        } catch (stopErr) {}
+                        setIsListening(false);
                     }
-                }, 800);
+                }, 1100);
             }
 
             vadFrameRef.current = requestAnimationFrame(checkVolume);
@@ -220,36 +435,51 @@ export default function RecipeDetails() {
     };
 
     const stopListening = () => {
+        if (recognitionRef.current) {
+            try { recognitionRef.current.abort(); } catch (e) {}
+            recognitionRef.current = null;
+        }
         if (vadFrameRef.current) cancelAnimationFrame(vadFrameRef.current);
         if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
         
         if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-            mediaRecorderRef.current.stop();
+            try { mediaRecorderRef.current.stop(); } catch (err) {}
         }
         if (audioStreamRef.current) {
-            audioStreamRef.current.getTracks().forEach(track => track.stop());
+            audioStreamRef.current.getTracks().forEach(track => {
+                try { track.stop(); } catch {}
+            });
+            audioStreamRef.current = null;
         }
         if (audioContextRef.current) {
-            audioContextRef.current.close();
+            if (audioContextRef.current.state !== 'closed') {
+                audioContextRef.current.close().catch(() => {});
+            }
+            audioContextRef.current = null;
         }
         
         setIsListening(false);
         isRecordingRef.current = false;
     };
 
-    // Use a ref for isSpeaking to access inside VAD loop
     const isSpeakingRef = useRef(isSpeaking);
     useEffect(() => {
         isSpeakingRef.current = isSpeaking;
     }, [isSpeaking]);
 
-    // Use a ref for isVoiceMode to access inside callbacks
+    const isChefThinkingRef = useRef(isChefThinking);
+    useEffect(() => {
+        isChefThinkingRef.current = isChefThinking;
+    }, [isChefThinking]);
+
     const isVoiceModeRef = useRef(isVoiceMode);
     useEffect(() => {
         isVoiceModeRef.current = isVoiceMode;
         if (isVoiceMode) {
+            startCamera('environment');
             startListening();
         } else {
+            stopCamera();
             stopListening();
         }
     }, [isVoiceMode]);
@@ -274,8 +504,8 @@ export default function RecipeDetails() {
             const whisperText = data.text?.trim();
             if (whisperText) {
                 const lowerText = whisperText.toLowerCase();
-                const isHallucination = lowerText.length < 3 || 
-                                      ['thank you.', 'thanks.', 'yes.', 'okay.', 'ok.'].includes(lowerText) ||
+                const isHallucination = lowerText.length < 2 || 
+                                      ['thank you.', 'thanks.'].includes(lowerText) ||
                                       whisperText.startsWith('(') || whisperText.startsWith('[');
                 
                 if (!isHallucination) {
@@ -301,49 +531,115 @@ export default function RecipeDetails() {
     };
 
 
-    // --- TYPEWRITER EFFECT ---
-    const startTypewriter = (text: string) => {
+    // --- TYPEWRITER EFFECT (SYNCHRONIZED WITH AUDIO PLAYBACK) ---
+    const startTypewriter = (text: string, durationSec?: number) => {
         setFullText(text);
         setTypedText("");
         if (typewriterRef.current) clearInterval(typewriterRef.current);
         
+        // Calculate interval based on real audio duration (default ~60ms per char)
+        const totalDurationMs = (durationSec && durationSec > 0) ? (durationSec * 1000) : (text.length * 55);
+        const intervalMs = Math.max(18, Math.min(75, Math.floor(totalDurationMs / Math.max(text.length, 1))));
+        
         let i = 0;
         typewriterRef.current = setInterval(() => {
+            // Guard: stop typing if audio was stopped/aborted
+            if (!isSpeakingRef.current && i > 0) {
+                clearInterval(typewriterRef.current!);
+                return;
+            }
             setTypedText(text.slice(0, i + 1));
             i++;
             if (i >= text.length) {
                 clearInterval(typewriterRef.current!);
             }
-        }, 35); 
+        }, intervalMs); 
     };
 
     // --- NEW AI ORCHESTRATION LAYER ---
     const startVoiceGuidance = async () => {
+        if (!recipe || !recipe.title) return;
+        const validInstructions = Array.isArray(recipe.instructions)
+            ? recipe.instructions.filter(Boolean)
+            : (typeof recipe.instructions === 'string' && recipe.instructions.trim().length > 0 ? [recipe.instructions] : []);
+
+        if (validInstructions.length === 0) {
+            toast.error(t('no_instructions_available') || "Cooking instructions not available for this recipe.");
+            return;
+        }
+
         setIsVoiceMode(true);
         setIsOrchestrating(true);
         try {
+            const normalizedRecipe = {
+                ...recipe,
+                ingredients: Array.isArray(recipe.ingredients) ? recipe.ingredients : [],
+                instructions: validInstructions
+            };
+
             const res = await fetch('/api/cooking-assistant/orchestrate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ recipe, userId: user?.id, language: lang })
+                body: JSON.stringify({ recipe: normalizedRecipe, userId: user?.id, language: lang })
             });
             const data = await res.json();
-            if (data.session) {
+            if (data?.session) {
                 setSessionData(data.session);
                 setCurrentStepIdx(-1); 
                 
-                if (data.session.overview.ingredients_image_prompt) {
+                if (data.session.overview?.ingredients_image_prompt) {
                     fetchImage(-1, data.session.overview.ingredients_image_prompt);
                 }
 
-                playTTS(data.session.overview.text);
+                if (data.session.overview?.text) {
+                    setChatMessages([
+                        {
+                            id: `chef-init-${Date.now()}`,
+                            sender: 'chef',
+                            text: data.session.overview.text,
+                            timestamp: Date.now()
+                        }
+                    ]);
+                    playTTS(data.session.overview.text);
+                }
             } else {
-                throw new Error("Invalid session data");
+                throw new Error(data?.error || "Invalid session data");
             }
-        } catch(e) {
-            console.error("Orchestration failed", e);
-            toast.error(t('orchestration_failed') || "Failed to start AI Chef. Please try again.");
-            setIsVoiceMode(false);
+        } catch(e: any) {
+            console.warn("Orchestration network/AI issue, using client fallback session:", e);
+            // Graceful non-AI fallback from stored recipe instructions
+            const rawIngredients = Array.isArray(recipe.ingredients) ? recipe.ingredients : [];
+            const ingNames = rawIngredients
+                .map((i: any) => typeof i === 'string' ? i : `${i.amount || ''} ${i.unit || ''} ${i.item || i.name || ''}`.trim())
+                .filter(Boolean);
+            const ingText = ingNames.length > 0 ? ingNames.join(', ') : 'all required ingredients';
+
+            const fallbackSession = {
+                overview: {
+                    text: `Let's make ${recipe.title}. To start, make sure you have ${ingText} ready. You can follow each step at your own pace.`,
+                    equipment: [],
+                    ingredients_image_prompt: ""
+                },
+                steps: validInstructions.map((inst: any, idx: number) => ({
+                    instruction: typeof inst === 'string' ? inst : (inst.step || inst.instruction || `Step ${idx + 1}`),
+                    duration_seconds: 180,
+                    ingredients_used: [],
+                    image_prompt: ""
+                }))
+            };
+            setSessionData(fallbackSession);
+            setCurrentStepIdx(-1);
+            if (fallbackSession.overview.text) {
+                setChatMessages([
+                    {
+                        id: `chef-init-${Date.now()}`,
+                        sender: 'chef',
+                        text: fallbackSession.overview.text,
+                        timestamp: Date.now()
+                    }
+                ]);
+                playTTS(fallbackSession.overview.text);
+            }
         } finally {
             setIsOrchestrating(false);
         }
@@ -368,16 +664,21 @@ export default function RecipeDetails() {
 
     const playTTS = async (text: string) => {
         setIsSpeaking(true);
+        isSpeakingRef.current = true;
         if (audioRef.current) {
             audioRef.current.pause();
         }
         
-        // Wait for audio to actually play before typing begins
         try {
-            const res = await fetch('/api/cooking-assistant/tts', {
+            const res = await fetch('/api/text-to-speech', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text })
+                body: JSON.stringify({ 
+                    text,
+                    voice: 'alloy',
+                    speed: 1.05,
+                    language: lang || 'en'
+                })
             });
             
             if (!res.ok) throw new Error("TTS Failed");
@@ -387,17 +688,25 @@ export default function RecipeDetails() {
             const audio = new Audio(url);
             audioRef.current = audio;
             
+            audio.onloadedmetadata = () => {
+                if (audio.duration && !isNaN(audio.duration) && audio.duration > 0) {
+                    startTypewriter(text, audio.duration);
+                }
+            };
+
             audio.onplay = () => {
-                startTypewriter(text);
+                const duration = (audio.duration && !isNaN(audio.duration) && audio.duration > 0) ? audio.duration : undefined;
+                startTypewriter(text, duration);
             };
 
             audio.onended = () => {
-                // Add a small debounce to allow room reverb to die out before unmuting mic
+                URL.revokeObjectURL(url);
                 setTimeout(() => {
                     setIsSpeaking(false);
-                    // When Chef stops talking, restart listening loop if we aren't already
-                    if (isVoiceModeRef.current && !isRecordingRef.current) {
-                        startVADLoop();
+                    isSpeakingRef.current = false;
+                    // Resume listening once Chef finishes speaking
+                    if (isVoiceModeRef.current) {
+                        startListening();
                     }
                 }, 300);
             };
@@ -405,12 +714,16 @@ export default function RecipeDetails() {
             await audio.play();
         } catch(e: any) {
             if (e.name === 'AbortError') {
-                return; // Audio was intentionally paused by VAD interrupt
+                return;
             }
-            console.error("TTS playback error:", e);
+            console.warn("TTS audio notice:", e?.message);
             setIsSpeaking(false);
-            startTypewriter(text); // Type anyway if audio fails
-            toast.error("Voice playback failed");
+            isSpeakingRef.current = false;
+            startTypewriter(text);
+            // Resume listening even if audio fails
+            if (isVoiceModeRef.current) {
+                startListening();
+            }
         }
     };
 
@@ -459,6 +772,15 @@ export default function RecipeDetails() {
         const newStep = newIdx === -1 ? sessionData.overview : sessionData.steps[newIdx];
         
         const textToSpeak = newIdx === -1 ? newStep.text : newStep.instruction;
+        setChatMessages(prev => [
+            ...prev,
+            {
+                id: `chef-step-${newIdx}-${Date.now()}`,
+                sender: 'chef',
+                text: textToSpeak,
+                timestamp: Date.now()
+            }
+        ]);
         playTTS(textToSpeak);
 
         const imagePrompt = newIdx === -1 ? newStep.ingredients_image_prompt : newStep.image_prompt;
@@ -466,6 +788,10 @@ export default function RecipeDetails() {
             fetchImage(newIdx, imagePrompt);
         }
         
+        // Reset photo state for new step
+        setStepVerificationPhoto(null);
+        setStepVerificationStatus('idle');
+
         if (newIdx >= 0 && newStep.duration_seconds) {
             setTimeLeft(newStep.duration_seconds);
             setIsTimerRunning(false);
@@ -477,6 +803,19 @@ export default function RecipeDetails() {
     const submitVoiceQuery = async (query: string) => {
         const currentSession = sessionDataRef.current;
         if (!currentSession) return;
+
+        // Append user's message immediately into conversation
+        const userMsgId = `user-${Date.now()}`;
+        setChatMessages(prev => [
+            ...prev,
+            {
+                id: userMsgId,
+                sender: 'user',
+                text: query,
+                timestamp: Date.now()
+            }
+        ]);
+        setUserSpeech("");
 
         setIsChefThinking(true);
         if (audioRef.current) audioRef.current.pause(); 
@@ -495,13 +834,23 @@ export default function RecipeDetails() {
                     recipeTitle: recipe.title,
                     currentStepIdx: idx,
                     currentInstruction: instr,
+                    ingredients: recipe.ingredients || [],
                     language: lang,
                     userId: user?.id
                 })
             });
             const data = await res.json();
             if (data.answer) {
-                // Remove typed text to make room for new answer
+                // Append Chef Vic's contextual response below the user message
+                setChatMessages(prev => [
+                    ...prev,
+                    {
+                        id: `chef-reply-${Date.now()}`,
+                        sender: 'chef',
+                        text: data.answer,
+                        timestamp: Date.now()
+                    }
+                ]);
                 setTypedText("");
                 playTTS(data.answer);
             }
@@ -510,9 +859,113 @@ export default function RecipeDetails() {
             toast.error("Failed to ask Chef.");
         } finally {
             setIsChefThinking(false);
-            // Wait for TTS to finish before listening loop restarts
         }
     };
+
+    // --- VISION AI STEP AUTHENTICATION ---
+    const verifyStepWithPhoto = async (fileOrBase64: File | string) => {
+        const currentSession = sessionDataRef.current;
+        if (!currentSession) return;
+
+        setIsVerifyingPhoto(true);
+        setIsChefThinking(true);
+        if (audioRef.current) audioRef.current.pause();
+
+        const processBase64 = async (base64Data: string) => {
+            setStepVerificationPhoto(base64Data);
+
+            // Add photo into conversation timeline
+            setChatMessages(prev => [
+                ...prev,
+                {
+                    id: `user-photo-${Date.now()}`,
+                    sender: 'user',
+                    text: 'Captured dish photo',
+                    photo: base64Data,
+                    timestamp: Date.now()
+                }
+            ]);
+
+            const idx = currentStepIdxRef.current;
+            const currentStep = idx === -1 ? currentSession.overview : currentSession.steps[idx];
+            const instr = idx === -1 ? currentStep.text : currentStep.instruction;
+
+            try {
+                const res = await fetch('/api/cooking-assistant/verify-step', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        imageBase64: base64Data,
+                        recipeTitle: recipe.title,
+                        stepIndex: idx,
+                        stepInstruction: instr,
+                        ingredients: recipe.ingredients || [],
+                        language: lang,
+                        userId: user?.id
+                    })
+                });
+
+                const data = await res.json();
+                if (data.success && data.authenticated) {
+                    setStepVerificationStatus('success');
+                    const praise = data.feedback || "Excellent job! Your dish is right on track. Let's move to the next step.";
+                    setChatMessages(prev => [
+                        ...prev,
+                        {
+                            id: `chef-praise-${Date.now()}`,
+                            sender: 'chef',
+                            text: praise,
+                            timestamp: Date.now()
+                        }
+                    ]);
+                    setTypedText("");
+                    await playTTS(praise);
+                    // Chef is strictly in control of moving to the next step!
+                    setTimeout(() => {
+                        navigateStep('next');
+                    }, 1200);
+                } else {
+                    setStepVerificationStatus('retry');
+                    const guidance = data.feedback || data.advice || "Let's check this step again before continuing.";
+                    setChatMessages(prev => [
+                        ...prev,
+                        {
+                            id: `chef-guidance-${Date.now()}`,
+                            sender: 'chef',
+                            text: guidance,
+                            timestamp: Date.now()
+                        }
+                    ]);
+                    setTypedText("");
+                    await playTTS(guidance);
+                }
+            } catch (err: any) {
+                console.error("Step verification error", err);
+                toast.error("Could not verify photo. Please try again.");
+            } finally {
+                setIsVerifyingPhoto(false);
+                setIsChefThinking(false);
+            }
+        };
+
+        if (typeof fileOrBase64 === 'string') {
+            await processBase64(fileOrBase64);
+        } else {
+            const reader = new FileReader();
+            reader.readAsDataURL(fileOrBase64);
+            reader.onload = async () => {
+                const base64Data = reader.result as string;
+                await processBase64(base64Data);
+            };
+            reader.onerror = () => {
+                setIsVerifyingPhoto(false);
+                setIsChefThinking(false);
+                toast.error("Failed to read image file.");
+            };
+        }
+    };
+
+
 
     if (isLoading) {
         return (
@@ -605,25 +1058,32 @@ export default function RecipeDetails() {
                 <main className="flex-1 overflow-y-auto no-scrollbar bg-slate-50 dark:bg-[#0d1418] rounded-t-[40px] -mt-10 relative z-10 p-6">
                     
                     {/* Nutritional Dashboard */}
+                    {/* Nutritional Dashboard */}
                     <div className="grid grid-cols-4 gap-4 mb-8">
                         <div className="bg-white dark:bg-[#1f2c34] p-3 rounded-2xl shadow-sm text-center">
                             <Flame className="mx-auto text-vic-orange mb-1" size={20} />
-                            <div className="text-lg font-black dark:text-white leading-none">{recipe.total_calories || 0}</div>
+                            <div className="text-lg font-black dark:text-white leading-none">{recipe.total_calories || recipe.calories || 0}</div>
                             <div className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{t('kcal') || 'Kcal'}</div>
                         </div>
                         <div className="bg-white dark:bg-[#1f2c34] p-3 rounded-2xl shadow-sm text-center">
                             <Beef className="mx-auto text-vic-red mb-1" size={20} />
-                            <div className="text-lg font-black dark:text-white leading-none">{recipe.protein_g || 0}g</div>
+                            <div className="text-lg font-black dark:text-white leading-none">
+                                {recipe.protein_g != null && Number(recipe.protein_g) > 0 ? `${recipe.protein_g}g` : (recipe.total_calories > 50 ? '—' : '0g')}
+                            </div>
                             <div className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{t('prot') || 'Prot'}</div>
                         </div>
                         <div className="bg-white dark:bg-[#1f2c34] p-3 rounded-2xl shadow-sm text-center">
                             <Wheat className="mx-auto text-vic-green mb-1" size={20} />
-                            <div className="text-lg font-black dark:text-white leading-none">{recipe.carbs_g || 0}g</div>
+                            <div className="text-lg font-black dark:text-white leading-none">
+                                {recipe.carbs_g != null && Number(recipe.carbs_g) > 0 ? `${recipe.carbs_g}g` : (recipe.total_calories > 50 ? '—' : '0g')}
+                            </div>
                             <div className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{t('carb') || 'Carb'}</div>
                         </div>
                         <div className="bg-white dark:bg-[#1f2c34] p-3 rounded-2xl shadow-sm text-center">
                             <Droplets className="mx-auto text-vic-blue mb-1" size={20} />
-                            <div className="text-lg font-black dark:text-white leading-none">{recipe.fat_g || 0}g</div>
+                            <div className="text-lg font-black dark:text-white leading-none">
+                                {recipe.fat_g != null && Number(recipe.fat_g) > 0 ? `${recipe.fat_g}g` : (recipe.total_calories > 50 ? '—' : '0g')}
+                            </div>
                             <div className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{t('fat') || 'Fat'}</div>
                         </div>
                     </div>
@@ -669,13 +1129,30 @@ export default function RecipeDetails() {
                     )}
 
                     {/* Voice Guidance Toggle */}
-                    <button 
-                        onClick={startVoiceGuidance}
-                        className="w-full bg-vic-green text-slate-900 py-4 rounded-3xl font-black uppercase tracking-widest shadow-xl flex items-center justify-center gap-3 mb-8 hover:scale-[1.02] active:scale-95 transition-all"
-                    >
-                        <Mic size={20} />
-                        {t('start_cooking') || "Let's start cooking"}
-                    </button>
+                    {(() => {
+                        const validInstructions = Array.isArray(recipe.instructions)
+                            ? recipe.instructions.filter(Boolean)
+                            : (typeof recipe.instructions === 'string' && recipe.instructions.trim().length > 0 ? [recipe.instructions] : []);
+                        const hasInstructions = validInstructions.length > 0;
+
+                        return (
+                            <div className="mb-8">
+                                <button 
+                                    onClick={startVoiceGuidance}
+                                    disabled={isLoading || isOrchestrating || !hasInstructions}
+                                    className="w-full bg-vic-green text-slate-900 py-4 rounded-3xl font-black uppercase tracking-widest shadow-xl flex items-center justify-center gap-3 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:active:scale-100"
+                                >
+                                    <Mic size={20} />
+                                    {t('start_cooking') || "Let's start cooking"}
+                                </button>
+                                {!hasInstructions && !isLoading && (
+                                    <p className="text-center text-xs text-slate-400 mt-2 font-medium">
+                                        {t('instructions_not_available') || "Cooking steps not available for this meal"}
+                                    </p>
+                                )}
+                            </div>
+                        );
+                    })()}
 
                     {/* Ingredients */}
                     <h3 className="text-xl font-black dark:text-white mb-4 uppercase tracking-tight">{t('ingredients') || 'Ingredients'}</h3>
@@ -696,7 +1173,7 @@ export default function RecipeDetails() {
                                     );
                                 })
                             ) : (
-                                <p className="text-sm text-slate-400 italic">No specific ingredients listed.</p>
+                                <p className="text-sm text-slate-400 italic">No specific ingredients listed for this meal.</p>
                             )}
                         </div>
                     </div>
@@ -720,7 +1197,7 @@ export default function RecipeDetails() {
                                 );
                             })
                         ) : (
-                            <p className="text-sm text-slate-400 italic">No specific instructions listed.</p>
+                            <p className="text-sm text-slate-400 italic">No specific instructions listed for this meal.</p>
                         )}
                     </div>
                 </main>
@@ -728,7 +1205,7 @@ export default function RecipeDetails() {
 
             {/* IMMERSIVE AI COOKING MODE OVERLAY */}
             {isVoiceMode && (
-                <div className="fixed inset-0 z-[100] bg-white dark:bg-[#0A1014] flex flex-col p-6 text-slate-900 dark:text-white overflow-hidden animate-in fade-in duration-300">
+                <div className="fixed inset-0 z-[100] bg-white dark:bg-[#0A1014] flex flex-col px-6 pt-5 pb-8 text-slate-900 dark:text-white overflow-hidden animate-in fade-in duration-300">
                     {/* Header */}
                     <div className="flex justify-between items-center mb-6 shrink-0">
                         <div className="flex flex-col">
@@ -752,10 +1229,10 @@ export default function RecipeDetails() {
                             <p className="text-slate-400 mt-2 text-sm font-medium">Preparing your interactive session</p>
                         </div>
                     ) : sessionData && (
-                        <div className="flex-1 flex flex-col max-w-lg mx-auto w-full relative h-full pb-4">
+                        <div className="flex-1 flex flex-col max-w-lg mx-auto w-full relative min-h-0 pb-2">
                             
-                            {/* Visual Layer */}
-                            <div className="w-full h-[30vh] min-h-[220px] bg-slate-100 dark:bg-black/40 rounded-[32px] mb-6 overflow-hidden relative shadow-2xl border border-slate-200 dark:border-white/5 shrink-0">
+                            {/* Top Visual Layer: Verified Meal Dish Photography (Maintained as Initially) */}
+                            <div className="w-full h-[28vh] min-h-[200px] bg-slate-100 dark:bg-black/40 rounded-[32px] mb-4 overflow-hidden relative shadow-2xl border border-slate-200 dark:border-white/10 shrink-0">
                                 {isImageLoading ? (
                                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/80 dark:bg-slate-900/50 backdrop-blur-sm gap-3">
                                         <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-vic-green"></div>
@@ -764,7 +1241,7 @@ export default function RecipeDetails() {
                                 ) : (stepImages[currentStepIdx] || recipe.image_url) ? (
                                     <MealImage 
                                         src={stepImages[currentStepIdx] || recipe.image_url} 
-                                        alt={recipe.title || "Step visual"} 
+                                        alt={recipe.title || "Dish Visual"} 
                                         className="w-full h-full object-cover animate-in fade-in duration-700" 
                                     />
                                 ) : (
@@ -782,26 +1259,79 @@ export default function RecipeDetails() {
                                 )}
                             </div>
                             
-                            {/* Conversational Text Layer */}
+                            {/* Seamless Two-Way Conversational Layer (Conversational Dialogue Thread) */}
                             <div className="flex-1 flex flex-col min-h-0 relative">
-                                <div className="mb-2 text-vic-green font-black uppercase tracking-widest text-xs shrink-0 flex justify-between">
-                                    <span>{currentStepIdx === -1 ? 'INGREDIENTS & OVERVIEW' : `STEP ${currentStepIdx + 1} OF ${sessionData.steps.length}`}</span>
-                                    {isChefThinking && <span className="text-vic-orange flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> CHEF IS THINKING...</span>}
-                                    {isListening && !isChefThinking && !isSpeaking && <span className="text-vic-green flex items-center gap-1 animate-pulse"><Ear size={14} /> LISTENING...</span>}
-                                </div>
-                                
-                                <div className="flex-1 overflow-y-auto no-scrollbar mask-image-bottom pb-4">
-                                    <p className="text-2xl md:text-3xl font-black leading-tight uppercase tracking-tighter">
-                                        {typedText}
-                                        {isSpeaking && <span className="inline-block w-2 h-6 bg-vic-green ml-1 animate-pulse align-middle" />}
-                                    </p>
+                                <div 
+                                    ref={chatContainerRef}
+                                    className="flex-1 overflow-y-auto no-scrollbar mask-image-bottom space-y-3 pb-3 pr-1"
+                                >
+                                    {chatMessages.map((msg, idx) => {
+                                        const isLastChef = msg.sender === 'chef' && idx === chatMessages.length - 1;
+                                        
+                                        if (msg.sender === 'chef') {
+                                            return (
+                                                <div 
+                                                    key={msg.id} 
+                                                    className="flex items-start gap-2.5 max-w-[92%] animate-in fade-in slide-in-from-bottom-2 duration-300"
+                                                >
+                                                    <div className="size-8 rounded-full bg-vic-green/20 border border-vic-green/40 flex items-center justify-center shrink-0 mt-0.5 shadow-sm">
+                                                        <Volume2 size={16} className={`text-vic-green ${isSpeaking && isLastChef ? 'animate-pulse' : ''}`} />
+                                                    </div>
+                                                    <div className="bg-white/10 dark:bg-white/5 border border-white/15 backdrop-blur-md px-4 py-3 rounded-2xl rounded-tl-sm shadow-md">
+                                                        <p className="text-[10px] font-black uppercase tracking-wider text-vic-green mb-1">Chef Vic</p>
+                                                        <p className="text-sm md:text-base font-semibold leading-relaxed text-slate-800 dark:text-slate-100">
+                                                            {isLastChef && typedText ? typedText : msg.text}
+                                                            {isSpeaking && isLastChef && <span className="inline-block w-1.5 h-4 bg-vic-green ml-1.5 animate-pulse align-middle" />}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            );
+                                        }
 
-                                    {/* User Live Transcription Bubble */}
+                                        // User message (Speech or Photo)
+                                        return (
+                                            <div key={msg.id} className="flex flex-col items-end gap-1.5 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                                                {msg.photo ? (
+                                                    <div className="flex items-center gap-3 bg-white/10 dark:bg-white/5 border border-white/15 px-3 py-2 rounded-2xl w-fit shadow-md">
+                                                        <div className="size-10 rounded-xl overflow-hidden shrink-0 border border-vic-green">
+                                                            <img src={msg.photo} alt="Captured dish" className="w-full h-full object-cover" />
+                                                        </div>
+                                                        <div className="text-xs font-bold text-slate-200 pr-1">
+                                                            <p className="text-[10px] text-vic-green uppercase tracking-wider">Photo</p>
+                                                            <span>Dish Verification</span>
+                                                        </div>
+                                                    </div>
+                                                ) : (
+                                                    <div className="bg-vic-green/20 border border-vic-green/50 px-4 py-2.5 rounded-2xl rounded-br-sm max-w-[85%] shadow-md">
+                                                        <p className="text-vic-green text-[10px] font-black uppercase tracking-wider mb-0.5">You</p>
+                                                        <p className="text-slate-900 dark:text-white font-medium text-sm">{msg.text}</p>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+
+                                    {/* Live Interim Speech Bubble while user is currently talking */}
                                     {userSpeech && (
-                                        <div className="mt-6 flex justify-end">
-                                            <div className="bg-vic-green/20 border border-vic-green/50 p-4 rounded-2xl rounded-br-sm max-w-[80%] shadow-lg">
-                                                <p className="text-vic-green text-sm font-bold uppercase tracking-wider mb-1">You</p>
-                                                <p className="text-slate-900 dark:text-white font-medium">{userSpeech}</p>
+                                        <div className="flex justify-end animate-in fade-in slide-in-from-bottom-2 duration-200">
+                                            <div className="bg-vic-green/15 border border-dashed border-vic-green/60 px-4 py-2 rounded-2xl rounded-br-sm max-w-[85%] shadow-md">
+                                                <p className="text-vic-green text-[9px] font-black uppercase tracking-wider mb-0.5 animate-pulse">Listening...</p>
+                                                <p className="text-slate-900 dark:text-white font-medium text-sm italic">{userSpeech}</p>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Chef Thinking Indicator directly below user message */}
+                                    {isChefThinking && (
+                                        <div className="flex items-start gap-2.5 max-w-[90%] animate-in fade-in duration-300">
+                                            <div className="size-8 rounded-full bg-vic-green/20 border border-vic-green/40 flex items-center justify-center shrink-0 mt-0.5 shadow-sm">
+                                                <Loader2 size={16} className="text-vic-green animate-spin" />
+                                            </div>
+                                            <div className="bg-white/10 dark:bg-white/5 border border-white/15 px-4 py-2.5 rounded-2xl rounded-tl-sm shadow-md">
+                                                <p className="text-[10px] font-black uppercase tracking-wider text-vic-green mb-0.5">Chef Vic</p>
+                                                <p className="text-xs font-bold text-slate-300 animate-pulse flex items-center gap-1.5">
+                                                    Chef is preparing advice...
+                                                </p>
                                             </div>
                                         </div>
                                     )}
@@ -812,33 +1342,132 @@ export default function RecipeDetails() {
                             <div className="pt-2 border-t border-white/10 shrink-0">
                                 {/* Context Timer */}
                                 {currentStepIdx >= 0 && (
-                                    <div className="flex items-center justify-between bg-white/5 p-4 rounded-2xl mb-4">
+                                    <div className="flex items-center justify-between bg-white/5 p-3 rounded-2xl mb-3">
                                         <div className="flex items-center gap-3">
-                                            <Timer className="text-vic-green" size={24} />
+                                            <Timer className="text-vic-green" size={20} />
                                             <div>
-                                                <div className="text-2xl font-black font-mono leading-none text-white">{formatTime(timeLeft)}</div>
+                                                <div className="text-xl font-black font-mono leading-none text-white">{formatTime(timeLeft)}</div>
                                             </div>
                                         </div>
-                                        <button onClick={toggleTimer} className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl text-xs font-black uppercase tracking-widest text-white transition-colors">
+                                        <button onClick={toggleTimer} className="px-3.5 py-1.5 bg-white/10 hover:bg-white/20 rounded-xl text-xs font-black uppercase tracking-widest text-white transition-colors">
                                             {isTimerRunning ? 'PAUSE' : 'START'}
                                         </button>
                                     </div>
                                 )}
 
-                                {/* Navigation & Playback */}
-                                <div className="flex items-center justify-between px-2 mt-4">
-                                    <button onClick={() => navigateStep('prev')} disabled={currentStepIdx === -1} className="size-14 bg-white/10 rounded-full flex items-center justify-center disabled:opacity-20 hover:bg-white/20 transition-all">
-                                        <ChevronLeft size={28} />
-                                    </button>
-                                    
-                                    <button onClick={togglePlayback} className={`size-20 rounded-full flex items-center justify-center transition-all ${isSpeaking ? 'bg-vic-green text-slate-900 shadow-[0_0_30px_rgba(19,236,55,0.3)]' : 'bg-white/10 text-white'}`}>
-                                        {isSpeaking ? <Pause size={32} fill="currentColor" /> : <Play size={32} fill="currentColor" className="ml-2" />}
+                                {/* Centered Circular Capture Button & Audio Controls (No manual arrow navigation) */}
+                                <div className="flex items-center justify-center gap-6 px-4 py-1">
+                                    {/* Play / Pause Voice */}
+                                    <button 
+                                        type="button"
+                                        onClick={togglePlayback} 
+                                        className={`size-14 rounded-full flex items-center justify-center transition-all ${isSpeaking ? 'bg-white/20 text-white' : 'bg-white/10 text-slate-300 hover:text-white'}`}
+                                        title={isSpeaking ? 'Pause Chef' : 'Replay Chef'}
+                                    >
+                                        {isSpeaking ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" className="ml-0.5" />}
                                     </button>
 
-                                    <button onClick={() => navigateStep('next')} className="size-14 bg-white/10 rounded-full flex items-center justify-center hover:bg-white/20 transition-all">
-                                        <ChevronRight size={28} />
+                                    {/* Perfectly Centered Circular Capture Button */}
+                                    <button 
+                                        type="button"
+                                        onClick={() => {
+                                            setIsCameraModalOpen(true);
+                                            startCamera(facingMode);
+                                        }}
+                                        disabled={isVerifyingPhoto}
+                                        className="size-20 rounded-full border-4 border-white/30 bg-vic-green hover:scale-105 active:scale-95 transition-all flex items-center justify-center shadow-[0_0_30px_rgba(19,236,55,0.4)] disabled:opacity-50"
+                                        title="Capture meal progress"
+                                    >
+                                        <div className="size-16 rounded-full bg-white/20 flex items-center justify-center">
+                                            <Camera size={28} className="text-slate-900" />
+                                        </div>
                                     </button>
+
+                                    {/* Mic Status Indicator / Toggle */}
+                                    <div 
+                                        className="size-14 rounded-full bg-white/10 flex items-center justify-center text-vic-green"
+                                        title="Microphone active"
+                                    >
+                                        <Mic size={22} className={isListening ? 'animate-pulse' : 'opacity-60'} />
+                                    </div>
                                 </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* LIVE DEVICE CAMERA VIEWPOINT MODAL (NATIVE CAMERA EXPERIENCE MATCHING Camera.tsx) */}
+                    {isCameraModalOpen && (
+                        <div className="fixed inset-0 z-[150] bg-black/95 flex flex-col items-center justify-between p-4 backdrop-blur-md animate-in fade-in duration-200">
+                            {/* Header */}
+                            <div className="w-full max-w-md flex items-center justify-between pt-3 px-4 text-white">
+                                <div className="flex items-center gap-2">
+                                    <span className="size-2.5 rounded-full bg-vic-green animate-pulse" />
+                                    <span className="text-sm font-black uppercase tracking-widest text-white">Kitchen</span>
+                                </div>
+                                <button 
+                                    type="button"
+                                    onClick={() => {
+                                        setIsCameraModalOpen(false);
+                                        stopCamera();
+                                    }}
+                                    className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
+                                >
+                                    <X size={20} />
+                                </button>
+                            </div>
+
+                            {/* Viewfinder Video Frame */}
+                            <div className="relative w-full max-w-sm aspect-[3/4] rounded-3xl overflow-hidden border border-white/20 bg-slate-950 shadow-2xl flex items-center justify-center mx-auto my-auto">
+                                <video 
+                                    ref={videoRef} 
+                                    autoPlay 
+                                    playsInline 
+                                    muted 
+                                    className="w-full h-full object-cover"
+                                />
+                                <div className="absolute inset-x-6 bottom-6 flex items-center justify-center pointer-events-none">
+                                    <span className="text-xs font-bold tracking-wider uppercase text-white bg-black/70 px-4 py-2 rounded-full backdrop-blur-md shadow-lg border border-white/10">
+                                        {currentStepIdx === -1 ? 'Frame your ingredients' : 'Frame your dish progress'}
+                                    </span>
+                                </div>
+                            </div>
+
+                            {/* Camera Shutter & Flip Controls */}
+                            <div className="w-full max-w-md flex items-center justify-around pb-6 pt-2">
+                                <button
+                                    type="button"
+                                    onClick={switchCamera}
+                                    className="p-3.5 rounded-full bg-white/10 hover:bg-white/20 text-white transition-all active:scale-95"
+                                    title="Switch Camera"
+                                >
+                                    <SwitchCamera size={22} />
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={async () => {
+                                        await takeLiveViewPhoto();
+                                        setIsCameraModalOpen(false);
+                                        stopCamera();
+                                    }}
+                                    className="size-20 rounded-full border-4 border-white bg-vic-green hover:scale-105 active:scale-90 transition-all flex items-center justify-center shadow-[0_0_35px_rgba(19,236,55,0.5)]"
+                                    title="Take Photo"
+                                >
+                                    <div className="size-16 rounded-full bg-white/20 flex items-center justify-center">
+                                        <Camera size={32} className="text-slate-900" />
+                                    </div>
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setIsCameraModalOpen(false);
+                                        stopCamera();
+                                    }}
+                                    className="px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-bold uppercase tracking-wider"
+                                >
+                                    Cancel
+                                </button>
                             </div>
                         </div>
                     )}

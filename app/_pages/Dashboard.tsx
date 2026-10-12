@@ -603,12 +603,12 @@ export default function Dashboard() {
       toast.promise(promise, {
         loading: 'Uploading avatar...',
         success: 'Avatar updated successfully!',
-        error: 'Failed to upload avatar'
+        error: (err: any) => err?.message || 'Failed to upload avatar'
       });
       await promise;
       queryClient.invalidateQueries({ queryKey: ['profile', user.id] });
     } catch (err: any) {
-      console.error(err);
+      console.error('[Dashboard] Avatar upload error:', err);
     }
   };
 

@@ -105,14 +105,114 @@ export const updateUserProfile = async (userId: string, updates: any) => {
     return dataRows && dataRows.length > 0 ? dataRows[0] : null
 }
 
+const optimizeImageForUpload = async (file: File): Promise<File | Blob> => {
+    if (typeof window === 'undefined') return file;
+    if (file.type === 'image/gif' || file.type === 'image/svg+xml') return file;
+
+    return new Promise((resolve) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => {
+            URL.revokeObjectURL(url);
+            const MAX_DIM = 1024;
+            let width = img.width;
+            let height = img.height;
+            if (width > MAX_DIM || height > MAX_DIM) {
+                if (width > height) {
+                    height = Math.round((height * MAX_DIM) / width);
+                    width = MAX_DIM;
+                } else {
+                    width = Math.round((width * MAX_DIM) / height);
+                    height = MAX_DIM;
+                }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+                resolve(file);
+                return;
+            }
+            ctx.drawImage(img, 0, 0, width, height);
+            canvas.toBlob(
+                (blob) => {
+                    if (blob) {
+                        const optimizedFile = new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' });
+                        resolve(optimizedFile);
+                    } else {
+                        resolve(file);
+                    }
+                },
+                'image/jpeg',
+                0.85
+            );
+        };
+        img.onerror = () => {
+            URL.revokeObjectURL(url);
+            resolve(file);
+        };
+        img.src = url;
+    });
+};
+
 export const uploadAvatar = async (userId: string, file: File) => {
-    // 1. Validate file size (max 5MB)
-    const MAX_SIZE = 5 * 1024 * 1024;
-    if (file.size > MAX_SIZE) {
-        throw new Error('Avatar file size must be less than 5MB');
+    // 1. Client-side image optimization (resizes down large mobile camera photos)
+    let fileToUpload: File | Blob = file;
+    try {
+        fileToUpload = await optimizeImageForUpload(file);
+    } catch {
+        fileToUpload = file;
     }
 
-    // 2. Validate MIME type and map to safe extension
+    // 2. Validate file size (max 8MB)
+    const MAX_SIZE = 8 * 1024 * 1024;
+    if (fileToUpload.size > MAX_SIZE) {
+        throw new Error('Avatar file size must be less than 8MB');
+    }
+
+    // 3. Primary upload via authenticated server API route (bypasses RLS policies on storage)
+    try {
+        const { data: sessionData } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+        const token = sessionData?.session?.access_token;
+
+        const formData = new FormData();
+        formData.append('file', fileToUpload, file.name);
+        if (userId) {
+            formData.append('userId', userId);
+        }
+
+        const headers: Record<string, string> = {};
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        const res = await fetch('/api/user/avatar', {
+            method: 'POST',
+            headers,
+            body: formData,
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            if (data?.avatar_url) {
+                return data.avatar_url;
+            }
+        } else {
+            const errJson = await res.json().catch(() => null);
+            if (errJson?.error) {
+                throw new Error(errJson.error);
+            }
+        }
+    } catch (apiErr: any) {
+        // If this is an explicit business/validation error from the API, rethrow it
+        if (apiErr?.message && !apiErr.message.includes('fetch') && !apiErr.message.includes('Failed to fetch')) {
+            throw apiErr;
+        }
+        console.warn('[uploadAvatar] Server API upload unreachable, falling back to direct storage:', apiErr);
+    }
+
+    // 4. Fallback direct client storage upload
     const mimeMap: Record<string, string> = {
         'image/jpeg': 'jpg',
         'image/png': 'png',
@@ -120,36 +220,34 @@ export const uploadAvatar = async (userId: string, file: File) => {
         'image/gif': 'gif'
     };
 
-    const fileExt = mimeMap[file.type.toLowerCase()];
-    if (!fileExt) {
-        throw new Error('Invalid image format. Allowed formats: JPG, PNG, WEBP, GIF');
-    }
-
-    const fileName = `${Date.now()}.${fileExt}`
-    const filePath = `${userId}/${fileName}`
+    const fileExt = mimeMap[fileToUpload.type.toLowerCase()] || 'jpg';
+    const fileName = `${Date.now()}.${fileExt}`;
+    const filePath = `${userId}/${fileName}`;
 
     const { error: uploadError } = await supabase.storage
         .from('user-avatars')
-        .upload(filePath, file, {
-            contentType: file.type,
+        .upload(filePath, fileToUpload, {
+            contentType: fileToUpload.type || 'image/jpeg',
             upsert: true
-        })
+        });
 
-    if (uploadError) throw uploadError
+    if (uploadError) {
+        throw new Error(`Upload failed: ${uploadError.message}`);
+    }
 
     const { data: { publicUrl } } = supabase.storage
         .from('user-avatars')
-        .getPublicUrl(filePath)
+        .getPublicUrl(filePath);
 
-    await updateUserProfile(userId, { avatar_url: publicUrl })
+    await updateUserProfile(userId, { avatar_url: publicUrl });
 
     // Also update Supabase Auth metadata to ensure persistence on logout/login
     await supabase.auth.updateUser({
         data: { avatar_url: publicUrl }
-    });
+    }).catch(() => {});
 
-    return publicUrl
-}
+    return publicUrl;
+};
 
 export const searchUsers = async (query: string, currentUserId: string) => {
     if (!query || query.trim().length < 2) return [];

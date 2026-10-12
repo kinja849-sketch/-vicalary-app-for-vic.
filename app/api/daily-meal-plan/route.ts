@@ -92,12 +92,24 @@ export async function POST(req: NextRequest) {
         return true;
       }).slice(0, 12);
 
-      // Prepare for client payload
+      // Prepare for client payload - preserve ingredients, instructions, and full macros
       responsePayload[cat] = validRecipes.map(r => ({
         id: r.external_id,
+        external_id: r.external_id,
         title: r.title,
         image_url: r.image_url,
         calories: r.total_calories,
+        total_calories: r.total_calories,
+        protein: r.protein_g,
+        protein_g: r.protein_g,
+        carbs: r.carbs_g,
+        carbs_g: r.carbs_g,
+        fat: r.fat_g,
+        fat_g: r.fat_g,
+        ingredients: r.ingredients || [],
+        instructions: r.instructions || [],
+        cuisine: r.cuisine_type || 'International',
+        cuisine_type: r.cuisine_type || 'International',
         subtitle: `${r.total_calories} kcal`
       }));
       
@@ -108,12 +120,11 @@ export async function POST(req: NextRequest) {
     // 5. Database Persistence
     if (recipesToUpsert.length > 0) {
       const mappedForRecipesTable = recipesToUpsert.map(r => ({
-        id: crypto.randomUUID(), // Temporarily mapping to UUID for `id` column. Real implementation should match external_id.
         external_id: r.external_id,
         title: r.title,
         image_url: r.image_url,
-        ingredients: r.ingredients,
-        instructions: r.instructions,
+        ingredients: r.ingredients || [],
+        instructions: r.instructions || [],
         total_calories: r.total_calories,
         protein_g: r.protein_g,
         carbs_g: r.carbs_g,
@@ -122,7 +133,7 @@ export async function POST(req: NextRequest) {
         provider: r.provider
       }));
 
-      // Upsert Recipes
+      // Upsert Recipes (on conflict external_id, preserve existing or update missing)
       const { error: upsertErr } = await supabase
         .from('recipes')
         .upsert(mappedForRecipesTable, { onConflict: 'external_id' });

@@ -12,24 +12,55 @@ const ensureRecipesUuids = async (recipesData: any[]): Promise<Record<string, st
     if (!recipesData || recipesData.length === 0) return {};
 
     const uniqueIds = new Set();
-    const toUpsert = recipesData
-        .filter(m => {
-            const sid = String(m.id || m.spoonacular_id);
-            if (!sid || sid === 'undefined' || uniqueIds.has(sid)) return false;
-            uniqueIds.add(sid);
-            return true;
-        })
-        .map(m => ({
-            spoonacular_id: String(m.id || m.spoonacular_id),
+    const candidateSids: string[] = [];
+    const validCandidates = recipesData.filter(m => {
+        const sid = String(m.id || m.spoonacular_id || '');
+        if (!sid || sid === 'undefined' || uniqueIds.has(sid)) return false;
+        uniqueIds.add(sid);
+        candidateSids.push(sid);
+        return true;
+    });
+
+    let existingMap: Record<string, any> = {};
+    if (candidateSids.length > 0) {
+        try {
+            const { data: existing } = await supabase
+                .from('recipes')
+                .select('id, spoonacular_id, ingredients, instructions, protein_g, carbs_g, fat_g, total_calories')
+                .in('spoonacular_id', candidateSids);
+            if (existing) {
+                existingMap = existing.reduce((acc: any, r: any) => {
+                    acc[r.spoonacular_id] = r;
+                    return acc;
+                }, {});
+            }
+        } catch (e) {
+            // Continue
+        }
+    }
+
+    const toUpsert = validCandidates.map(m => {
+        const sid = String(m.id || m.spoonacular_id);
+        const prev = existingMap[sid];
+        const prevHasIngredients = Array.isArray(prev?.ingredients) && prev.ingredients.length > 0;
+        const prevHasInstructions = Array.isArray(prev?.instructions) && prev.instructions.length > 0;
+
+        return {
+            spoonacular_id: sid,
             title: m.title || m.name,
             image_url: m.image || m.image_url,
-            total_calories: m.calories || m.total_calories,
-            protein_g: m.protein || m.protein_g,
-            carbs_g: m.carbs || m.carbs_g,
-            fat_g: m.fat || m.fat_g,
-            ingredients: m.ingredients || [],
-            instructions: m.instructions || []
-        }));
+            total_calories: m.calories || m.total_calories || prev?.total_calories || 350,
+            protein_g: m.protein ?? m.protein_g ?? prev?.protein_g ?? null,
+            carbs_g: m.carbs ?? m.carbs_g ?? prev?.carbs_g ?? null,
+            fat_g: m.fat ?? m.fat_g ?? prev?.fat_g ?? null,
+            ingredients: (Array.isArray(m.ingredients) && m.ingredients.length > 0)
+                ? m.ingredients
+                : (prevHasIngredients ? prev.ingredients : []),
+            instructions: (Array.isArray(m.instructions) && m.instructions.length > 0)
+                ? m.instructions
+                : (prevHasInstructions ? prev.instructions : [])
+        };
+    });
 
     const { data, error } = await supabase
         .from('recipes')
@@ -337,24 +368,40 @@ export const getFavoriteRecipes = async (userId: string) => {
         .select('*')
         .eq('user_id', userId)
         .eq('interaction_type', 'favorited')
-        .order('interacted_at', { ascending: false })
-    if (error) throw error
+        .order('interacted_at', { ascending: false });
+    if (error) throw error;
 
     if (!interactions || interactions.length === 0) return [];
     
     const recipeIds = interactions.map(i => i.recipe_id).filter(Boolean);
-    const { data: recipes, error: recipesError } = await supabase
-        .from('recipes')
-        .select('*')
-        .in('id', recipeIds);
-        
-    if (recipesError) throw recipesError;
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const directUuids = recipeIds.filter(id => uuidRegex.test(String(id)));
+    const nonUuids = recipeIds.filter(id => !uuidRegex.test(String(id)));
+
+    const recipes: any[] = [];
+    if (directUuids.length > 0) {
+        const { data: matchedById } = await supabase
+            .from('recipes')
+            .select('*')
+            .in('id', directUuids);
+        if (matchedById) recipes.push(...matchedById);
+    }
+
+    if (nonUuids.length > 0 || recipes.length < recipeIds.length) {
+        const missingIds = recipeIds.filter(id => !recipes.some(r => r.id === id));
+        if (missingIds.length > 0) {
+            const { data: matchedByExternal } = await (supabase.from('recipes') as any)
+                .select('*')
+                .in('external_id', missingIds);
+            if (matchedByExternal) recipes.push(...matchedByExternal);
+        }
+    }
     
     return interactions.map(interaction => ({
         ...interaction,
-        recipes: recipes.find(r => r.id === interaction.recipe_id) || null
+        recipes: recipes.find(r => r.id === interaction.recipe_id || r.external_id === interaction.recipe_id) || null
     }));
-}
+};
 
 export const getCookedRecipes = async (userId: string) => {
     const { data: interactions, error } = await supabase
@@ -362,24 +409,40 @@ export const getCookedRecipes = async (userId: string) => {
         .select('*')
         .eq('user_id', userId)
         .eq('interaction_type', 'cooked')
-        .order('interacted_at', { ascending: false })
-    if (error) throw error
+        .order('interacted_at', { ascending: false });
+    if (error) throw error;
 
     if (!interactions || interactions.length === 0) return [];
     
     const recipeIds = interactions.map(i => i.recipe_id).filter(Boolean);
-    const { data: recipes, error: recipesError } = await supabase
-        .from('recipes')
-        .select('*')
-        .in('id', recipeIds);
-        
-    if (recipesError) throw recipesError;
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const directUuids = recipeIds.filter(id => uuidRegex.test(String(id)));
+    const nonUuids = recipeIds.filter(id => !uuidRegex.test(String(id)));
+
+    const recipes: any[] = [];
+    if (directUuids.length > 0) {
+        const { data: matchedById } = await supabase
+            .from('recipes')
+            .select('*')
+            .in('id', directUuids);
+        if (matchedById) recipes.push(...matchedById);
+    }
+
+    if (nonUuids.length > 0 || recipes.length < recipeIds.length) {
+        const missingIds = recipeIds.filter(id => !recipes.some(r => r.id === id));
+        if (missingIds.length > 0) {
+            const { data: matchedByExternal } = await (supabase.from('recipes') as any)
+                .select('*')
+                .in('external_id', missingIds);
+            if (matchedByExternal) recipes.push(...matchedByExternal);
+        }
+    }
     
     return interactions.map(interaction => ({
         ...interaction,
-        recipes: recipes.find(r => r.id === interaction.recipe_id) || null
+        recipes: recipes.find(r => r.id === interaction.recipe_id || r.external_id === interaction.recipe_id) || null
     }));
-}
+};
 
 // ============================================================================
 // PERSONALIZED RECOMMENDATIONS

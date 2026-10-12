@@ -1,52 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { synthesizeVoiceAudioWithFallback } from '@/lib/ai/ai-fallback';
+import { DEFAULT_COACH_VOICE } from '@/lib/services/ai/ConversationOrchestrator';
 
 export async function POST(req: NextRequest) {
     try {
-        const { text, voice = 'nova', speed = 1.0 } = await req.json();
+        const { text, speed = 1.05 } = await req.json();
 
         if (!text || typeof text !== 'string') {
             return NextResponse.json({ error: 'Valid text parameter is required' }, { status: 400 });
         }
 
-        const apiKey = process.env.OPENAI_API_KEY || process.env.NEXT_PUBLIC_OPENAI_API_KEY;
-        if (!apiKey) {
-            throw new Error('OpenAI API key missing');
-        }
-
-        const numericSpeed = typeof speed === 'number' && !isNaN(speed) ? speed : 1.0;
-        const clampedSpeed = Math.max(0.5, Math.min(numericSpeed, 2.0));
-        const truncatedText = text.slice(0, 4096);
-
-        // Use high-speed natural TTS model with ultra-natural human voice choices (nova, shimmer, alloy)
-        const selectedVoice = ['nova', 'shimmer', 'alloy', 'echo', 'fable', 'onyx'].includes(voice) ? voice : 'nova';
-        
-        const response = await fetch('https://api.openai.com/v1/audio/speech', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                model: 'tts-1',
-                voice: selectedVoice,
-                input: truncatedText,
-                speed: clampedSpeed,
-            }),
+        // Strictly enforce the single unified human coach voice across the entire application
+        const voiceResult = await synthesizeVoiceAudioWithFallback(text, { 
+            voice: DEFAULT_COACH_VOICE, 
+            speed: Math.max(0.8, Math.min(speed, 1.3)) 
         });
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('[TTS API Error]:', errorText);
-            throw new Error('TTS conversion failed');
+        if (!voiceResult || !voiceResult.buffer) {
+            return NextResponse.json({ error: 'Failed to synthesize speech' }, { status: 500 });
         }
 
-        // Return the audio stream directly to the client
-        const audioBuffer = await response.arrayBuffer();
-        
-        return new NextResponse(audioBuffer, {
+        return new NextResponse(new Uint8Array(voiceResult.buffer), {
             status: 200,
             headers: {
-                'Content-Type': 'audio/mpeg',
+                'Content-Type': voiceResult.mimeType || 'audio/mpeg',
                 'Cache-Control': 'public, max-age=3600',
             },
         });

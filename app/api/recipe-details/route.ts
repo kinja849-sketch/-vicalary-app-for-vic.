@@ -127,20 +127,80 @@ export async function POST(req: NextRequest) {
     const { data: dbRecipe } = await recipeQuery.maybeSingle()
 
     if (dbRecipe) {
+      let ingredients = parseIngredients(dbRecipe.ingredients)
+      let instructions = parseInstructions(dbRecipe.instructions)
+      let protein_g = dbRecipe.protein_g != null ? Number(dbRecipe.protein_g) : null
+      let carbs_g = dbRecipe.carbs_g != null ? Number(dbRecipe.carbs_g) : null
+      let fat_g = dbRecipe.fat_g != null ? Number(dbRecipe.fat_g) : null
+      let calories = dbRecipe.total_calories || 0
+
+      // Canonical Title Enrichment: If ingredients/instructions/macros are empty in this row,
+      // search for a populated sibling row with the same title or in cached_recipes
+      if (ingredients.length === 0 || instructions.length === 0 || protein_g === null || protein_g === 0) {
+        try {
+          const sanitizedTitle = (dbRecipe.title || '').replace(/[(),.%]/g, '').trim()
+          if (sanitizedTitle.length >= 3) {
+            const { data: canonicalMatches } = await supabase
+              .from('recipes')
+              .select('*')
+              .ilike('title', `%${sanitizedTitle}%`)
+              .neq('id', dbRecipe.id)
+              .limit(5)
+
+            if (canonicalMatches && canonicalMatches.length > 0) {
+              const bestMatch = canonicalMatches.find((m: any) => {
+                const ings = parseIngredients(m.ingredients)
+                const insts = parseInstructions(m.instructions)
+                return ings.length > 0 && insts.length > 0
+              }) || canonicalMatches[0]
+
+              if (bestMatch) {
+                if (ingredients.length === 0) ingredients = parseIngredients(bestMatch.ingredients)
+                if (instructions.length === 0) instructions = parseInstructions(bestMatch.instructions)
+                if ((protein_g === null || protein_g === 0) && bestMatch.protein_g != null) protein_g = Number(bestMatch.protein_g)
+                if ((carbs_g === null || carbs_g === 0) && bestMatch.carbs_g != null) carbs_g = Number(bestMatch.carbs_g)
+                if ((fat_g === null || fat_g === 0) && bestMatch.fat_g != null) fat_g = Number(bestMatch.fat_g)
+                if (calories === 0 && bestMatch.total_calories) calories = bestMatch.total_calories
+              }
+            }
+
+            // Also check cached_recipes by title if still missing ingredients/instructions
+            if (ingredients.length === 0 || instructions.length === 0) {
+              const { data: cachedMatch } = await supabase
+                .from('cached_recipes')
+                .select('*')
+                .ilike('title', `%${sanitizedTitle}%`)
+                .maybeSingle()
+
+              if (cachedMatch) {
+                if (ingredients.length === 0) ingredients = parseIngredients(cachedMatch.ingredients)
+                if (instructions.length === 0) instructions = parseInstructions(cachedMatch.instructions_steps || cachedMatch.instructions)
+                if ((protein_g === null || protein_g === 0) && cachedMatch.nutrition?.protein) protein_g = Number(cachedMatch.nutrition.protein)
+                if ((carbs_g === null || carbs_g === 0) && cachedMatch.nutrition?.carbs) carbs_g = Number(cachedMatch.nutrition.carbs)
+                if ((fat_g === null || fat_g === 0) && cachedMatch.nutrition?.fat) fat_g = Number(cachedMatch.nutrition.fat)
+                if (calories === 0 && cachedMatch.nutrition?.calories) calories = cachedMatch.nutrition.calories
+              }
+            }
+          }
+        } catch (enrichErr) {
+          console.warn('[recipe-details] Canonical title enrichment skipped:', enrichErr)
+        }
+      }
+
       const mapped: NormalizedRecipe = {
         id: String(dbRecipe.id),
         title: dbRecipe.title || 'Untitled Recipe',
         image_url: dbRecipe.image_url || '',
         cuisine_type: dbRecipe.cuisine_type || 'International',
         dietary_tags: Array.isArray(dbRecipe.dietary_tags) ? dbRecipe.dietary_tags : [],
-        ingredients: parseIngredients(dbRecipe.ingredients),
-        instructions: parseInstructions(dbRecipe.instructions),
+        ingredients,
+        instructions,
         prep_time_minutes: dbRecipe.prep_time_minutes || 15,
         cook_time_minutes: dbRecipe.cook_time_minutes || 0,
-        total_calories: dbRecipe.total_calories || 0,
-        protein_g: Number(dbRecipe.protein_g || 0),
-        carbs_g: Number(dbRecipe.carbs_g || 0),
-        fat_g: Number(dbRecipe.fat_g || 0),
+        total_calories: calories,
+        protein_g: protein_g != null ? protein_g : 0,
+        carbs_g: carbs_g != null ? carbs_g : 0,
+        fat_g: fat_g != null ? fat_g : 0,
         servings: 2,
         description: dbRecipe.description || ''
       }

@@ -123,16 +123,15 @@ export const CheckpointCalendar: React.FC<CheckpointCalendarProps> = ({ joinDate
     };
 
     const handleDayClick = (date: Date, isMilestone: boolean, isToday: boolean) => {
-        if (isToday) {
+        if (isMilestone) {
+            setSelectedDate(date);
+            setIsModalOpen(true);
+        } else if (isToday) {
             if (onEditProgress) {
                 onEditProgress(date);
             }
-        } else if (isMilestone) {
-            setSelectedDate(date);
-            setIsModalOpen(true);
-        } else if (onEditProgress) {
-            onEditProgress(date);
         }
+        // Non-milestone, non-today days are non-interactive timeline indicators
     };
 
     const canViewAnalysis = () => {
@@ -190,15 +189,13 @@ export const CheckpointCalendar: React.FC<CheckpointCalendarProps> = ({ joinDate
                             ref={isToday ? todayRef : null}
                             onClick={() => handleDayClick(date, isMilestone, isToday)}
                             className={`
-                                flex flex-col items-center justify-center min-w-[72px] h-[100px] rounded-2xl snap-center transition-all cursor-pointer relative overflow-hidden flex-shrink-0
+                                flex flex-col items-center justify-center min-w-[72px] h-[100px] rounded-2xl snap-center transition-all relative overflow-hidden flex-shrink-0 select-none
                                 ${isToday
-                                    ? 'bg-vic-green text-slate-900 shadow-xl shadow-vic-green/30 z-10'
+                                    ? 'bg-vic-green text-slate-900 shadow-xl shadow-vic-green/30 z-10 cursor-pointer active:scale-95'
                                     : isMilestone
-                                        ? 'bg-gradient-to-br from-indigo-600 to-indigo-800 text-white shadow-lg shadow-indigo-500/30'
-                                        : 'bg-white dark:bg-[#1f2c34] border border-slate-100 dark:border-slate-800 text-slate-900 dark:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                                        ? 'bg-gradient-to-br from-indigo-600 to-indigo-800 text-white shadow-lg shadow-indigo-500/30 ring-2 ring-offset-2 ring-indigo-500 dark:ring-offset-[#0d1418] scale-[1.05] cursor-pointer active:scale-95'
+                                        : 'bg-white dark:bg-[#1f2c34] border border-slate-100 dark:border-slate-800 text-slate-900 dark:text-white cursor-default scale-100 opacity-90'
                                 }
-                                ${isMilestone ? 'ring-2 ring-offset-2 ring-indigo-500 dark:ring-offset-[#0d1418] scale-[1.05]' : 'scale-100'}
-                                active:scale-95
                             `}
                         >
                             {isMilestone && (
