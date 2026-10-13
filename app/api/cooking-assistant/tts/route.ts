@@ -11,9 +11,10 @@ export async function POST(req: NextRequest) {
         }
 
         // Strictly enforce the single unified human coach voice across the entire application
-        const voiceResult = await synthesizeVoiceAudioWithFallback(text, { 
+        const voiceResult = await synthesizeVoiceAudioWithFallback(text.slice(0, 4000), { 
             voice: DEFAULT_COACH_VOICE, 
-            speed: Math.max(0.8, Math.min(speed, 1.3)) 
+            speed: Math.max(0.8, Math.min(speed, 1.3)),
+            signal: req.signal
         });
 
         if (!voiceResult || !voiceResult.buffer) {

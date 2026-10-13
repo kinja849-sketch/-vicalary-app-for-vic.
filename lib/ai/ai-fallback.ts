@@ -61,26 +61,28 @@ export interface AIChatResponse {
 const PRIMARY_OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 const BACKUP_GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
 
-// In-memory circuit breaker: If OpenAI hits rate-limit/quota exhaustion (429),
-// bypass OpenAI immediately for 10 minutes to deliver sub-second response times.
-let openAICircuitOpenUntil = 0;
-
-export function isOpenAIAvailable(): boolean {
-  return Date.now() >= openAICircuitOpenUntil;
+declare global {
+  var __openAICircuitOpenUntil: number | undefined;
 }
 
-export function tripOpenAICircuit(durationMs = 10 * 60 * 1000): void {
-  openAICircuitOpenUntil = Date.now() + durationMs;
-  console.warn(`[AI Engine Circuit Breaker] Tripped until ${new Date(openAICircuitOpenUntil).toLocaleTimeString()}. Directly routing all subsequent calls to backup provider.`);
+export function isOpenAIAvailable(): boolean {
+  const until = globalThis.__openAICircuitOpenUntil ?? 0;
+  return Date.now() >= until;
+}
+
+export function tripOpenAICircuit(durationMs = 60 * 60 * 1000): void {
+  globalThis.__openAICircuitOpenUntil = Date.now() + durationMs;
+  console.warn(`[AI Engine Circuit Breaker] Tripped until ${new Date(globalThis.__openAICircuitOpenUntil).toLocaleTimeString()}. Directly routing all subsequent calls to backup provider.`);
 }
 
 export function resetOpenAICircuit(): void {
-  openAICircuitOpenUntil = 0;
+  globalThis.__openAICircuitOpenUntil = 0;
 }
 
 // In-memory circuit breaker for Gemini Preview TTS:
 // If preview TTS models hit quota exhaustion (limit 10/day on free tier),
 // bypass dead models immediately for 60 minutes to eliminate 15-second latency overhead.
+const geminiTtsModelCooldown = new Map<string, number>();
 let geminiTtsCircuitOpenUntil = 0;
 
 export function isGeminiTtsAvailable(): boolean {
@@ -126,8 +128,8 @@ export function mapModelForBackup(model?: string): string {
 
   if (model && model.startsWith('gemini-') && model !== 'gemini-3.8-flash') return model;
 
-  // Prioritize active, responsive, high-capacity Gemini 3.5 Flash
-  return 'gemini-3.5-flash';
+  // Prioritize active, healthy models with available quota
+  return 'gemini-3.5-flash-lite';
 }
 
 /**
@@ -212,11 +214,10 @@ export async function callChatCompletionWithFallback(
   }
 
   const fallbackModels = Array.from(new Set([
-    'gemini-flash-latest',
-    'gemini-3.7-flash',
-    'gemini-3-flash-preview',
+    'gemini-3.5-flash-lite',
+    'gemini-2.5-flash',
     mapModelForBackup(request.model),
-    'gemini-3.5-flash',
+    'gemini-3.7-flash',
     'gemini-3.1-flash-lite',
   ]));
 
@@ -314,12 +315,11 @@ export async function streamChatCompletionWithFallback(
   }
 
   const fallbackModels = Array.from(new Set([
+    'gemini-3.5-flash-lite',
+    'gemini-3.1-flash-lite',
     mapModelForBackup(request.model),
+    'gemini-2.5-flash',
     'gemini-3.7-flash',
-    'gemini-3.6-flash',
-    'gemini-3.5-flash',
-    'gemini-flash-latest',
-    'gemini-3.8-flash',
   ]));
 
   let lastBackupErr = '';
@@ -464,12 +464,12 @@ export interface VoiceAudioResult {
  */
 export async function synthesizeVoiceAudioWithFallback(
   text: string,
-  options?: { voice?: string; speed?: number }
+  options?: { voice?: string; speed?: number; signal?: AbortSignal }
 ): Promise<VoiceAudioResult | null> {
   const cleanText = text
     .replace(/[*_#`~]/g, '') // strip markdown
     .trim()
-    .slice(0, 1500);
+    .slice(0, 4000);
 
   if (!cleanText) return null;
 
@@ -488,6 +488,7 @@ export async function synthesizeVoiceAudioWithFallback(
           Authorization: `Bearer ${primaryKey}`,
           'Content-Type': 'application/json',
         },
+        signal: options?.signal,
         body: JSON.stringify({
           model: 'tts-1',
           voice: selectedVoice,
@@ -524,13 +525,15 @@ export async function synthesizeVoiceAudioWithFallback(
   // 2. Try Gemini 3.8 Flash Human Neural TTS (Prioritize gemini-3.8-flash-lite-tts with prebuilt female voice Aoede)
   if (backupKey) {
     const ttsModels = [
-      'gemini-3.1-flash-tts-preview',
       'gemini-3.8-flash-lite-tts',
       'gemini-3.8-flash-tts',
+      'gemini-3.1-flash-tts-preview',
       'gemini-2.5-flash-preview-tts',
     ];
 
     for (const ttsModel of ttsModels) {
+      if (options?.signal?.aborted) return null;
+      if ((geminiTtsModelCooldown.get(ttsModel) || 0) > Date.now()) continue;
       try {
         console.info(`[AI Fallback] Synthesizing natural human voice via ${ttsModel} (voice: Aoede)...`);
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${ttsModel}:generateContent?key=${backupKey}`;
@@ -538,6 +541,7 @@ export async function synthesizeVoiceAudioWithFallback(
         const res = await fetch(geminiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: options?.signal,
           body: JSON.stringify({
             contents: [
               {
@@ -560,6 +564,10 @@ export async function synthesizeVoiceAudioWithFallback(
         if (!res.ok) {
           const errText = await res.text();
           console.warn(`[AI Fallback] ${ttsModel} returned HTTP ${res.status}: ${errText.substring(0, 150)}`);
+          if (res.status === 404 || res.status === 429 || res.status === 403) {
+            const cooldownTime = res.status === 429 ? 2 * 60 * 1000 : 10 * 60 * 1000;
+            geminiTtsModelCooldown.set(ttsModel, Date.now() + cooldownTime);
+          }
           continue;
         }
 
@@ -596,40 +604,8 @@ export async function synthesizeVoiceAudioWithFallback(
     }
   }
 
-  // 3. Ultra-resilient Neural Voice Backup via MsEdgeTTS (hyper-realistic studio human voice: en-US-JennyNeural)
-  try {
-    const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
-    const tts = new MsEdgeTTS();
-    await tts.setMetadata('en-US-JennyNeural', OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-    const { audioStream } = tts.toStream(cleanText);
-
-    const audioBuffer = await new Promise<Buffer>((resolve, reject) => {
-      const chunks: Buffer[] = [];
-      audioStream.on('data', (c: Buffer) => chunks.push(c));
-      audioStream.on('end', () => resolve(Buffer.concat(chunks)));
-      audioStream.on('error', (err: any) => reject(err));
-      setTimeout(() => {
-        if (chunks.length > 0) resolve(Buffer.concat(chunks));
-        else reject(new Error('Edge TTS stream timeout'));
-      }, 7000);
-    });
-
-    if (audioBuffer && audioBuffer.length > 0) {
-      const b64 = audioBuffer.toString('base64');
-      console.info('[AI Fallback] Synthesized lifelike human voice via MsEdgeTTS (JennyNeural).');
-      return {
-        buffer: audioBuffer,
-        audioBase64: b64,
-        dataUri: `data:audio/mp3;base64,${b64}`,
-        mimeType: 'audio/mpeg',
-        provider: 'backup',
-      };
-    }
-  } catch (edgeErr: any) {
-    console.warn('[AI Fallback] MsEdgeTTS backup exception:', edgeErr?.message || edgeErr);
-  }
-
-  console.error('[AI Fallback] All neural TTS models failed.');
+  // No third voice: only OpenAI `nova` and Gemini `Aoede` may ever be heard.
+  console.error('[AI Fallback] Both human TTS voices (OpenAI nova, Gemini Aoede) failed.');
   return null;
 }
 

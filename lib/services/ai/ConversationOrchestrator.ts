@@ -66,10 +66,10 @@ export type VoiceStreamEvent =
   | { type: 'preparing' }
   | { type: 'tool_call'; tool: string }
   | { type: 'interim_audio'; audioBase64: string; text: string }
-  | { type: 'first_audio'; audioBase64: string; text: string; metrics: { firstSentenceMs: number; ttsDurationMs: number; totalTurnMs: number } }
-  | { type: 'audio'; audioBase64: string; text: string; metrics: { firstSentenceMs: number; ttsDurationMs: number; totalTurnMs: number } }
+  | { type: 'first_audio'; audioBase64: string; text: string; seq?: number; metrics: { firstSentenceMs: number; ttsDurationMs: number; totalTurnMs: number } }
+  | { type: 'audio'; audioBase64: string; text: string; seq?: number; metrics: { firstSentenceMs: number; ttsDurationMs: number; totalTurnMs: number } }
   | { type: 'text_chunk'; text: string }
-  | { type: 'done'; fullText: string; audioBase64?: string; metrics: { firstSentenceMs: number; ttsDurationMs: number; totalTurnMs: number } }
+  | { type: 'done'; fullText: string; audioBase64?: string; audioChunks?: number; metrics: { firstSentenceMs: number; ttsDurationMs: number; totalTurnMs: number } }
   | { type: 'error'; error: string };
 
 export async function processConversationStream(
@@ -181,7 +181,7 @@ export async function processConversationStream(
       });
     } else {
       const effectiveHistory = (sessionTurns && sessionTurns.length > 0)
-        ? sessionTurns.slice(-6)
+        ? sessionTurns.slice(-10)
         : historyRes;
 
       const cleanedHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
@@ -244,8 +244,54 @@ export async function processConversationStream(
     const decoder = new TextDecoder();
     let fullText = '';
     let buffer = '';
-    let firstSentenceAudioSent = false;
-    let firstSentenceText = '';
+
+    // Ordered sentence-chunk TTS: every chunk is synthesized in parallel, but emitted strictly in order.
+    let spokenUpTo = 0;
+    let audioSeq = 0;
+    let ttsChain: Promise<void> = Promise.resolve();
+    const queueSpeech = (chunkText: string) => {
+      const t = chunkText.trim();
+      if (!t || !voiceMode) return;
+      const mySeq = audioSeq++;
+      const startedAt = Date.now();
+      const synth = synthesizeVoiceAudio(t).catch(() => null);
+      ttsChain = ttsChain.then(async () => {
+        const audio = await synth;
+        if (!audio) return;
+        onEvent({
+          type: mySeq === 0 ? 'first_audio' : 'audio',
+          audioBase64: audio,
+          text: t,
+          seq: mySeq,
+          metrics: {
+            firstSentenceMs: Date.now() - startTime,
+            ttsDurationMs: Date.now() - startedAt,
+            totalTurnMs: Date.now() - startTime
+          }
+        });
+      });
+    };
+    const flushSpeech = (final: boolean) => {
+      for (;;) {
+        const pending = fullText.slice(spokenUpTo);
+        const min = audioSeq === 0 ? 15 : 60; // first chunk early for fast first audio, later chunks merged
+        const re = /[.!?\u2026\u3002]["')\]]*\s/g;
+        let m: RegExpExecArray | null;
+        let cut = -1;
+        while ((m = re.exec(pending)) !== null) {
+          const end = m.index + m[0].length;
+          if (end >= min) { cut = end; break; }
+        }
+        if (cut < 0) break;
+        queueSpeech(pending.slice(0, cut));
+        spokenUpTo += cut;
+      }
+      if (final) {
+        const rest = fullText.slice(spokenUpTo);
+        if (rest.trim()) queueSpeech(rest);
+        spokenUpTo = fullText.length;
+      }
+    };
 
     while (true) {
       const { done, value } = await reader.read();
@@ -265,30 +311,7 @@ export async function processConversationStream(
             if (delta) {
               fullText += delta;
               onEvent({ type: 'text_chunk', text: delta });
-
-              // Rapid conversational turnaround: synthesize and emit first sentence audio immediately
-              if (!firstSentenceAudioSent && voiceMode) {
-                const sentenceMatch = fullText.match(/^([^.!?\n]+[.!?\n])/);
-                if (sentenceMatch && sentenceMatch[1] && sentenceMatch[1].trim().length >= 15) {
-                  firstSentenceAudioSent = true;
-                  firstSentenceText = sentenceMatch[1].trim();
-                  const firstSentTime = Date.now();
-                  synthesizeVoiceAudio(firstSentenceText).then((firstAudio) => {
-                    if (firstAudio) {
-                      onEvent({
-                        type: 'first_audio',
-                        audioBase64: firstAudio,
-                        text: firstSentenceText,
-                        metrics: {
-                          firstSentenceMs: Date.now() - startTime,
-                          ttsDurationMs: Date.now() - firstSentTime,
-                          totalTurnMs: Date.now() - startTime
-                        }
-                      });
-                    }
-                  }).catch(() => {});
-                }
-              }
+              if (voiceMode) flushSpeech(false);
             }
           } catch (e) {}
         }
@@ -298,14 +321,23 @@ export async function processConversationStream(
 
     const finalFullText = formatConversationalOutput(fullText.trim());
     const ttsStartMs = Date.now();
-    const fullAudioBase64 = await synthesizeVoiceAudio(finalFullText);
+    let audioChunks = 0;
+    let legacyFullAudio: string | null = null;
+
+    if (voiceMode) {
+      flushSpeech(true);
+      await ttsChain; // all chunks have been emitted in order before 'done'
+      audioChunks = audioSeq;
+    } else {
+      legacyFullAudio = await synthesizeVoiceAudio(finalFullText);
+    }
     const ttsDurationMs = Date.now() - ttsStartMs;
     const totalTurnMs = Date.now() - startTime;
 
-    if (fullAudioBase64 && !firstSentenceAudioSent) {
+    if (legacyFullAudio) {
       onEvent({
         type: 'audio',
-        audioBase64: fullAudioBase64,
+        audioBase64: legacyFullAudio,
         text: finalFullText,
         metrics: { firstSentenceMs: 0, ttsDurationMs, totalTurnMs }
       });
@@ -314,7 +346,8 @@ export async function processConversationStream(
     onEvent({
       type: 'done',
       fullText: finalFullText,
-      audioBase64: fullAudioBase64 || undefined,
+      audioBase64: legacyFullAudio || undefined,
+      audioChunks,
       metrics: {
         firstSentenceMs: 0,
         ttsDurationMs,
@@ -442,7 +475,7 @@ export async function processConversation(
       });
     } else {
       const effectiveHistory = (sessionTurns && sessionTurns.length > 0)
-        ? sessionTurns.slice(-6)
+        ? sessionTurns.slice(-10)
         : historyRes;
 
       const cleanedHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
@@ -864,7 +897,7 @@ async function generateModelReply(
 
 async function synthesizeVoiceAudio(text: string): Promise<string | null> {
   try {
-    const spokenText = formatForSpeech(text).slice(0, 1500);
+    const spokenText = formatForSpeech(text).slice(0, 4000);
     const result = await synthesizeVoiceAudioWithFallback(spokenText, {
       voice: DEFAULT_COACH_VOICE,
       speed: 1.05

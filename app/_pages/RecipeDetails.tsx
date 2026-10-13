@@ -15,6 +15,16 @@ import { FavoriteButton } from "@/components/FavoriteButton";
 import { MealImage } from "@/components/MealImage";
 import ChefAvatar from "@/components/guide/ChefAvatar";
 import { getFoodImageUrl } from "@/lib/services/FoodImageService";
+import {
+    SequentialSpeechPlayer,
+    SpeechListener,
+    TurnSession,
+    backoffMs,
+    getSpeechRecognitionCtor,
+    isLikelyTranscriptStub,
+    splitIntoSpeechChunks,
+    type SpeechEndResult,
+} from "@/lib/voice/VoiceTurnController";
 
 export default function RecipeDetails() {
     const { id } = useParams() as { id: string };
@@ -99,13 +109,25 @@ export default function RecipeDetails() {
     const chunksRef = useRef<BlobPart[]>([]);
     const isRecordingRef = useRef<boolean>(false);
 
-    // Cleanup on unmount
+    // --- SHARED VOICE ENGINE REFS ---
+    const turnRef = useRef(new TurnSession());
+    const playerRef = useRef<SequentialSpeechPlayer | null>(null);
+    const listenerRef = useRef<SpeechListener | null>(null);
+    const processingRef = useRef<boolean>(false);          // single-flight lock (STT -> chat -> TTS)
+    const sttFailuresRef = useRef<number>(0);
+    const vadPausedUntilRef = useRef<number>(0);
+    const ttsCooldownUntilRef = useRef<number>(0);
+    const resumeTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const historyRef = useRef<{ role: 'user' | 'assistant'; text: string }[]>([]);
+    const spokenTextRef = useRef<string>('');
+    const submitVoiceQueryRef = useRef<(q: string, lockHeld?: boolean) => Promise<void>>(async () => {});
+
+    // Cleanup on unmount: abort fetches, stop audio, cancel timers, release mic - every time.
     useEffect(() => {
         return () => {
-            if (audioRef.current) audioRef.current.pause();
             if (typewriterRef.current) clearInterval(typewriterRef.current);
             stopCamera();
-            stopListening();
+            stopAllVoice();
         };
     }, []);
 
@@ -218,103 +240,42 @@ export default function RecipeDetails() {
         await verifyStepWithPhoto(base64Data);
     };
 
-    // --- HEALTH COACH DIALOGUE ENGINE (SPEECH RECOGNITION + VAD BARGE-IN) ---
+    // --- VOICE DIALOGUE ENGINE (shared module: lib/voice/VoiceTurnController) ---
+    // Web Speech path: SpeechListener (tight 500ms commit, echo-safe barge-in, no stale handlers, bounded restarts).
+    // Fallback path (no Web Speech): MediaRecorder VAD -> Whisper, single-flight with failure backoff.
     const startListening = () => {
-        const SpeechRecognition = typeof window !== 'undefined'
-            ? ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
-            : null;
+        if (!isVoiceModeRef.current) return;
 
-        if (SpeechRecognition) {
-            try {
-                if (recognitionRef.current) {
-                    try { recognitionRef.current.abort(); } catch (e) {}
-                }
-
-                const recognition = new SpeechRecognition();
-                recognitionRef.current = recognition;
-                recognition.lang = lang === 'ar' ? 'ar-SA' : lang === 'fr' ? 'fr-FR' : 'en-US';
-                recognition.interimResults = true;
-                recognition.continuous = true;
-
-                recognition.onstart = () => {
-                    setIsListening(true);
-                };
-
-                recognition.onresult = (event: any) => {
-                    // Instant Speech Interruption / Barge-in
-                    // Guard against self-echo: only trigger interruption if user is genuinely speaking distinct words
-                    if (isSpeakingRef.current) {
-                        let bargeInWords = '';
-                        for (let i = 0; i < event.results.length; ++i) {
-                            if (event.results[i].isFinal || (event.results[i][0]?.confidence ?? 1) > 0.4) {
-                                bargeInWords += (event.results[i][0]?.transcript || '') + ' ';
-                            }
-                        }
-                        const trimmedBarge = bargeInWords.trim();
-                        // Require at least two distinct syllables/words to avoid tripping on speaker acoustics
-                        if (trimmedBarge.length >= 4 && trimmedBarge.split(' ').length >= 2) {
-                            if (audioRef.current && !audioRef.current.paused) {
-                                audioRef.current.pause();
-                            }
-                            setIsSpeaking(false);
-                            isSpeakingRef.current = false;
-                            if (typewriterRef.current) clearInterval(typewriterRef.current);
-                            setTypedText(""); // Clear old reply immediately for correction
-                        }
-                    }
-
-                    let fullTranscript = '';
-                    let interimTranscript = '';
-                    for (let i = 0; i < event.results.length; ++i) {
-                        const res = event.results[i];
-                        const part = res[0]?.transcript || '';
-                        if (res.isFinal) {
-                            fullTranscript += (fullTranscript ? ' ' : '') + part.trim();
-                        } else {
-                            interimTranscript += (interimTranscript ? ' ' : '') + part.trim();
-                        }
-                    }
-
-                    const currentText = (fullTranscript + (interimTranscript ? ' ' + interimTranscript : '')).trim();
-                    if (currentText) {
-                        setUserSpeech(currentText);
-                    }
-
-                    if (currentText.length >= 2) {
-                        if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
-                        // Instant 400ms response latency
-                        silenceTimeoutRef.current = setTimeout(() => {
-                            if (recognitionRef.current) {
-                                try { recognitionRef.current.abort(); } catch (e) {}
-                            }
-                            setIsListening(false);
-                            submitVoiceQuery(currentText);
-                        }, 400);
-                    }
-                };
-
-                recognition.onerror = (e: any) => {
-                    if (e.error !== 'no-speech' && e.error !== 'aborted') {
-                        console.warn("Speech recognition notice:", e.error);
-                    }
-                };
-
-                recognition.onend = () => {
-                    setIsListening(false);
-                    // Automatically restart listening if in voice mode and Chef is not speaking or thinking
-                    if (isVoiceModeRef.current && !isSpeakingRef.current && !isChefThinkingRef.current) {
-                        try {
-                            recognition.start();
-                            setIsListening(true);
-                        } catch (e) {}
-                    }
-                };
-
-                recognition.start();
-                return;
-            } catch (err) {
-                console.warn("Web Speech API failed, falling back to MediaStream VAD:", err);
+        if (getSpeechRecognitionCtor()) {
+            // Fresh listener every time: stale handlers can never fire, and speaker echo captured while the
+            // chef was talking can never be committed as a user turn.
+            if (listenerRef.current) {
+                try { listenerRef.current.stop(); } catch (e) {}
             }
+            const listener = new SpeechListener({
+                lang: lang === 'ar' ? 'ar-SA' : lang === 'fr' ? 'fr-FR' : 'en-US',
+                onInterim: (text) => setUserSpeech(text),
+                onActive: (active) => setIsListening(active),
+                isAssistantSpeaking: () => !!playerRef.current?.isActive && isSpeakingRef.current,
+                getSpokenText: () => spokenTextRef.current || playerRef.current?.queuedText || '',
+                // Hard barge-in: stop audio + progressive text + in-flight chat/TTS, then the new words are the only request.
+                onBarge: () => bargeIn(),
+                onCommit: (text) => {
+                    setIsListening(false);
+                    void submitVoiceQueryRef.current(text);
+                },
+                onFatal: (code) => {
+                    setIsListening(false);
+                    if (code === 'not-allowed' || code === 'service-not-allowed') {
+                        toast.error("Please allow microphone access to talk to the Chef.");
+                    } else {
+                        toast.error("Voice listening stopped. Tap the mic to talk again.");
+                    }
+                }
+            });
+            listenerRef.current = listener;
+            if (listener.start()) return;
+            listenerRef.current = null;
         }
 
         // Fallback to MediaStream VAD loop
@@ -322,8 +283,17 @@ export default function RecipeDetails() {
     };
 
     const startMediaStreamVAD = async () => {
+        // Already initialised: just make sure the single VAD loop is running (never stack streams/contexts).
+        if (audioStreamRef.current && mediaRecorderRef.current && analyserRef.current) {
+            startVADLoop();
+            return;
+        }
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+            if (!isVoiceModeRef.current) {
+                stream.getTracks().forEach(track => { try { track.stop(); } catch {} });
+                return;
+            }
             audioStreamRef.current = stream;
             
             const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -359,14 +329,24 @@ export default function RecipeDetails() {
 
             mediaRecorder.onstop = async () => {
                 setIsListening(false);
+                isRecordingRef.current = false;
                 const audioBlob = new Blob(chunksRef.current, { type: selectedMime });
                 chunksRef.current = [];
+
+                // Leaving voice mode / mic released: never transcribe after exit.
+                if (!isVoiceModeRef.current) return;
 
                 if (audioBlob.size > 1200) { 
                     await transcribeAudio(audioBlob);
                 } else {
-                    if (isVoiceModeRef.current) startVADLoop();
+                    startVADLoop();
                 }
+            };
+
+            // Any recorder error stops the VAD completely (no spinning).
+            mediaRecorder.onerror = () => {
+                console.warn("MediaRecorder error: stopping voice capture.");
+                stopListening();
             };
 
             setIsListening(true);
@@ -379,12 +359,11 @@ export default function RecipeDetails() {
 
     const startVADLoop = () => {
         if (vadFrameRef.current) cancelAnimationFrame(vadFrameRef.current);
+        let loudSince = 0;
 
         const checkVolume = () => {
-            if (!analyserRef.current || !dataArrayRef.current) {
-                vadFrameRef.current = requestAnimationFrame(checkVolume);
-                return;
-            }
+            // Mic released / voice mode ended: stop the loop entirely (no rAF spam).
+            if (!isVoiceModeRef.current || !analyserRef.current || !dataArrayRef.current) return;
 
             analyserRef.current.getByteFrequencyData(dataArrayRef.current as Uint8Array<ArrayBuffer>);
             let sum = 0;
@@ -392,18 +371,29 @@ export default function RecipeDetails() {
                 sum += dataArrayRef.current[i];
             }
             const average = sum / dataArrayRef.current.length;
-            const THRESHOLD = isSpeakingRef.current ? 45 : 18;
+            const speaking = isSpeakingRef.current;
+            const THRESHOLD = speaking ? 45 : 18;
+            const now = performance.now();
 
-            if (average > THRESHOLD) {
-                if (isSpeakingRef.current && average > 55) {
-                    if (audioRef.current && !audioRef.current.paused) {
-                        audioRef.current.pause();
-                        setIsSpeaking(false);
-                        isSpeakingRef.current = false;
-                        if (typewriterRef.current) clearInterval(typewriterRef.current);
+            // Hard barge-in on sustained loud speech while the chef is talking.
+            if (speaking) {
+                if (average > 55) {
+                    if (!loudSince) loudSince = now;
+                    if (now - loudSince > 180) {
+                        loudSince = 0;
+                        bargeIn();
                     }
+                } else {
+                    loudSince = 0;
                 }
+            } else {
+                loudSince = 0;
+            }
 
+            // Ignore triggers while a turn is processing/speaking, or during failure backoff.
+            const canRecord = !isSpeakingRef.current && !processingRef.current && Date.now() >= vadPausedUntilRef.current;
+
+            if (canRecord && average > THRESHOLD) {
                 if (!isRecordingRef.current && mediaRecorderRef.current && mediaRecorderRef.current.state === 'inactive') {
                     isRecordingRef.current = true;
                     chunksRef.current = [];
@@ -412,11 +402,15 @@ export default function RecipeDetails() {
                         setIsListening(true);
                     } catch (recErr) {
                         isRecordingRef.current = false;
+                        console.warn("MediaRecorder start failed: stopping voice capture.", recErr);
+                        stopListening();
+                        return;
                     }
                 }
 
                 if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
                 
+                // Natural end-of-utterance window (was 600ms)
                 silenceTimeoutRef.current = setTimeout(() => {
                     if (isRecordingRef.current && mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
                         isRecordingRef.current = false;
@@ -425,7 +419,7 @@ export default function RecipeDetails() {
                         } catch (stopErr) {}
                         setIsListening(false);
                     }
-                }, 1100);
+                }, 1200);
             }
 
             vadFrameRef.current = requestAnimationFrame(checkVolume);
@@ -435,6 +429,11 @@ export default function RecipeDetails() {
     };
 
     const stopListening = () => {
+        if (resumeTimerRef.current) { clearTimeout(resumeTimerRef.current); resumeTimerRef.current = null; }
+        if (listenerRef.current) {
+            try { listenerRef.current.stop(); } catch (e) {}
+            listenerRef.current = null;
+        }
         if (recognitionRef.current) {
             try { recognitionRef.current.abort(); } catch (e) {}
             recognitionRef.current = null;
@@ -445,6 +444,7 @@ export default function RecipeDetails() {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
             try { mediaRecorderRef.current.stop(); } catch (err) {}
         }
+        mediaRecorderRef.current = null;
         if (audioStreamRef.current) {
             audioStreamRef.current.getTracks().forEach(track => {
                 try { track.stop(); } catch {}
@@ -457,9 +457,21 @@ export default function RecipeDetails() {
             }
             audioContextRef.current = null;
         }
+        analyserRef.current = null;
         
         setIsListening(false);
         isRecordingRef.current = false;
+    };
+
+    /** Stop everything voice-related: active turn (fetches), speech audio, mic. Safe to call repeatedly. */
+    const stopAllVoice = () => {
+        turnRef.current.cancel();
+        const p = playerRef.current;
+        playerRef.current = null;
+        if (p) p.stop();
+        audioRef.current = null;
+        processingRef.current = false;
+        stopListening();
     };
 
     const isSpeakingRef = useRef(isSpeaking);
@@ -476,85 +488,70 @@ export default function RecipeDetails() {
     useEffect(() => {
         isVoiceModeRef.current = isVoiceMode;
         if (isVoiceMode) {
+            historyRef.current = [];
+            sttFailuresRef.current = 0;
             startCamera('environment');
             startListening();
         } else {
             stopCamera();
-            stopListening();
+            stopAllVoice();
         }
     }, [isVoiceMode]);
 
-    // Transcribe audio using Whisper API
+    // Transcribe audio using Whisper API (fallback path when Web Speech is unavailable).
+    // Single-flight: one utterance => one transcription => one reply.
     const transcribeAudio = async (blob: Blob) => {
-        setIsChefThinking(true);
-        setUserSpeech("..."); // Show indicator
-        
+        if (processingRef.current) return; // duplicate VAD trigger while a turn is in flight
+        processingRef.current = true;
+        setUserSpeech("...");
+
+        const releaseAndRearm = (failed: boolean) => {
+            processingRef.current = false;
+            setUserSpeech("");
+            if (failed) {
+                sttFailuresRef.current += 1;
+                if (sttFailuresRef.current >= 3) {
+                    // Do not keep the mic spinning against a failing STT service.
+                    toast.error("Voice recognition is unavailable right now. Please try again in a moment.");
+                    stopListening();
+                    sttFailuresRef.current = 0;
+                    return;
+                }
+                vadPausedUntilRef.current = Date.now() + backoffMs(sttFailuresRef.current, 600, 4000);
+            } else {
+                sttFailuresRef.current = 0;
+            }
+            if (isVoiceModeRef.current) startVADLoop();
+        };
+
         try {
             const formData = new FormData();
             formData.append('file', blob);
-            
+
             const res = await fetch('/api/cooking-assistant/transcribe', {
                 method: 'POST',
                 body: formData
             });
-            
-            const data = await res.json();
-            
-            // Prevent Whisper Hallucinations on silence
-            const whisperText = data.text?.trim();
-            if (whisperText) {
-                const lowerText = whisperText.toLowerCase();
-                const isHallucination = lowerText.length < 2 || 
-                                      ['thank you.', 'thanks.'].includes(lowerText) ||
-                                      whisperText.startsWith('(') || whisperText.startsWith('[');
-                
-                if (!isHallucination) {
-                    setUserSpeech(whisperText);
-                    await submitVoiceQuery(whisperText);
-                } else {
-                    setUserSpeech("");
-                    setIsChefThinking(false);
-                    if (isVoiceModeRef.current) startVADLoop();
-                }
-            } else {
-                setUserSpeech("");
-                setIsChefThinking(false);
-                if (isVoiceModeRef.current) startVADLoop(); // Restart listening loop
+            if (!res.ok) {
+                releaseAndRearm(true);
+                return;
             }
+            const data = await res.json();
+            const whisperText = (data?.text || '').trim();
+
+            if (!whisperText || isLikelyTranscriptStub(whisperText)) {
+                releaseAndRearm(false); // silence / hallucinated stub: ignore, no reply
+                return;
+            }
+            sttFailuresRef.current = 0;
+            setUserSpeech(whisperText);
+            await submitVoiceQuery(whisperText, true);
         } catch (err) {
-            console.error("Transcription error", err);
-            toast.error("Network issue. Could not hear you.");
-            setUserSpeech("");
-            setIsChefThinking(false);
-            if (isVoiceModeRef.current) startVADLoop(); 
+            console.warn("Transcription error", err);
+            releaseAndRearm(true);
         }
     };
 
-
-    // --- TYPEWRITER EFFECT (SYNCHRONIZED WITH AUDIO PLAYBACK) ---
-    const startTypewriter = (text: string, durationSec?: number) => {
-        setFullText(text);
-        setTypedText("");
-        if (typewriterRef.current) clearInterval(typewriterRef.current);
-        
-        // Calculate interval based on real audio duration (default ~60ms per char)
-        const totalDurationMs = (durationSec && durationSec > 0) ? (durationSec * 1000) : (text.length * 55);
-        const intervalMs = Math.max(18, Math.min(75, Math.floor(totalDurationMs / Math.max(text.length, 1))));
-        
-        let i = 0;
-        typewriterRef.current = setInterval(() => {
-            // Guard: stop typing if audio was stopped/aborted
-            if (!isSpeakingRef.current && i > 0) {
-                clearInterval(typewriterRef.current!);
-                return;
-            }
-            setTypedText(text.slice(0, i + 1));
-            i++;
-            if (i >= text.length) {
-                clearInterval(typewriterRef.current!);
-            }
-        }, intervalMs); 
-    };
 
     // --- NEW AI ORCHESTRATION LAYER ---
     const startVoiceGuidance = async () => {
@@ -662,99 +659,158 @@ export default function RecipeDetails() {
         }
     };
 
-    const playTTS = async (text: string) => {
-        setIsSpeaking(true);
-        isSpeakingRef.current = true;
-        if (audioRef.current) {
-            audioRef.current.pause();
-        }
-        
+    // --- SHARED VOICE ENGINE HELPERS (lib/voice/VoiceTurnController) ---
+    const fetchTtsBlobUrl = async (text: string, signal: AbortSignal): Promise<string | null> => {
+        if (Date.now() < ttsCooldownUntilRef.current) return null; // recent TTS failure: skip network, show text-only
         try {
             const res = await fetch('/api/text-to-speech', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    text,
-                    voice: 'alloy',
-                    speed: 1.05,
-                    language: lang || 'en'
-                })
+                signal,
+                // No `voice` here: the server locks the single human voice (OpenAI nova -> Gemini Aoede).
+                body: JSON.stringify({ text, speed: 1.05, language: lang || 'en' })
             });
-            
-            if (!res.ok) throw new Error("TTS Failed");
-            
+            if (!res.ok) {
+                // Provider failure (e.g. 502 / 429) -> enter cooldown immediately so other chunks don't spam 502s
+                ttsCooldownUntilRef.current = Date.now() + 60000;
+                return null;
+            }
             const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            const audio = new Audio(url);
-            audioRef.current = audio;
-            
-            audio.onloadedmetadata = () => {
-                if (audio.duration && !isNaN(audio.duration) && audio.duration > 0) {
-                    startTypewriter(text, audio.duration);
-                }
-            };
-
-            audio.onplay = () => {
-                const duration = (audio.duration && !isNaN(audio.duration) && audio.duration > 0) ? audio.duration : undefined;
-                startTypewriter(text, duration);
-            };
-
-            audio.onended = () => {
-                URL.revokeObjectURL(url);
-                setTimeout(() => {
-                    setIsSpeaking(false);
-                    isSpeakingRef.current = false;
-                    // Resume listening once Chef finishes speaking
-                    if (isVoiceModeRef.current) {
-                        startListening();
-                    }
-                }, 300);
-            };
-
-            await audio.play();
-        } catch(e: any) {
-            if (e.name === 'AbortError') {
-                return;
-            }
-            console.warn("TTS audio notice:", e?.message);
-            setIsSpeaking(false);
-            isSpeakingRef.current = false;
-            startTypewriter(text);
-            // Resume listening even if audio fails
-            if (isVoiceModeRef.current) {
-                startListening();
-            }
+            if (!blob.size) return null;
+            return URL.createObjectURL(blob);
+        } catch (e: any) {
+            if (e?.name === 'AbortError') return null;
+            ttsCooldownUntilRef.current = Date.now() + 30000;
+            return null;
         }
     };
 
-    const togglePlayback = () => {
-        if (!audioRef.current) return;
-        if (isSpeaking) {
-            audioRef.current.pause();
-            setIsSpeaking(false);
-            if (typewriterRef.current) clearInterval(typewriterRef.current);
-        } else {
-            audioRef.current.play();
-            setIsSpeaking(true);
-            if (typedText.length < fullText.length) {
-                let i = typedText.length;
-                typewriterRef.current = setInterval(() => {
-                    setTypedText(fullText.slice(0, i + 1));
-                    i++;
-                    if (i >= fullText.length) clearInterval(typewriterRef.current!);
-                }, 35);
+    /** Hard stop of whatever the chef is saying (audio, progressive text, in-flight TTS fetches). */
+    const stopSpeech = () => {
+        spokenTextRef.current = '';
+        const p = playerRef.current;
+        playerRef.current = null;
+        if (p) p.stop();
+        audioRef.current = null;
+        setIsSpeaking(false);
+        isSpeakingRef.current = false;
+    };
+
+    /** Cancel the whole active turn: chat fetch, TTS, audio, and release the single-flight lock. */
+    const cancelTurn = () => {
+        turnRef.current.cancel();
+        stopSpeech();
+        processingRef.current = false;
+        setIsChefThinking(false);
+    };
+
+    /** User spoke over the chef: drop the incomplete assistant turn; the new utterance becomes the only active request. */
+    const bargeIn = () => {
+        cancelTurn();
+    };
+
+    const resumeListeningSoon = () => {
+        if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
+        resumeTimerRef.current = setTimeout(() => {
+            resumeTimerRef.current = null;
+            if (!isVoiceModeRef.current) return;
+            if (playerRef.current?.isActive || processingRef.current) return;
+            startListening();
+        }, 220);
+    };
+
+    const playTTS = (text: string, opts?: {
+        onFirstChunk?: (info: { textOnly: boolean }) => void;
+        onEnd?: (r: SpeechEndResult) => void;
+        recordHistory?: boolean;
+    }): Promise<SpeechEndResult> => {
+        // Never start a new playback until the previous one is explicitly stopped.
+        stopSpeech();
+        const clean = (text || '').replace(/[*_#`~]/g, '').trim();
+        const chunks = splitIntoSpeechChunks(clean);
+
+        return new Promise<SpeechEndResult>((resolve) => {
+            if (chunks.length === 0) {
+                const empty: SpeechEndResult = { reason: 'completed', deliveredText: '', textOnlyText: '', anyAudio: false };
+                opts?.onEnd?.(empty);
+                resolve(empty);
+                return;
             }
+
+            setFullText(clean);
+            spokenTextRef.current = clean;
+            setTypedText('\u200B'); // hide full text until it is actually revealed with the audio
+
+            const player: SequentialSpeechPlayer = new SequentialSpeechPlayer({
+                onFirstChunk: (info) => {
+                    if (playerRef.current !== player) return;
+                    if (info.textOnly) {
+                        setIsSpeaking(false);
+                        isSpeakingRef.current = false;
+                        setTypedText(clean); // reveal full text immediately in text-only mode
+                        toast.message("Voice unavailable - showing the chef's reply as text.");
+                    }
+                    opts?.onFirstChunk?.(info);
+                },
+                onProgress: (revealed) => {
+                    if (playerRef.current === player) setTypedText(revealed);
+                },
+                onAudioElement: (a) => { if (playerRef.current === player) audioRef.current = a; },
+                onEnd: (r) => {
+                    const stillOwner = playerRef.current === player;
+                    if (stillOwner) {
+                        playerRef.current = null;
+                        audioRef.current = null;
+                        setIsSpeaking(false);
+                        isSpeakingRef.current = false;
+                        setTypedText(r.deliveredText || '');
+                    }
+                    if (r.reason === 'text_only') {
+                        // Backoff: do not hammer a failing TTS provider every turn.
+                        ttsCooldownUntilRef.current = Math.max(ttsCooldownUntilRef.current, Date.now() + 60000);
+                    }
+                    if (r.deliveredText && opts?.recordHistory !== false) {
+                        historyRef.current.push({ role: 'assistant', text: r.deliveredText });
+                        if (historyRef.current.length > 24) historyRef.current.splice(0, historyRef.current.length - 24);
+                    }
+                    opts?.onEnd?.(r);
+                    // Interrupted turns are resumed by whoever interrupted; natural ends return to listening.
+                    if (stillOwner && r.reason !== 'interrupted' && isVoiceModeRef.current) {
+                        resumeListeningSoon();
+                    }
+                    resolve(r);
+                }
+            });
+            playerRef.current = player;
+            setIsSpeaking(true);
+            isSpeakingRef.current = true;
+
+            chunks.forEach((c) => player.enqueue({ text: c, fetchSrc: (signal) => fetchTtsBlobUrl(c, signal) }));
+            player.end();
+
+            // Keep the mic open (barge mode) while the chef speaks so the user can interrupt.
+            if (isVoiceModeRef.current) startListening();
+        });
+    };
+
+    const togglePlayback = () => {
+        const a = audioRef.current;
+        if (!a) return;
+        if (isSpeaking) {
+            a.pause();
+            setIsSpeaking(false);
+            isSpeakingRef.current = false;
+        } else {
+            a.play().catch(() => {});
+            setIsSpeaking(true);
+            isSpeakingRef.current = true;
         }
     };
 
     const navigateStep = async (direction: 'next' | 'prev') => {
         if (!sessionData) return;
         
-        if (audioRef.current) {
-            audioRef.current.pause();
-            setIsSpeaking(false);
-        }
-        if (typewriterRef.current) clearInterval(typewriterRef.current);
+        stopSpeech();
 
         let newIdx = currentStepIdx + (direction === 'next' ? 1 : -1);
         if (newIdx < -1) newIdx = -1;
@@ -800,67 +856,98 @@ export default function RecipeDetails() {
     };
 
     // --- TWO-WAY VOICE CHAT ---
-    const submitVoiceQuery = async (query: string) => {
+    const submitVoiceQuery = async (query: string, lockHeld = false) => {
         const currentSession = sessionDataRef.current;
-        if (!currentSession) return;
+        if (!currentSession) {
+            if (lockHeld) processingRef.current = false;
+            return;
+        }
+        const cleanQuery = (query || '').trim();
+        if (!cleanQuery) {
+            if (lockHeld) processingRef.current = false;
+            return;
+        }
 
-        // Append user's message immediately into conversation
-        const userMsgId = `user-${Date.now()}`;
+        // Only one active turn: cancel any in-flight chat/TTS/audio of the previous turn.
+        stopSpeech();
+        processingRef.current = true;
+        const turn = turnRef.current.begin();
+
+        // Append user's message exactly once, in order.
         setChatMessages(prev => [
             ...prev,
-            {
-                id: userMsgId,
-                sender: 'user',
-                text: query,
-                timestamp: Date.now()
-            }
+            { id: `user-${Date.now()}-${turn.id}`, sender: 'user', text: cleanQuery, timestamp: Date.now() }
         ]);
+        historyRef.current.push({ role: 'user', text: cleanQuery });
         setUserSpeech("");
-
+        setTypedText("");
         setIsChefThinking(true);
-        if (audioRef.current) audioRef.current.pause(); 
         if (isTimerRunning) toggleTimer(); 
 
         const idx = currentStepIdxRef.current;
         const currentStep = idx === -1 ? currentSession.overview : currentSession.steps[idx];
         const instr = idx === -1 ? currentStep.text : currentStep.instruction;
+        const allInstructions = Array.isArray(currentSession.steps)
+            ? currentSession.steps.map((s: any) => s?.instruction || '')
+            : [];
 
         try {
             const res = await fetch('/api/cooking-assistant/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                signal: turn.signal,
                 body: JSON.stringify({
-                    query,
+                    query: cleanQuery,
                     recipeTitle: recipe.title,
                     currentStepIdx: idx,
                     currentInstruction: instr,
                     ingredients: recipe.ingredients || [],
+                    allInstructions,
+                    // recent dialogue (excluding the question being asked now)
+                    history: historyRef.current.slice(0, -1).slice(-8),
                     language: lang,
                     userId: user?.id
                 })
             });
+            if (!turn.isCurrent()) return;
+            if (!res.ok) throw new Error(`Chef chat HTTP ${res.status}`);
             const data = await res.json();
-            if (data.answer) {
-                // Append Chef Vic's contextual response below the user message
-                setChatMessages(prev => [
-                    ...prev,
-                    {
-                        id: `chef-reply-${Date.now()}`,
-                        sender: 'chef',
-                        text: data.answer,
-                        timestamp: Date.now()
-                    }
-                ]);
-                setTypedText("");
-                playTTS(data.answer);
-            }
-        } catch(err) {
-            console.error("Chat error", err);
-            toast.error("Failed to ask Chef.");
-        } finally {
+            if (!turn.isCurrent()) return;
+            if (!data?.answer) throw new Error('Empty chef answer');
+
             setIsChefThinking(false);
+            const replyId = `chef-reply-${Date.now()}-${turn.id}`;
+            let appended = false;
+            await playTTS(data.answer, {
+                onFirstChunk: () => {
+                    if (appended || !turn.isCurrent()) return;
+                    appended = true;
+                    setChatMessages(prev => [
+                        ...prev,
+                        { id: replyId, sender: 'chef', text: '', timestamp: Date.now() }
+                    ]);
+                },
+                onEnd: (r) => {
+                    // The stored reply is exactly what was delivered (full, or only the part spoken before barge-in).
+                    if (!appended) return;
+                    setChatMessages(prev => prev.map(m => m.id === replyId ? { ...m, text: r.deliveredText } : m));
+                }
+            });
+        } catch (err: any) {
+            if (err?.name === 'AbortError' || !turn.isCurrent()) return;
+            console.warn("Chef chat error", err?.message || err);
+            toast.error("Chef couldn't answer that. Please ask again.");
+        } finally {
+            // Only the still-current turn may release the lock / spinner (a superseding turn owns them).
+            if (turn.isCurrent()) {
+                setIsChefThinking(false);
+                processingRef.current = false;
+                if (isVoiceModeRef.current && !playerRef.current?.isActive) resumeListeningSoon();
+            }
         }
     };
+
+    submitVoiceQueryRef.current = submitVoiceQuery;
 
     // --- VISION AI STEP AUTHENTICATION ---
     const verifyStepWithPhoto = async (fileOrBase64: File | string) => {
@@ -869,7 +956,7 @@ export default function RecipeDetails() {
 
         setIsVerifyingPhoto(true);
         setIsChefThinking(true);
-        if (audioRef.current) audioRef.current.pause();
+        stopSpeech();
 
         const processBase64 = async (base64Data: string) => {
             setStepVerificationPhoto(base64Data);

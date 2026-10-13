@@ -4,7 +4,7 @@ import { synthesizeVoiceAudioWithFallback } from '@/lib/ai/ai-fallback';
 
 export async function POST(req: NextRequest) {
     try {
-        const { text, voice = DEFAULT_COACH_VOICE, speed = 1.05 } = await req.json();
+        const { text, speed = 1.05 } = await req.json();
 
         if (!text || typeof text !== 'string') {
             return NextResponse.json({ error: 'Valid text parameter is required' }, { status: 400 });
@@ -12,16 +12,17 @@ export async function POST(req: NextRequest) {
 
         const numericSpeed = typeof speed === 'number' && !isNaN(speed) ? speed : 1.05;
         const clampedSpeed = Math.max(0.5, Math.min(numericSpeed, 2.0));
-        const truncatedText = text.slice(0, 4096);
-        const selectedVoice = ['nova', 'alloy', 'shimmer', 'echo', 'fable', 'onyx'].includes(voice) ? voice : DEFAULT_COACH_VOICE;
 
-        const result = await synthesizeVoiceAudioWithFallback(truncatedText, {
-            voice: selectedVoice,
+        // Single locked voice pair for Chef + Health Coach: OpenAI `nova` -> Gemini `Aoede`.
+        // Any client-supplied `voice` is intentionally ignored.
+        const result = await synthesizeVoiceAudioWithFallback(text.slice(0, 4000), {
+            voice: DEFAULT_COACH_VOICE,
             speed: clampedSpeed,
+            signal: req.signal,
         });
 
         if (!result) {
-            console.error('[TTS API Error]: Failed to synthesize speech across all providers');
+            console.error('[TTS API Error]: Failed to synthesize speech across both human voices');
             return NextResponse.json({ error: 'TTS conversion failed on primary and backup providers' }, { status: 502 });
         }
 
@@ -34,8 +35,10 @@ export async function POST(req: NextRequest) {
             },
         });
     } catch (error: any) {
+        if (error?.name === 'AbortError') {
+            return new NextResponse(null, { status: 499 });
+        }
         console.error('[TTS Error]:', error?.message || error);
         return NextResponse.json({ error: 'Failed to synthesize speech' }, { status: 500 });
     }
 }
-

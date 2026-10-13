@@ -11,6 +11,14 @@ import { permissionManager } from '@/lib/services/PermissionManager';
 import { normalizeSpokenInput } from '@/lib/services/ai/SpeechNormalizer';
 import { useTranslation } from '@/lib/api/translation';
 import { LANGUAGE_META } from '@/lib/api/serverLanguage';
+import {
+  SequentialSpeechPlayer,
+  SpeechListener,
+  TurnSession,
+  getSpeechRecognitionCtor,
+  splitIntoSpeechChunks,
+  type SpeechEndResult,
+} from '@/lib/voice/VoiceTurnController';
 const DEFAULT_COACH_VOICE = 'nova';
 
 interface AICoachVoiceModalProps {
@@ -110,9 +118,15 @@ export default function AICoachVoiceModal({
   const sessionIdRef = useRef<string>(crypto.randomUUID ? crypto.randomUUID() : `sess_${Date.now()}`);
   const turnIdRef = useRef<number>(0);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const turnSessionRef = useRef(new TurnSession());
+  const playerRef = useRef<SequentialSpeechPlayer | null>(null);
+  const listenerRef = useRef<SpeechListener | null>(null);
+  const spokenTextRef = useRef<string>('');
+  const chunkPlayingRef = useRef<boolean>(false);
   const sessionTurnsRef = useRef<{ role: 'user' | 'assistant'; content: string; created_at: string }[]>([]);
-  const startListeningRef = useRef<() => void>(() => {});
+  const startListeningRef = useRef<(opts?: { barge?: boolean }) => void>(() => {});
   const pendingSpokenTextRef = useRef<string>('');
+  const ttsCooldownUntilRef = useRef<number>(0);
 
   // Unlock AudioContext for Mobile Browsers
   const unlockAudioContext = useCallback(async () => {
@@ -198,11 +212,11 @@ export default function AICoachVoiceModal({
             voiceStateRef.current === 'preparing'
           ) {
             setMicLevel(0);
-            // User interruption during answer generation or search
-            if (currentLevel > 0.22) {
+            // Genuine loud user interruption during answer generation (requires sustained loud speech, not ambient noise)
+            if (currentLevel > 0.45) {
               bargeInSpeechFrames++;
-              if (bargeInSpeechFrames >= 3) {
-                console.log('[VOICE] User spoke during thinking/searching! Cancelling in-flight generation.');
+              if (bargeInSpeechFrames >= 12) {
+                console.log('[VOICE] User spoke loudly during thinking/searching! Cancelling in-flight generation.');
                 bargeInSpeechFrames = 0;
                 interruptAgent();
               }
@@ -223,11 +237,16 @@ export default function AICoachVoiceModal({
   }, [unlockAudioContext]);
 
   // Instant interruption helper
-  const interruptAgent = useCallback(() => {
+  const interruptAgent = useCallback((opts?: { restart?: boolean }) => {
     console.log('[VOICE] User interruption triggered');
+    turnSessionRef.current.cancel();
     if (abortControllerRef.current) {
       try { abortControllerRef.current.abort(); } catch (e) {}
       abortControllerRef.current = null;
+    }
+    if (playerRef.current) {
+      playerRef.current.stop();
+      playerRef.current = null;
     }
     if (currentAudioRef.current) {
       try {
@@ -239,19 +258,24 @@ export default function AICoachVoiceModal({
     if (typeof window !== 'undefined' && window.speechSynthesis) {
       try { window.speechSynthesis.cancel(); } catch (e) {}
     }
+    chunkPlayingRef.current = false;
+    spokenTextRef.current = '';
     setAudioLevel(0);
     turnInProgressRef.current = false;
     activeTurnIdRef.current = null;
     pendingSpokenTextRef.current = '';
     setLiveInterim('');
 
-    if (isMountedRef.current && !isMutedRef.current) {
+    const shouldRestart = opts?.restart !== false;
+    if (isMountedRef.current && !isMutedRef.current && shouldRestart) {
       updateVoiceState('listening', 'INTERRUPT');
       setTimeout(() => {
         if (typeof startListeningRef.current === 'function') {
           startListeningRef.current();
         }
       }, 60);
+    } else if (isMountedRef.current && !shouldRestart) {
+      // Barge-in active: keep speech recognition running in listening/barge mode
     } else {
       updateVoiceState('idle', 'INTERRUPT');
     }
@@ -280,68 +304,39 @@ export default function AICoachVoiceModal({
     }
   }, [updateVoiceState]);
 
-  // Direct Audio Playback with Amplitude Reactivity
-  const playDirectAudio = useCallback(async (audioSrc: string, turnId: string, isInterim = false) => {
-    await unlockAudioContext();
-    if (!isMountedRef.current || !audioSrc) {
-      if (!isInterim) onTurnSpeechCompleted(turnId);
-      return;
-    }
-
-    updateVoiceState(isInterim ? 'searching' : 'speaking', isInterim ? 'PLAY_INTERIM_AUDIO' : 'PLAY_AUDIO');
-    setDebugHUD(prev => ({ ...prev, audioStatus: isInterim ? 'Checking... ⚡' : 'Playing ⚡' }));
-
+  // Helper to connect an HTMLAudioElement to the audioContext analyser for avatar amplitude reactivity
+  const attachAudioAnalyser = useCallback((audio: HTMLAudioElement) => {
+    if (!audioContextRef.current) return;
     try {
-      const audio = new Audio(audioSrc);
-      currentAudioRef.current = audio;
+      const source = audioContextRef.current.createMediaElementSource(audio);
+      const analyser = audioContextRef.current.createAnalyser();
+      analyser.fftSize = 64;
+      source.connect(analyser);
+      analyser.connect(audioContextRef.current.destination);
+      audioAnalyserRef.current = analyser;
 
-      if (audioContextRef.current) {
-        try {
-          const source = audioContextRef.current.createMediaElementSource(audio);
-          const analyser = audioContextRef.current.createAnalyser();
-          analyser.fftSize = 64;
-          source.connect(analyser);
-          analyser.connect(audioContextRef.current.destination);
-          audioAnalyserRef.current = analyser;
-
-          const dataArray = new Uint8Array(analyser.frequencyBinCount);
-          const updateAudioLevel = () => {
-            if ((voiceStateRef.current === 'speaking' || voiceStateRef.current === 'searching') && audioAnalyserRef.current) {
-              audioAnalyserRef.current.getByteFrequencyData(dataArray);
-              let sum = 0;
-              for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-              const avg = sum / dataArray.length;
-              setAudioLevel(Math.min(1.0, avg / 128));
-              requestAnimationFrame(updateAudioLevel);
-            } else {
-              setAudioLevel(0);
-            }
-          };
-          updateAudioLevel();
-        } catch (e) {}
-      }
-
-      await new Promise<void>((resolve) => {
-        audio.onended = () => resolve();
-        audio.onerror = () => resolve();
-        audio.play().catch((playErr) => {
-          console.warn(`[VOICE TURN ${turnId}] audio.play() warning:`, playErr);
-          resolve();
-        });
-      });
-    } catch (err) {
-      console.warn('[AICoachVoiceModal] Direct audio playback error:', err);
-    } finally {
-      currentAudioRef.current = null;
-      setAudioLevel(0);
-      if (!isInterim && activeTurnIdRef.current === turnId) {
-        onTurnSpeechCompleted(turnId);
-      }
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      const updateAudioLevel = () => {
+        if ((voiceStateRef.current === 'speaking' || voiceStateRef.current === 'searching') && audioAnalyserRef.current) {
+          audioAnalyserRef.current.getByteFrequencyData(dataArray);
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+          const avg = sum / dataArray.length;
+          setAudioLevel(Math.min(1.0, avg / 128));
+          requestAnimationFrame(updateAudioLevel);
+        } else {
+          setAudioLevel(0);
+        }
+      };
+      updateAudioLevel();
+    } catch (e) {
+      // Audio element may already be connected or suspended
     }
-  }, [updateVoiceState, unlockAudioContext, onTurnSpeechCompleted]);
+  }, []);
 
-  // Spoken TTS Voice Helper strictly via Neural Human Voice Engine
-  const speakText = useCallback(async (text: string, turnId: string) => {
+  // Fetch TTS audio blob as URL (using locked voice engine with Nova -> Aoede failover)
+  const fetchTtsAudioUrl = useCallback(async (text: string, signal?: AbortSignal): Promise<string | null> => {
+    if (Date.now() < ttsCooldownUntilRef.current) return null;
     try {
       const res = await fetch('/api/text-to-speech', {
         method: 'POST',
@@ -352,46 +347,36 @@ export default function AICoachVoiceModal({
           speed: 1.05,
           language: voiceLang.split('-')[0]
         }),
-      }).catch(() => null);
-
-      if (res && res.ok && isMountedRef.current && activeTurnIdRef.current === turnId) {
-        const audioBlob = await res.blob();
-        const audioUrl = URL.createObjectURL(audioBlob);
-        await playDirectAudio(audioUrl, turnId);
-        setTimeout(() => {
-          try { URL.revokeObjectURL(audioUrl); } catch (e) {}
-        }, 5000);
-      } else {
-        if (!res || !res.ok) {
-          console.warn(`[VOICE TURN ${turnId}] TTS request did not succeed: HTTP ${res?.status}`);
-        }
-        if (activeTurnIdRef.current === turnId) {
-          onTurnSpeechCompleted(turnId);
-        }
+        signal
+      });
+      if (!res.ok) {
+        ttsCooldownUntilRef.current = Date.now() + 60000;
+        return null;
       }
-    } catch (e) {
-      console.warn('[VOICE] Neural TTS speech error:', e);
-      if (activeTurnIdRef.current === turnId) {
-        onTurnSpeechCompleted(turnId);
-      }
+      const blob = await res.blob();
+      return URL.createObjectURL(blob);
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return null;
+      ttsCooldownUntilRef.current = Date.now() + 30000;
+      console.warn('[VOICE] TTS fetch error:', e);
+      return null;
     }
-  }, [voiceLang, playDirectAudio, onTurnSpeechCompleted]);
+  }, [voiceLang]);
 
   // Dynamically Generated Context-Aware Voice Greeting using Unified Speech Engine
   const triggerAutoGreeting = useCallback(async () => {
     if (hasGreetedRef.current || !isMountedRef.current) return;
     hasGreetedRef.current = true;
 
-    const greetingTurnId = `greet_${Date.now()}`;
+    const turnHandle = turnSessionRef.current.begin();
+    const greetingTurnId = `greet_${turnHandle.id}`;
     activeTurnIdRef.current = greetingTurnId;
     turnInProgressRef.current = true;
 
     updateVoiceState('thinking', 'AUTO_GREETING_START');
+    await unlockAudioContext();
 
     try {
-      const abortController = new AbortController();
-      abortControllerRef.current = abortController;
-
       const { data: sessionData } = await supabase.auth.getSession();
       const session = sessionData?.session;
 
@@ -409,7 +394,7 @@ export default function AICoachVoiceModal({
           voice_mode: true,
           locale: voiceLang.split('-')[0]
         }),
-        signal: abortController.signal
+        signal: turnHandle.signal
       });
 
       if (!res.ok) {
@@ -417,29 +402,82 @@ export default function AICoachVoiceModal({
       }
 
       const data = await res.json();
-      if (!isMountedRef.current || activeTurnIdRef.current !== greetingTurnId) return;
+      if (!isMountedRef.current || !turnHandle.isCurrent()) return;
 
       const dynamicGreeting = data.content || data.reply || `Good day, ${resolvedUserName}! How can I support your health goals today?`;
+      spokenTextRef.current = dynamicGreeting;
 
-      sessionTurnsRef.current.push({
-        role: 'assistant',
-        content: dynamicGreeting,
-        created_at: new Date().toISOString()
+      if (playerRef.current) {
+        playerRef.current.stop();
+        playerRef.current = null;
+      }
+
+      const player = new SequentialSpeechPlayer({
+        onFirstChunk: (info) => {
+          if (!turnHandle.isCurrent() || !isMountedRef.current) return;
+          updateVoiceState('speaking', 'GREETING_SPEECH_FIRST');
+          setDebugHUD(prev => ({ ...prev, audioStatus: info.textOnly ? 'Text Only' : 'Playing ⚡' }));
+          chunkPlayingRef.current = !info.textOnly;
+          if (info.textOnly) {
+            toast.message('Voice unavailable - displaying greeting as text.');
+          }
+        },
+        onProgress: (revealed) => {
+          if (!turnHandle.isCurrent() || !isMountedRef.current) return;
+          spokenTextRef.current = revealed;
+        },
+        onAudioElement: (audio) => {
+          if (!turnHandle.isCurrent() || !isMountedRef.current) return;
+          currentAudioRef.current = audio;
+          attachAudioAnalyser(audio);
+        },
+        onEnd: (result) => {
+          if (!turnHandle.isCurrent()) return;
+          playerRef.current = null;
+          currentAudioRef.current = null;
+          chunkPlayingRef.current = false;
+          spokenTextRef.current = '';
+          setAudioLevel(0);
+          if (result.deliveredText) {
+            sessionTurnsRef.current.push({
+              role: 'assistant',
+              content: result.deliveredText,
+              created_at: new Date().toISOString()
+            });
+          }
+          if (result.reason !== 'interrupted') {
+            onTurnSpeechCompleted(greetingTurnId);
+          }
+        }
       });
+      playerRef.current = player;
 
       if (data.audioBase64) {
-        await playDirectAudio(data.audioBase64, greetingTurnId, false);
+        player.enqueue({ text: dynamicGreeting, src: data.audioBase64 });
       } else {
-        await speakText(dynamicGreeting, greetingTurnId);
+        const chunks = splitIntoSpeechChunks(dynamicGreeting);
+        chunks.forEach(chunk => {
+          player.enqueue({
+            text: chunk,
+            fetchSrc: (sig) => fetchTtsAudioUrl(chunk, sig)
+          });
+        });
       }
+      player.end();
+
+      // Open listener in barge mode so user can interrupt the greeting
+      if (isMountedRef.current && !isMutedRef.current) {
+        startListeningRef.current({ barge: true });
+      }
+
     } catch (err: any) {
-      if (err?.name === 'AbortError') return;
+      if (err?.name === 'AbortError' || turnHandle.signal.aborted) return;
       console.warn('[VOICE] Dynamic greeting error:', err);
-      if (isMountedRef.current && activeTurnIdRef.current === greetingTurnId) {
+      if (isMountedRef.current && turnHandle.isCurrent()) {
         onTurnSpeechCompleted(greetingTurnId);
       }
     }
-  }, [conversationId, userId, voiceLang, resolvedUserName, playDirectAudio, speakText, onTurnSpeechCompleted, updateVoiceState]);
+  }, [conversationId, userId, voiceLang, resolvedUserName, onTurnSpeechCompleted, updateVoiceState, unlockAudioContext, attachAudioAnalyser, fetchTtsAudioUrl]);
 
   // Handle avatar face selection (Click/Tap)
   const handleAvatarClick = useCallback(() => {
@@ -493,6 +531,15 @@ export default function AICoachVoiceModal({
 
     return () => {
       isMountedRef.current = false;
+      turnSessionRef.current.cancel();
+      if (playerRef.current) {
+        playerRef.current.stop();
+        playerRef.current = null;
+      }
+      if (listenerRef.current) {
+        try { listenerRef.current.stop(); } catch (e) {}
+        listenerRef.current = null;
+      }
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
       if (recognitionRef.current) {
@@ -510,7 +557,7 @@ export default function AICoachVoiceModal({
     };
   }, [userId, unlockAudioContext, triggerAutoGreeting, updateVoiceState]);
 
-  // Process user speech turn
+  // Process user speech turn with single-flight locking and SequentialSpeechPlayer
   const processUserSpeech = useCallback(async (userText: string) => {
     const cleanedText = userText.trim();
     if (!cleanedText || cleanedText.length < 2 || !isMountedRef.current) {
@@ -518,25 +565,16 @@ export default function AICoachVoiceModal({
       return;
     }
 
-    const turnId = crypto.randomUUID ? crypto.randomUUID() : `turn_${Date.now()}`;
+    // Begin new turn session - immediately aborts any in-flight LLM/TTS request
+    const turnHandle = turnSessionRef.current.begin();
+    const turnId = `turn_${turnHandle.id}`;
     turnInProgressRef.current = true;
     activeTurnIdRef.current = turnId;
-    turnIdRef.current += 1;
-    const currentTurn = turnIdRef.current;
+    turnIdRef.current = turnHandle.id;
 
     await unlockAudioContext();
 
-    if (abortControllerRef.current) {
-      try { abortControllerRef.current.abort(); } catch (e) {}
-    }
-    const currentController = new AbortController();
-    abortControllerRef.current = currentController;
-
     if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-    if (recognitionRef.current) {
-      try { recognitionRef.current.abort(); } catch (e) {}
-    }
-
     pendingSpokenTextRef.current = '';
     updateVoiceState('thinking', 'SPEECH_FINALIZED');
     setLiveInterim('');
@@ -581,7 +619,7 @@ export default function AICoachVoiceModal({
           'Accept': 'text/event-stream',
           'Authorization': `Bearer ${session.access_token}`
         },
-        signal: currentController.signal,
+        signal: turnHandle.signal,
         body: JSON.stringify({
           conversation_id: conversationId,
           user_id: session.user.id,
@@ -590,8 +628,8 @@ export default function AICoachVoiceModal({
           voice_mode: true,
           stream: true,
           session_id: sessionIdRef.current,
-          turn_id: currentTurn,
-          session_turns: sessionTurnsRef.current.slice(-6)
+          turn_id: turnHandle.id,
+          session_turns: sessionTurnsRef.current.slice(-10)
         }),
       });
 
@@ -600,8 +638,63 @@ export default function AICoachVoiceModal({
         throw new Error(`AI Coach failed with status ${coachRes.status}`);
       }
 
+      if (playerRef.current) {
+        playerRef.current.stop();
+        playerRef.current = null;
+      }
+
+      const player = new SequentialSpeechPlayer({
+        onFirstChunk: (info) => {
+          if (!turnHandle.isCurrent() || !isMountedRef.current) return;
+          const timeToFirstAudio = Math.round(performance.now() - reqStartTime);
+          updateVoiceState('speaking', 'SPEECH_CHUNK_FIRST');
+          setDebugHUD(prev => ({
+            ...prev,
+            apiStatus: '200 OK (Stream)',
+            latencyMs: timeToFirstAudio,
+            audioStatus: info.textOnly ? 'Text Only' : 'Playing ⚡'
+          }));
+          chunkPlayingRef.current = !info.textOnly;
+          if (info.textOnly) {
+            toast.message('Voice unavailable - showing reply as text.');
+          }
+          // Enable mic in barge mode so user can interrupt whenever assistant speaks
+          if (isMountedRef.current && !isMutedRef.current) {
+            startListeningRef.current({ barge: true });
+          }
+        },
+        onProgress: (revealed) => {
+          if (!turnHandle.isCurrent() || !isMountedRef.current) return;
+          spokenTextRef.current = revealed;
+        },
+        onAudioElement: (audio) => {
+          if (!turnHandle.isCurrent() || !isMountedRef.current) return;
+          currentAudioRef.current = audio;
+          attachAudioAnalyser(audio);
+        },
+        onEnd: (result) => {
+          if (!turnHandle.isCurrent()) return;
+          playerRef.current = null;
+          currentAudioRef.current = null;
+          chunkPlayingRef.current = false;
+          spokenTextRef.current = '';
+          setAudioLevel(0);
+          if (result.deliveredText) {
+            sessionTurnsRef.current.push({
+              role: 'assistant',
+              content: result.deliveredText,
+              created_at: new Date().toISOString()
+            });
+          }
+          if (result.reason !== 'interrupted') {
+            onTurnSpeechCompleted(turnId);
+          }
+        }
+      });
+      playerRef.current = player;
+
       let replyText = '';
-      let hasStartedAudio = false;
+      let receivedAnyAudioChunk = false;
 
       if (coachRes.body && coachRes.headers.get('content-type')?.includes('text/event-stream')) {
         const reader = coachRes.body.getReader();
@@ -626,41 +719,20 @@ export default function AICoachVoiceModal({
                   updateVoiceState('searching', 'TOOL_SEARCH');
                 } else if (event.type === 'preparing') {
                   updateVoiceState('preparing', 'PREPARING');
-                } else if (event.type === 'interim_audio' && event.audioBase64 && activeTurnIdRef.current === turnId) {
-                  setDebugHUD(prev => ({
-                    ...prev,
-                    apiStatus: 'Checking...',
-                    audioStatus: 'Checking... ⚡'
-                  }));
-                  if (isMountedRef.current) {
-                    await playDirectAudio(event.audioBase64, turnId, true);
-                  }
-                } else if ((event.type === 'first_audio' || event.type === 'audio') && event.audioBase64 && !hasStartedAudio && activeTurnIdRef.current === turnId) {
-                  hasStartedAudio = true;
-                  const timeToAudio = Math.round(performance.now() - reqStartTime);
-                  setDebugHUD(prev => ({
-                    ...prev,
-                    apiStatus: '200 OK (Stream)',
-                    latencyMs: timeToAudio,
-                    audioStatus: 'Playing ⚡'
-                  }));
-                  if (isMountedRef.current) {
-                    await playDirectAudio(event.audioBase64, turnId, false);
-                  }
+                } else if ((event.type === 'first_audio' || event.type === 'audio') && event.audioBase64 && turnHandle.isCurrent()) {
+                  receivedAnyAudioChunk = true;
+                  player.enqueue({
+                    text: event.text || '',
+                    src: event.audioBase64
+                  });
                 } else if (event.type === 'done') {
                   replyText = event.fullText;
-                  const serverDuration = Math.round(performance.now() - reqStartTime);
-                  if (event.audioBase64 && !hasStartedAudio && activeTurnIdRef.current === turnId) {
-                    hasStartedAudio = true;
-                    setDebugHUD(prev => ({
-                      ...prev,
-                      apiStatus: '200 OK (Stream)',
-                      latencyMs: serverDuration,
-                      audioStatus: 'Playing ⚡'
-                    }));
-                    if (isMountedRef.current) {
-                      await playDirectAudio(event.audioBase64, turnId, false);
-                    }
+                  if (event.audioBase64 && !receivedAnyAudioChunk && turnHandle.isCurrent()) {
+                    receivedAnyAudioChunk = true;
+                    player.enqueue({
+                      text: event.fullText,
+                      src: event.audioBase64
+                    });
                   }
                 }
               } catch (e) {}
@@ -669,178 +741,119 @@ export default function AICoachVoiceModal({
         }
       } else {
         const data = await coachRes.json();
-        const timeToAudio = Math.round(performance.now() - reqStartTime);
+        const timeToData = Math.round(performance.now() - reqStartTime);
         setDebugHUD(prev => ({
           ...prev,
           apiStatus: '200 OK (JSON)',
-          latencyMs: timeToAudio
+          latencyMs: timeToData
         }));
         replyText = data.content || data.replyText || `I hear you, ${resolvedUserName}. How can I best guide your health goals today?`;
-        if (data.audioBase64 && isMountedRef.current && activeTurnIdRef.current === turnId) {
-          await playDirectAudio(data.audioBase64, turnId, false);
-          hasStartedAudio = true;
+        spokenTextRef.current = replyText;
+        if (data.audioBase64 && turnHandle.isCurrent()) {
+          receivedAnyAudioChunk = true;
+          player.enqueue({ text: replyText, src: data.audioBase64 });
         }
       }
 
-      // If server audio was not streamed directly, synthesize lifelike human voice via speakText
-      if (!hasStartedAudio && isMountedRef.current && activeTurnIdRef.current === turnId) {
-        const fallbackText = replyText || "I'm here with you. What would you like to explore next?";
-        console.info('[VOICE] Synthesizing human neural voice for reply text...');
-        await speakText(fallbackText, turnId);
-      }
-
-      // Record assistant turn in multi-turn memory to keep conversation synced
-      if (replyText) {
-        sessionTurnsRef.current.push({
-          role: 'assistant',
-          content: replyText,
-          created_at: new Date().toISOString()
+      // If server did not yield direct audio chunks, synthesize through SequentialSpeechPlayer with fetchSrc
+      if (!receivedAnyAudioChunk && turnHandle.isCurrent()) {
+        const fallback = replyText || "I'm here with you. What would you like to explore next?";
+        spokenTextRef.current = fallback;
+        const chunks = splitIntoSpeechChunks(fallback);
+        chunks.forEach(chunk => {
+          player.enqueue({
+            text: chunk,
+            fetchSrc: (sig) => fetchTtsAudioUrl(chunk, sig)
+          });
         });
       }
 
+      // Signal player that all chunks for this turn have arrived
+      player.end();
+
     } catch (err: any) {
-      if (err?.name === 'AbortError') return;
+      if (err?.name === 'AbortError' || turnHandle.signal.aborted) return;
       console.error('[AICoachVoiceModal] AI processing error:', err);
-      if (activeTurnIdRef.current === turnId) {
+      if (turnHandle.isCurrent()) {
         onTurnSpeechCompleted(turnId);
       }
     }
-  }, [conversationId, userId, resolvedUserName, voiceLang, playDirectAudio, speakText, onTurnSpeechCompleted, updateVoiceState, unlockAudioContext]);
+  }, [conversationId, userId, resolvedUserName, voiceLang, onTurnSpeechCompleted, updateVoiceState, unlockAudioContext, attachAudioAnalyser, fetchTtsAudioUrl]);
 
   // STT speech recognition starter with snappy VAD cadence
-  const startListening = useCallback(() => {
-    if (
+  // STT via the shared SpeechListener: tight 500ms commit, echo-safe barge-in, generation-guarded handlers,
+  // bounded restarts with backoff (no restart loops). `barge` mode keeps the mic open while the coach speaks.
+  const startListening = useCallback((opts?: { barge?: boolean }) => {
+    const barge = !!opts?.barge;
+    if (isMutedRef.current || !isMountedRef.current) return;
+
+    if (barge) {
+      if (voiceStateRef.current !== 'speaking') return;
+      if (listenerRef.current?.isRunning) return;
+    } else if (
       turnInProgressRef.current ||
       voiceStateRef.current === 'thinking' ||
       voiceStateRef.current === 'searching' ||
       voiceStateRef.current === 'preparing' ||
-      voiceStateRef.current === 'speaking' ||
-      isMutedRef.current ||
-      !isMountedRef.current
+      voiceStateRef.current === 'speaking'
     ) {
       return;
     }
 
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
+    if (!getSpeechRecognitionCtor()) {
       toast.error('Speech recognition not supported in this browser.');
       updateVoiceState('idle');
       return;
     }
 
     try {
-      if (recognitionRef.current) {
-        try { recognitionRef.current.abort(); } catch (e) {}
+      if (listenerRef.current) {
+        try { listenerRef.current.stop(); } catch (e) {}
       }
-
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 
-      const recognition = new SpeechRecognition();
-      recognition.lang = voiceLang;
-      recognition.interimResults = true;
-      recognition.continuous = true;
-
-      recognition.onstart = () => {};
-
-      recognition.onresult = (event: any) => {
-        // Voice Barge-in: If user speaks words while Coach is talking, interrupt instantly
-        if (voiceStateRef.current === 'speaking') {
-          let bargeInWords = '';
-          for (let i = 0; i < event.results.length; ++i) {
-            bargeInWords += (event.results[i][0]?.transcript || '') + ' ';
-          }
-          if (bargeInWords.trim().length >= 2) {
-            console.log('[VOICE] Spoken barge-in detected! User interrupted with:', bargeInWords);
-            interruptAgent();
-            return;
-          }
-        }
-
-        if (turnInProgressRef.current || voiceStateRef.current !== 'listening') {
-          return;
-        }
-
-        let fullTranscript = '';
-        let interimTranscript = '';
-
-        for (let i = 0; i < event.results.length; ++i) {
-          const res = event.results[i];
-          const part = res[0]?.transcript || '';
-          if (res.isFinal) {
-            fullTranscript += (fullTranscript ? ' ' : '') + part.trim();
-          } else {
-            interimTranscript += (interimTranscript ? ' ' : '') + part.trim();
-          }
-        }
-
-        const currentText = (fullTranscript + (interimTranscript ? ' ' + interimTranscript : '')).trim();
-        if (currentText) {
-          pendingSpokenTextRef.current = currentText;
-          setLiveInterim(currentText);
-        }
-
-        if (isMountedRef.current && currentText.length >= 2) {
-          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-
-          silenceTimerRef.current = setTimeout(() => {
-            if (
-              voiceStateRef.current === 'listening' &&
-              !turnInProgressRef.current &&
-              isMountedRef.current
-            ) {
-              turnInProgressRef.current = true;
-              try { recognition.abort(); } catch (e) {}
-              const toProcess = pendingSpokenTextRef.current || currentText;
-              pendingSpokenTextRef.current = '';
-              const normalized = normalizeSpokenInput(toProcess);
-              processUserSpeech(normalized);
-            }
-          }, 800);
-        }
-      };
-
-      recognition.onerror = (event: any) => {
-        if (turnInProgressRef.current || voiceStateRef.current !== 'listening') {
-          return;
-        }
-
-        if (event.error === 'not-allowed') {
-          setHasMicPermission(false);
-          setPermissionBlocked(true);
-          toast.error('Microphone access blocked.');
-          updateVoiceState('idle');
-        }
-      };
-
-      recognition.onend = () => {
-        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-
-        if (turnInProgressRef.current || voiceStateRef.current !== 'listening') {
-          return;
-        }
-
-        const pendingText = pendingSpokenTextRef.current.trim();
-        if (pendingText.length >= 2 && isMountedRef.current) {
+      const listener = new SpeechListener({
+        lang: voiceLang,
+        onInterim: (text) => {
+          pendingSpokenTextRef.current = text;
+          setLiveInterim(text);
+        },
+        isAssistantSpeaking: () => voiceStateRef.current === 'speaking' && chunkPlayingRef.current,
+        getSpokenText: () => spokenTextRef.current || playerRef.current?.queuedText || '',
+        // Hard barge-in: stop audio + in-flight chat/TTS now; the same recognition session then commits the new words.
+        onBarge: () => {
+          console.log('[VOICE] Spoken barge-in detected -> hard interrupt');
+          interruptAgent({ restart: false });
+        },
+        onCommit: (text) => {
+          if (!isMountedRef.current) return;
           turnInProgressRef.current = true;
           pendingSpokenTextRef.current = '';
-          const normalized = normalizeSpokenInput(pendingText);
-          processUserSpeech(normalized);
-          return;
+          processUserSpeech(normalizeSpokenInput(text));
+        },
+        onFatal: (code) => {
+          if (code === 'not-allowed' || code === 'service-not-allowed') {
+            setHasMicPermission(false);
+            setPermissionBlocked(true);
+            toast.error('Microphone access blocked.');
+          } else {
+            toast.error('Voice listening stopped. Tap the avatar to talk again.');
+          }
+          if (voiceStateRef.current !== 'speaking') updateVoiceState('idle', 'LISTENER_FATAL');
         }
+      });
 
-        if (isMountedRef.current && !isMutedRef.current && !turnInProgressRef.current) {
-          setTimeout(startListening, 80);
-        }
-      };
-
-      recognitionRef.current = recognition;
-      updateVoiceState('listening', 'START_LISTENING');
-      recognition.start();
+      listenerRef.current = listener;
+      if (!barge) updateVoiceState('listening', 'START_LISTENING');
+      if (!listener.start()) {
+        listenerRef.current = null;
+        if (!barge) updateVoiceState('idle');
+      }
     } catch (e) {
       console.error('[AICoachVoiceModal] Start listening error:', e);
       updateVoiceState('idle');
     }
-  }, [voiceLang, processUserSpeech, updateVoiceState]);
+  }, [voiceLang, processUserSpeech, updateVoiceState, interruptAgent]);
 
   startListeningRef.current = startListening;
 
