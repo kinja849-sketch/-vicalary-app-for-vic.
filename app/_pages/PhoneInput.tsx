@@ -91,13 +91,14 @@ export default function PhoneInput() {
             localStorage.setItem("localPhoneNumber", phoneNumber);
             localStorage.setItem("pending_otp", "true");
 
-            // In a development/testing environment, the backend might return the OTP
-            if (response && response.code) {
+            const otpCode = response?.code || response?.devCode;
+            if (otpCode) {
+                sessionStorage.setItem("pending_otp_code", otpCode);
                 await supabase.from('notifications').insert({
                     user_id: user.id,
                     notification_type: 'system',
                     title: 'Kode Verifikasi',
-                    content: `Kode verifikasi chat Anda adalah: ${response.code}`
+                    content: `Kode verifikasi chat Anda adalah: ${otpCode}`
                 });
             }
 

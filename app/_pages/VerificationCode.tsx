@@ -5,10 +5,10 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/AuthContext";
 import { verifyPhoneCode, sendPhoneVerification } from "@/lib/api/auth";
 import { toast } from "sonner";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { useTranslation } from "@/lib/api/translation";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, LockKeyhole } from "lucide-react";
+import { ArrowLeft, LockKeyhole, KeyRound, Check, Copy, X } from "lucide-react";
 
 export default function VerificationCode() {
     const router = useRouter();
@@ -18,9 +18,21 @@ export default function VerificationCode() {
     const [code, setCode] = useState(["", "", "", "", "", ""]);
     const [loading, setLoading] = useState(false);
     const [focusedIndex, setFocusedIndex] = useState<number | null>(0);
+    const [popupCode, setPopupCode] = useState<string | null>(null);
+    const [showPopup, setShowPopup] = useState(false);
+    const [copied, setCopied] = useState(false);
     const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
     const phoneNumber = (typeof window !== 'undefined' ? localStorage.getItem("phoneNumber") : null) || "your phone";
     const localPhoneNumber = (typeof window !== 'undefined' ? localStorage.getItem("localPhoneNumber") : null) || "";
+
+    // Read pending OTP code on mount
+    useEffect(() => {
+        const pending = typeof window !== 'undefined' ? sessionStorage.getItem("pending_otp_code") : null;
+        if (pending) {
+            setPopupCode(pending);
+            setShowPopup(true);
+        }
+    }, []);
 
     // Focus first input on mount
     useEffect(() => {
@@ -51,6 +63,8 @@ export default function VerificationCode() {
                     }).then(() => { });
 
                     localStorage.removeItem("pending_otp");
+                    sessionStorage.removeItem("pending_otp_code");
+                    setShowPopup(false);
                     router.push("/chat?view=contacts");
                 }
             })
@@ -129,6 +143,8 @@ export default function VerificationCode() {
                 });
 
                 localStorage.removeItem("pending_otp");
+                sessionStorage.removeItem("pending_otp_code");
+                setShowPopup(false);
                 router.push("/chat?view=contacts");
             } catch (error: any) {
                 toast.error(`Verification failed: ${error.message}`);
@@ -140,6 +156,21 @@ export default function VerificationCode() {
         }
     };
 
+    const handleInsertCode = () => {
+        if (!popupCode) return;
+        const digits = popupCode.slice(0, 6).split("");
+        setCode(digits);
+        setShowPopup(false);
+    };
+
+    const handleCopyCode = () => {
+        if (!popupCode) return;
+        navigator.clipboard.writeText(popupCode);
+        setCopied(true);
+        toast.success("Code copied to clipboard!");
+        setTimeout(() => setCopied(false), 2000);
+    };
+
     // Auto-submit when all digits filled
     useEffect(() => {
         if (code.every(d => d !== "") && !loading) {
@@ -149,11 +180,29 @@ export default function VerificationCode() {
 
     const handleResend = async () => {
         if (!user) return;
-        toast.promise(sendPhoneVerification(user.id, phoneNumber, ""), {
-            loading: t('resending_code_msg'),
-            success: t('code_sent_msg'),
-            error: t('failed_resend_msg')
-        });
+        try {
+            setLoading(true);
+            const res = await sendPhoneVerification(user.id, phoneNumber, "");
+            const newCode = res?.code || res?.devCode;
+            if (newCode) {
+                sessionStorage.setItem("pending_otp_code", newCode);
+                setPopupCode(newCode);
+                setShowPopup(true);
+
+                // Add to notifications table for Alerts tab
+                await supabase.from('notifications').insert({
+                    user_id: user.id,
+                    notification_type: 'system',
+                    title: 'Kode Verifikasi',
+                    content: `Kode verifikasi chat Anda adalah: ${newCode}`
+                });
+            }
+            toast.success(t('code_sent_msg') || "Verification code sent!");
+        } catch (error: any) {
+            toast.error(t('failed_resend_msg') || error.message || "Failed to resend code");
+        } finally {
+            setLoading(false);
+        }
     };
 
     return (
@@ -231,6 +280,82 @@ export default function VerificationCode() {
                     </div>
                 </div>
             </main>
+
+            {/* Verification Code On-Screen Popup */}
+            <AnimatePresence>
+                {showPopup && popupCode && (
+                    <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.9, y: -20 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.9, y: -20 }}
+                            transition={{ type: "spring", damping: 25, stiffness: 350 }}
+                            className="w-full max-w-sm bg-white dark:bg-[#1f2c34] rounded-3xl p-6 shadow-2xl border border-slate-100 dark:border-slate-800 relative mt-12 sm:mt-0"
+                        >
+                            {/* Close button */}
+                            <button
+                                onClick={() => setShowPopup(false)}
+                                className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 dark:hover:text-white rounded-full transition-colors"
+                                aria-label="Dismiss"
+                            >
+                                <X size={18} />
+                            </button>
+
+                            <div className="flex items-center gap-3 mb-4">
+                                <div className="size-10 rounded-2xl bg-vic-green/10 flex items-center justify-center text-vic-green">
+                                    <KeyRound size={20} />
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-slate-900 dark:text-white text-base">
+                                        Verification Code
+                                    </h3>
+                                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                                        In-app verification delivery
+                                    </p>
+                                </div>
+                            </div>
+
+                            {/* Digits Display */}
+                            <div className="my-5 p-4 bg-slate-50 dark:bg-[#0d1418] rounded-2xl border border-slate-200/80 dark:border-slate-800 flex items-center justify-center gap-2">
+                                {popupCode.split("").map((digit, i) => (
+                                    <span
+                                        key={i}
+                                        className="size-10 flex items-center justify-center text-2xl font-black text-slate-900 dark:text-white bg-white dark:bg-[#1f2c34] rounded-xl shadow-xs border border-slate-200/60 dark:border-slate-700 font-mono"
+                                    >
+                                        {digit}
+                                    </span>
+                                ))}
+                            </div>
+
+                            {/* Action Buttons */}
+                            <div className="flex flex-col gap-2.5">
+                                <button
+                                    onClick={handleInsertCode}
+                                    className="w-full py-3.5 bg-vic-green text-slate-900 font-black rounded-xl shadow-lg shadow-vic-green/20 hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2 text-sm uppercase tracking-wider"
+                                >
+                                    <Check size={16} strokeWidth={3} />
+                                    Insert Code
+                                </button>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={handleCopyCode}
+                                        className="flex-1 py-2.5 bg-slate-100 dark:bg-[#2a3942] hover:bg-slate-200 dark:hover:bg-[#32424b] text-slate-700 dark:text-slate-200 font-bold rounded-xl transition-colors flex items-center justify-center gap-2 text-xs"
+                                    >
+                                        {copied ? <Check size={14} className="text-vic-green" /> : <Copy size={14} />}
+                                        {copied ? "Copied" : "Copy Code"}
+                                    </button>
+                                    <button
+                                        onClick={() => setShowPopup(false)}
+                                        className="py-2.5 px-4 bg-transparent hover:bg-slate-100 dark:hover:bg-white/5 text-slate-500 dark:text-slate-400 font-semibold rounded-xl transition-colors text-xs"
+                                    >
+                                        Dismiss
+                                    </button>
+                                </div>
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }

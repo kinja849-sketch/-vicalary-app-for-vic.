@@ -71,10 +71,12 @@ export async function POST(req: NextRequest) {
 
     console.log(`[VERIFICATION] Verification code dispatched via ${channel} for user: ${userId}`)
 
-    // In local non-production development, include code for testing convenience
-    const responsePayload: any = { success: true, message: 'Verification code sent successfully' }
-    if (process.env.NODE_ENV !== 'production') {
-      responsePayload.devCode = verificationCode
+    // Return code and devCode for in-app verification delivery
+    const responsePayload: any = { 
+      success: true, 
+      message: 'Verification code sent successfully',
+      code: verificationCode,
+      devCode: verificationCode
     }
 
     return NextResponse.json(responsePayload)

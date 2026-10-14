@@ -431,7 +431,8 @@ export const sendPhoneVerification = async (userId: string, phoneNumber: string,
         console.error("OTP send error:", data);
         throw new Error(data.message || 'Failed to send OTP');
     }
-    return data;
+    const code = data.code || data.devCode;
+    return { ...data, code, devCode: code };
 }
 
 export const verifyPhoneCode = async (userId: string, phoneNumber: string, code: string) => {
