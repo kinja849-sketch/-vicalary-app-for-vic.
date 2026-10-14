@@ -385,5 +385,12 @@ export const en = {
     avoid_product_btn: "Avoid Product",
     add_to_diary_btn: "Add to Diary",
     steps: "Steps",
-    history_of_the_meal: "History of the meal"
+    history_of_the_meal: "History of the meal",
+    delete_message_title: "Delete message?",
+    delete_message_sender_desc: "You can delete this message for everyone or delete it for yourself only.",
+    delete_message_receiver_desc: "This message will be deleted from your chat for you only.",
+    delete_for_everyone: "Delete for everyone",
+    delete_for_me: "Delete for me",
+    this_message_was_deleted: "This message was deleted",
+    you_deleted_this_message: "You deleted this message"
 };

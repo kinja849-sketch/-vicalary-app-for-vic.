@@ -13,6 +13,7 @@ import { useTranslation } from "@/lib/api/translation";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { useLastSeenHeartbeat } from "@/hooks/useLastSeenHeartbeat";
+import { playInboundMessageSound } from "@/lib/utils/chatSound";
 import dynamic from "next/dynamic";
 const QRScanner = dynamic(() => import("@/components/QRScanner"), { ssr: false });
 import { Button } from "@/components/ui/button";
@@ -122,6 +123,12 @@ export default function Chat() {
       }, (payload: any) => {
         // A message change happened. Invalidate conversations and contacts if needed.
         console.log(`[Chat] V10 Global message event [${payload.eventType}]:`, payload.new?.id || payload.old?.id);
+        
+        // Inbound sound: Play WhatsApp chime when new incoming message arrives from another user
+        if (payload.eventType === 'INSERT' && payload.new?.sender_id && payload.new.sender_id !== user.id) {
+          playInboundMessageSound();
+        }
+
         queryClient.invalidateQueries({ queryKey: ['conversations', user.id] });
       })
       .on('postgres_changes', {
@@ -173,13 +180,27 @@ export default function Chat() {
   });
 
   const deleteConversationMutation = useMutation({
-    mutationFn: (convId: string) => softDeleteConversation(convId, user!.id),
+    mutationFn: (convId: string) => softDeleteConversation(user!.id, convId),
+    onMutate: async (convId: string) => {
+      await queryClient.cancelQueries({ queryKey: ['conversations', user?.id] });
+      const previousConvs = queryClient.getQueryData(['conversations', user?.id]);
+      queryClient.setQueryData(['conversations', user?.id], (old: any) => {
+        if (!Array.isArray(old)) return old;
+        return old.filter((c: any) => c.id !== convId);
+      });
+      return { previousConvs };
+    },
+    onError: (err: any, convId: string, context: any) => {
+      if (context?.previousConvs) {
+        queryClient.setQueryData(['conversations', user?.id], context.previousConvs);
+      }
+      toast.error("Failed to delete conversation");
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['conversations', user?.id] });
       setLongPressConv(null);
       toast.success("Conversation deleted");
-    },
-    onError: () => toast.error("Failed to delete conversation")
+    }
   });
 
   // ── Long-press handlers ──────────────────────────────────────────

@@ -386,5 +386,12 @@ export const id = {
     avoid_product_btn: "Hindari Produk",
     add_to_diary_btn: "Tambah ke Buku Harian",
     steps: "Langkah",
-    history_of_the_meal: "Sejarah Makanan"
+    history_of_the_meal: "Sejarah Makanan",
+    delete_message_title: "Hapus pesan?",
+    delete_message_sender_desc: "Anda dapat menghapus pesan ini untuk semua orang atau untuk Anda sendiri saja.",
+    delete_message_receiver_desc: "Pesan ini akan dihapus dari obrolan hanya untuk Anda.",
+    delete_for_everyone: "Hapus untuk semua orang",
+    delete_for_me: "Hapus untuk saya",
+    this_message_was_deleted: "Pesan ini telah dihapus",
+    you_deleted_this_message: "Anda telah menghapus pesan ini"
 };

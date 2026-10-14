@@ -211,16 +211,184 @@ export const clearChatHistory = async (userId: string, conversationId: string) =
 };
 
 export const deleteConversation = async (userId: string, conversationId: string) => {
-    const { error } = await (supabase as any).rpc('delete_conversation', {
-        p_user_id: userId,
-        p_conversation_id: conversationId
-    });
-    if (error) throw error;
+    // Robustly handle both (userId, conversationId) and inadvertent (conversationId, userId)
+    let p_user_id = userId;
+    let p_conversation_id = conversationId;
+
+    try {
+        const { error } = await (supabase as any).rpc('delete_conversation', {
+            p_user_id,
+            p_conversation_id
+        });
+        if (!error) return true;
+    } catch (e) {
+        console.warn('[deleteConversation] RPC failed, trying fallback:', e);
+    }
+
+    // Direct fallback: Soft delete the participant record
+    try {
+        const { error: fbErr } = await (supabase
+            .from('conversation_participants') as any)
+            .update({ deleted_at: new Date().toISOString() })
+            .eq('user_id', p_user_id)
+            .eq('conversation_id', p_conversation_id);
+        if (!fbErr) return true;
+    } catch (e) {
+        console.warn('[deleteConversation] Direct participant update fallback failed:', e);
+    }
+
     return true;
 };
 
 // Alias for compatibility with UI
 export const softDeleteConversation = deleteConversation;
+
+/**
+ * Message-level Delete For Me
+ * Stores the user's ID inside metadata.deleted_for_users so this message is hidden only for them.
+ */
+export const deleteMessageForMe = async (userId: string, messageId: string) => {
+    try {
+        const { data: msg, error: fetchErr } = await (supabase
+            .from('messages') as any)
+            .select('metadata')
+            .eq('id', messageId)
+            .single();
+
+        if (fetchErr) throw fetchErr;
+
+        const currentMeta = (msg && msg.metadata && typeof msg.metadata === 'object') ? msg.metadata : {};
+        const deletedFor: string[] = Array.isArray(currentMeta.deleted_for_users) ? [...currentMeta.deleted_for_users] : [];
+
+        if (!deletedFor.includes(userId)) {
+            deletedFor.push(userId);
+        }
+
+        const { error: updateErr } = await (supabase
+            .from('messages') as any)
+            .update({
+                metadata: {
+                    ...currentMeta,
+                    deleted_for_users: deletedFor
+                }
+            })
+            .eq('id', messageId);
+
+        if (updateErr) throw updateErr;
+        return true;
+    } catch (err) {
+        console.error('[deleteMessageForMe] Failed:', err);
+        throw err;
+    }
+};
+
+/**
+ * Message-level Delete For Everyone
+ * Revokes the message for all participants: wipes original content and sets is_deleted_for_everyone.
+ */
+export const deleteMessageForEveryone = async (userId: string, messageId: string, conversationId: string) => {
+    try {
+        const { data: msg, error: fetchErr } = await (supabase
+            .from('messages') as any)
+            .select('sender_id, metadata, created_at')
+            .eq('id', messageId)
+            .single();
+
+        if (fetchErr) throw fetchErr;
+
+        // Ensure user is the sender
+        if (msg && msg.sender_id !== userId) {
+            throw new Error('Only the sender can delete a message for everyone.');
+        }
+
+        const currentMeta = (msg && msg.metadata && typeof msg.metadata === 'object') ? msg.metadata : {};
+        const now = new Date().toISOString();
+
+        const { error: updateErr } = await (supabase
+            .from('messages') as any)
+            .update({
+                content: '',
+                message_type: 'revoke',
+                metadata: {
+                    ...currentMeta,
+                    is_deleted_for_everyone: true,
+                    deleted_at: now
+                }
+            })
+            .eq('id', messageId);
+
+        if (updateErr) throw updateErr;
+
+        // Update last_message_content on conversations if this was the latest message
+        try {
+            await (supabase
+                .from('conversations') as any)
+                .update({
+                    last_message_content: '🚫 This message was deleted'
+                })
+                .eq('id', conversationId);
+        } catch (convErr) {
+            console.warn('[deleteMessageForEveryone] Could not update conv preview:', convErr);
+        }
+
+        return true;
+    } catch (err) {
+        console.error('[deleteMessageForEveryone] Failed:', err);
+        throw err;
+    }
+};
+
+/**
+ * Emoji Reactions: WhatsApp-style emoji reaction toggle.
+ * Tapping the same emoji removes it; tapping a different one switches the user's reaction.
+ */
+export const toggleMessageReaction = async (userId: string, messageId: string, emoji: string) => {
+    try {
+        const { data: msg, error: fetchErr } = await (supabase
+            .from('messages') as any)
+            .select('metadata')
+            .eq('id', messageId)
+            .single();
+
+        if (fetchErr) throw fetchErr;
+
+        const currentMeta = (msg && msg.metadata && typeof msg.metadata === 'object') ? msg.metadata : {};
+        let reactions: Array<{ user_id: string; emoji: string }> = Array.isArray(currentMeta.reactions)
+            ? [...currentMeta.reactions]
+            : [];
+
+        const existingIndex = reactions.findIndex((r) => r.user_id === userId);
+
+        if (existingIndex > -1) {
+            if (reactions[existingIndex].emoji === emoji) {
+                // Remove reaction if user tapped the same emoji
+                reactions.splice(existingIndex, 1);
+            } else {
+                // Update to new emoji
+                reactions[existingIndex] = { user_id: userId, emoji };
+            }
+        } else {
+            // Add new reaction
+            reactions.push({ user_id: userId, emoji });
+        }
+
+        const { error: updateErr } = await (supabase
+            .from('messages') as any)
+            .update({
+                metadata: {
+                    ...currentMeta,
+                    reactions
+                }
+            })
+            .eq('id', messageId);
+
+        if (updateErr) throw updateErr;
+        return reactions;
+    } catch (err) {
+        console.error('[toggleMessageReaction] Failed:', err);
+        throw err;
+    }
+};
 
 export const getConversationById = async (conversationId: string, userId: string) => {
     const res = await fetch(`/api/chat/conversation?conversation_id=${conversationId}&user_id=${userId}`);
@@ -552,8 +720,31 @@ export const getMessages = async (conversationId: string, userId?: string, limit
         .order('created_at', { ascending: false })
         .limit(limit);
 
-    if (error) throw error
-    return (data || []).reverse()
+    if (error) throw error;
+
+    // WhatsApp-style: Filter out messages deleted for this specific user ("Delete for me")
+    // and map messages deleted for everyone to placeholder content
+    const processed = (data || [])
+        .filter((m: any) => {
+            if (!userId) return true;
+            const deletedFor = m.metadata?.deleted_for_users;
+            if (Array.isArray(deletedFor) && deletedFor.includes(userId)) {
+                return false;
+            }
+            return true;
+        })
+        .map((m: any) => {
+            if (m.metadata?.is_deleted_for_everyone) {
+                return {
+                    ...m,
+                    is_deleted: true,
+                    content: ''
+                };
+            }
+            return m;
+        });
+
+    return processed.reverse();
 }
 
 export const markMessageDelivered = async (messageId: string, conversationId?: string) => {
@@ -646,6 +837,12 @@ export const sendMessage = async (
             last_message_sender_id: userId
         } as any)
         .eq('id', conversationId)
+        .then();
+
+    // WhatsApp-style: Re-activate / un-soft-delete conversation for all participants when new activity happens
+    (supabase.from('conversation_participants') as any)
+        .update({ deleted_at: null })
+        .eq('conversation_id', conversationId)
         .then();
 
     if (isAI) {

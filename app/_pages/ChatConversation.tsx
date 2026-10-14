@@ -7,9 +7,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { saveFoodAnalysis } from '@/lib/api/food';
-import { getConversationById, getMessages, sendMessage, uploadChatMedia, markAsRead, sendTypingIndicator, initiateCallV2, updateCallStatus, softDeleteConversation, findUserByIdSecure, provisionAndSendMessage, findConversationByParticipants, archiveConversation, muteConversation, clearChatHistory, getOrCreateDirectConversation, markMessageDelivered, getOrCreateCoachConversation } from '@/lib/api/chat';
+import { getConversationById, getMessages, sendMessage, uploadChatMedia, markAsRead, sendTypingIndicator, initiateCallV2, updateCallStatus, softDeleteConversation, findUserByIdSecure, provisionAndSendMessage, findConversationByParticipants, archiveConversation, muteConversation, clearChatHistory, getOrCreateDirectConversation, markMessageDelivered, getOrCreateCoachConversation, deleteMessageForMe, deleteMessageForEveryone, toggleMessageReaction } from '@/lib/api/chat';
 import { useAuth } from '@/lib/AuthContext';
 import { useLastSeenHeartbeat } from '@/hooks/useLastSeenHeartbeat';
+import { playInboundMessageSound } from '@/lib/utils/chatSound';
 import { getUserProfile } from '@/lib/api/auth';
 import { toast } from 'sonner';
 import EmojiPicker, { Theme, EmojiStyle } from 'emoji-picker-react';
@@ -110,6 +111,7 @@ const AudioMessage = ({ src }: { src: string }) => {
             if (isPlaying) {
                 audioRef.current.pause();
             } else {
+                audioRef.current.volume = 1.0;
                 audioRef.current.play().catch(() => setError(true));
             }
         }
@@ -166,6 +168,8 @@ const AudioMessage = ({ src }: { src: string }) => {
                 <audio
                     ref={audioRef}
                     src={internalSrc}
+                    preload="auto"
+                    playsInline
                     onPlay={() => setIsPlaying(true)}
                     onPause={() => setIsPlaying(false)}
                     onEnded={() => { setIsPlaying(false); setProgress(0); }}
@@ -375,6 +379,8 @@ export default function ChatConversation() {
     const [showAiVoiceModal, setShowAiVoiceModal] = useState(false);
 
     const [showLastSeen, setShowLastSeen] = useState(true);
+    const [selectedMessageForDelete, setSelectedMessageForDelete] = useState<any | null>(null);
+    const [activeReactionMsgId, setActiveReactionMsgId] = useState<string | null>(null);
 
     const [isSubmitting, setIsSubmitting] = useState(false);
     const shouldSendOnStopRef = useRef(false);
@@ -506,6 +512,97 @@ export default function ChatConversation() {
         enabled: !!activeResolvedConvId && !activeResolvedConvId.startsWith('new-') && !!user?.id,
         refetchOnWindowFocus: false
     });
+
+    const handleReaction = async (messageId: string, emoji: string) => {
+        setActiveReactionMsgId(null);
+        if (!user?.id || !activeResolvedConvId) return;
+
+        // Optimistic cache update for instant UI feedback
+        queryClient.setQueryData(['messages', activeResolvedConvId], (old: any) => {
+            if (!Array.isArray(old)) return old;
+            return old.map((m: any) => {
+                if (m.id !== messageId) return m;
+                const currentMeta = (m.metadata && typeof m.metadata === 'object') ? m.metadata : {};
+                let reactions: Array<{ user_id: string; emoji: string }> = Array.isArray(currentMeta.reactions)
+                    ? [...currentMeta.reactions]
+                    : [];
+                const existingIdx = reactions.findIndex(r => r.user_id === user.id);
+                if (existingIdx > -1) {
+                    if (reactions[existingIdx].emoji === emoji) {
+                        reactions.splice(existingIdx, 1);
+                    } else {
+                        reactions[existingIdx] = { user_id: user.id, emoji };
+                    }
+                } else {
+                    reactions.push({ user_id: user.id, emoji });
+                }
+                return {
+                    ...m,
+                    metadata: {
+                        ...currentMeta,
+                        reactions
+                    }
+                };
+            });
+        });
+
+        try {
+            await toggleMessageReaction(user.id, messageId, emoji);
+        } catch (e: any) {
+            toast.error("Failed to update reaction");
+            queryClient.invalidateQueries({ queryKey: ['messages', activeResolvedConvId] });
+        }
+    };
+
+    const handleDeleteMessageForMe = async (messageId: string) => {
+        setSelectedMessageForDelete(null);
+        if (!user?.id || !activeResolvedConvId) return;
+
+        // Optimistically remove message from cache
+        queryClient.setQueryData(['messages', activeResolvedConvId], (old: any) => {
+            if (!Array.isArray(old)) return old;
+            return old.filter((m: any) => m.id !== messageId);
+        });
+
+        try {
+            await deleteMessageForMe(user.id, messageId);
+            toast.success("Message deleted for you");
+        } catch (e: any) {
+            toast.error("Failed to delete message");
+            queryClient.invalidateQueries({ queryKey: ['messages', activeResolvedConvId] });
+        }
+    };
+
+    const handleDeleteMessageForEveryone = async (messageId: string) => {
+        setSelectedMessageForDelete(null);
+        if (!user?.id || !activeResolvedConvId) return;
+
+        // Optimistically mark message as deleted in cache
+        queryClient.setQueryData(['messages', activeResolvedConvId], (old: any) => {
+            if (!Array.isArray(old)) return old;
+            return old.map((m: any) => {
+                if (m.id !== messageId) return m;
+                return {
+                    ...m,
+                    is_deleted: true,
+                    content: '',
+                    metadata: {
+                        ...(m.metadata || {}),
+                        is_deleted_for_everyone: true
+                    }
+                };
+            });
+        });
+
+        try {
+            await deleteMessageForEveryone(user.id, messageId, activeResolvedConvId);
+            toast.success("Message deleted for everyone");
+            queryClient.invalidateQueries({ queryKey: ['conversations', user.id] });
+        } catch (e: any) {
+            toast.error(e?.message || "Failed to delete message for everyone");
+            queryClient.invalidateQueries({ queryKey: ['messages', activeResolvedConvId] });
+        }
+    };
 
     const { data: profile } = useQuery({
         queryKey: ['profile', user?.id],
@@ -1312,8 +1409,9 @@ export default function ChatConversation() {
                     }
                 }
 
-                // Peer sent a message: clear peer's typing indicator
+                // Peer sent a message: clear peer's typing indicator and play audible inbound chime
                 if (newMessage.sender_id !== user?.id) {
+                    playInboundMessageSound();
                     setOtherUserTyping(false);
                     if (peerTypingClearTimeoutRef.current) {
                         clearTimeout(peerTypingClearTimeoutRef.current);
@@ -1346,11 +1444,22 @@ export default function ChatConversation() {
                     setOtherUserTyping(false);
                 }
 
+                // WhatsApp-style: If message is deleted for current user ("delete for me"), remove it from local cache
+                const deletedFor = updatedMessage.metadata?.deleted_for_users;
+                if (Array.isArray(deletedFor) && user?.id && deletedFor.includes(user.id)) {
+                    queryClient.setQueryData(['messages', convId], (old: any) => {
+                        if (!Array.isArray(old)) return old;
+                        return old.filter((m: any) => m.id !== updatedMessage.id);
+                    });
+                    return;
+                }
+
                 queryClient.setQueryData(['messages', convId], (old: any) => {
                     if (!Array.isArray(old)) return old;
                     return old.map((m: any) => m.id === updatedMessage.id ? {
                         ...m,
                         ...updatedMessage,
+                        is_deleted: !!(updatedMessage.is_deleted || updatedMessage.metadata?.is_deleted_for_everyone),
                         status: updatedMessage.is_read ? 'read' : (updatedMessage.is_delivered ? 'delivered' : m.status)
                     } : m);
                 });
@@ -1973,6 +2082,17 @@ export default function ChatConversation() {
         const rawMediaUrl = (typeof metadata === 'object' && metadata !== null) ? metadata.url : metadata;
         const mediaUrl = sanitizeMediaUrl(rawMediaUrl);
 
+        // WhatsApp-style revoked message placeholder
+        if (msg.is_deleted || msg.metadata?.is_deleted_for_everyone || msg.message_type === 'revoke') {
+            const isMe = msg.sender_id === user?.id;
+            return (
+                <div className="flex items-center gap-1.5 text-xs italic text-slate-500 dark:text-slate-400 py-1 select-none">
+                    <span className="text-[13px] opacity-70">🚫</span>
+                    <span>{isMe ? (t('you_deleted_this_message') || "You deleted this message") : (t('this_message_was_deleted') || "This message was deleted")}</span>
+                </div>
+            );
+        }
+
         const handleLogFood = async (foodData: any) => {
             if (!user?.id) return;
             const tid = toast.loading("Adding to your daily log...");
@@ -2437,7 +2557,11 @@ export default function ChatConversation() {
                                                 setIsMenuOpen(false);
                                                 if (window.confirm("Delete this conversation completely?")) {
                                                     try {
-                                                        await softDeleteConversation(activeId!, user!.id);
+                                                        queryClient.setQueryData(['conversations', user?.id], (old: any) => {
+                                                            if (!Array.isArray(old)) return old;
+                                                            return old.filter((c: any) => c.id !== activeId);
+                                                        });
+                                                        await softDeleteConversation(user!.id, activeId!);
                                                         toast.success("Conversation deleted");
                                                         router.push('/chat');
                                                     } catch { toast.error("Failed to delete conversation"); }
@@ -2470,22 +2594,55 @@ export default function ChatConversation() {
 
                                 {dateMsgs.map((msg) => {
                                     const isMe = msg.sender_id === user?.id;
+                                    const isDeletedForEveryone = !!(msg.is_deleted || msg.metadata?.is_deleted_for_everyone || msg.message_type === 'revoke');
                                     
                                     // Hide empty placeholder messages from AI
-                                    if (!isMe && !msg.content && msg.message_type === 'text') {
+                                    if (!isMe && !msg.content && msg.message_type === 'text' && !isDeletedForEveryone) {
                                         return null;
                                     }
+
+                                    // Reactions summary
+                                    const reactionsList: Array<{ user_id: string; emoji: string }> = Array.isArray(msg.metadata?.reactions) ? msg.metadata.reactions : [];
+                                    const reactionsSummary: Record<string, number> = {};
+                                    let myReaction: string | null = null;
+                                    reactionsList.forEach((r) => {
+                                        reactionsSummary[r.emoji] = (reactionsSummary[r.emoji] || 0) + 1;
+                                        if (r.user_id === user?.id) {
+                                            myReaction = r.emoji;
+                                        }
+                                    });
+                                    const hasReactions = Object.keys(reactionsSummary).length > 0;
                                     
                                     return (
                                         <div
                                             key={msg.id}
-                                            className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-1 group`}
+                                            className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-3 group relative`}
                                         >
+                                            {/* Floating WhatsApp Quick Emoji Reactions Bar */}
+                                            {activeReactionMsgId === msg.id && !isDeletedForEveryone && (
+                                                <div className={`absolute -top-11 ${isMe ? 'right-0' : 'left-0'} flex items-center gap-1 bg-white dark:bg-[#233138] px-2.5 py-1 rounded-full shadow-xl border border-black/10 dark:border-white/10 z-30 animate-in fade-in zoom-in-95 duration-150`}>
+                                                    {["👍", "❤️", "😂", "😮", "😢", "🙏"].map((emoji) => (
+                                                        <button
+                                                            key={emoji}
+                                                            type="button"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                handleReaction(msg.id, emoji);
+                                                            }}
+                                                            className={`text-lg p-1 hover:scale-125 active:scale-95 transition-transform rounded-full ${myReaction === emoji ? 'bg-vic-green/20 scale-110' : ''}`}
+                                                            title={`React with ${emoji}`}
+                                                        >
+                                                            {emoji}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+
                                             <div
                                                 className={`relative max-w-[85%] md:max-w-[65%] min-w-[100px] px-3 py-2 rounded-xl shadow-sm ${isMe
                                                     ? 'bg-[#D9FDD3] dark:bg-[#005c4b] rounded-tr-none'
                                                     : 'bg-white dark:bg-[#202c33] rounded-tl-none'
-                                                    }`}
+                                                    } ${isDeletedForEveryone ? 'opacity-85' : ''}`}
                                             >
                                                 {/* Content - Wrapper to ensure spacing for timestamp */}
                                                 <div className="flex flex-col">
@@ -2498,7 +2655,7 @@ export default function ChatConversation() {
                                                         <span className="text-[10px] text-[#667781] dark:text-white/50">
                                                             {formatMessageTime(msg.created_at)}
                                                         </span>
-                                                        {isMe && (
+                                                        {isMe && !isDeletedForEveryone && (
                                                             (msg as any).status === 'pending' ? (
                                                                 <Clock className="w-3 h-3 text-[#8696A0] animate-pulse ml-0.5" />
                                                             ) : (msg as any).status === 'failed' ? (
@@ -2524,7 +2681,55 @@ export default function ChatConversation() {
                                                         )}
                                                     </div>
                                                 </div>
+
+                                                {/* Docked Reactions Pill Badge */}
+                                                {hasReactions && !isDeletedForEveryone && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            if (myReaction) handleReaction(msg.id, myReaction);
+                                                        }}
+                                                        className={`absolute -bottom-2.5 ${isMe ? 'right-2' : 'left-2'} flex items-center gap-1 bg-white dark:bg-[#1f2c34] px-1.5 py-0.5 rounded-full shadow-sm border border-black/10 dark:border-white/10 text-[11px] select-none hover:scale-105 active:scale-95 transition-transform z-10`}
+                                                        title="Tap to toggle reaction"
+                                                    >
+                                                        {Object.entries(reactionsSummary).map(([emoji, count]) => (
+                                                            <span key={emoji} className="flex items-center">
+                                                                <span>{emoji}</span>
+                                                                {count > 1 && <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold ml-0.5">{count}</span>}
+                                                            </span>
+                                                        ))}
+                                                    </button>
+                                                )}
                                             </div>
+
+                                            {/* WhatsApp-Style Action Buttons Bar (React & Delete) */}
+                                            {!isDeletedForEveryone && !isAI && (
+                                                <div className={`opacity-0 group-hover:opacity-100 transition-opacity duration-150 flex items-center gap-1 mt-1 ${isMe ? 'justify-end' : 'justify-start'} px-1`}>
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setActiveReactionMsgId(activeReactionMsgId === msg.id ? null : msg.id);
+                                                        }}
+                                                        className="p-1 text-[#8696A0] hover:text-[#111B21] dark:hover:text-white rounded-full hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+                                                        title="React"
+                                                    >
+                                                        <Smile size={14} />
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setSelectedMessageForDelete(msg);
+                                                        }}
+                                                        className="p-1 text-[#8696A0] hover:text-red-500 rounded-full hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors"
+                                                        title="Delete message"
+                                                    >
+                                                        <Trash2 size={14} />
+                                                    </button>
+                                                </div>
+                                            )}
                                         </div>
                                     );
                                 })}
@@ -2563,6 +2768,47 @@ export default function ChatConversation() {
                     )}
                     <div ref={messagesEndRef} className="h-4" />
                 </main>
+
+                {/* WhatsApp-Style Delete Message Confirmation Modal */}
+                {selectedMessageForDelete && (
+                    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                        <div className="w-full max-w-sm bg-white dark:bg-[#202c33] rounded-3xl p-5 shadow-2xl border border-black/10 dark:border-white/10 flex flex-col gap-3 animate-in zoom-in-95 duration-150">
+                            <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                                {t('delete_message_title') || "Delete message?"}
+                            </h3>
+                            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                                {selectedMessageForDelete.sender_id === user?.id
+                                    ? (t('delete_message_sender_desc') || "You can delete this message for everyone or delete it for yourself only.")
+                                    : (t('delete_message_receiver_desc') || "This message will be deleted from your chat for you only.")}
+                            </p>
+                            <div className="flex flex-col gap-2 mt-2">
+                                {selectedMessageForDelete.sender_id === user?.id && (
+                                    <button
+                                        type="button"
+                                        onClick={() => handleDeleteMessageForEveryone(selectedMessageForDelete.id)}
+                                        className="w-full py-3 px-4 bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 font-bold text-sm rounded-2xl transition-colors text-center"
+                                    >
+                                        {t('delete_for_everyone') || "Delete for everyone"}
+                                    </button>
+                                )}
+                                <button
+                                    type="button"
+                                    onClick={() => handleDeleteMessageForMe(selectedMessageForDelete.id)}
+                                    className="w-full py-3 px-4 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-sm rounded-2xl transition-colors text-center"
+                                >
+                                    {t('delete_for_me') || "Delete for me"}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setSelectedMessageForDelete(null)}
+                                    className="w-full py-3 px-4 bg-transparent hover:bg-slate-50 dark:hover:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-semibold text-sm rounded-2xl transition-colors text-center"
+                                >
+                                    {t('cancel') || "Cancel"}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {/* Input Footer */}
                 <footer className="px-3 md:px-4 py-2 bg-[#F0F2F5] dark:bg-[#202c33] flex items-end gap-2 relative z-40 pb-safe shrink-0 w-full max-w-[480px] mx-auto">
