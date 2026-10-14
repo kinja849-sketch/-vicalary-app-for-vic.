@@ -1,4 +1,4 @@
-﻿export type MealCategory = 'breakfast' | 'lunch' | 'dinner' | 'snack' | 'drink' | 'dessert';
+export type MealCategory = 'breakfast' | 'lunch' | 'dinner' | 'snack' | 'drink' | 'dessert';
 
 export interface Ingredient {
   item: string;
@@ -25,16 +25,23 @@ export interface AuthoritativeRecipe {
   external_id: string; // Provider-specific ID (e.g. 'spoonacular_12345' or 'curated_ayam_bakar')
   provider: string; // 'spoonacular' | 'curated' | 'edamam' | 'themealdb'
   title: string;
+  name?: string;
   description?: string;
   image_url: string;
+  image?: string;
   meal_category: MealCategory;
   cuisine: string;
+  cuisine_type?: string;
   prep_time_minutes: number;
   cook_time_minutes: number;
   servings: number;
   ingredients: Ingredient[];
   instructions: Instruction[];
   nutrition: Nutrition;
+  total_calories?: number;
+  protein_g?: number;
+  carbs_g?: number;
+  fat_g?: number;
   dietary_tags: string[];
   clinical_justification?: string;
   source_url?: string;

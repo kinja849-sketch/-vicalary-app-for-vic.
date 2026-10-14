@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminSupabaseClient } from '@/lib/supabase-server'
+import { RecipeInstructionNormalizer } from '@/lib/services/recipes/RecipeInstructionNormalizer'
 
 interface NormalizedRecipe {
   id: string
@@ -91,7 +92,8 @@ export async function POST(req: NextRequest) {
     }
 
     if (cached) {
-      const mapped: NormalizedRecipe = {
+      const normalized = RecipeInstructionNormalizer.normalizeRecipeDetails({
+        ...cached,
         id: String(cached.id),
         title: cached.title || 'Untitled Recipe',
         image_url: cached.image_url || '',
@@ -99,16 +101,16 @@ export async function POST(req: NextRequest) {
         dietary_tags: Array.isArray(cached.dietary_tags) ? cached.dietary_tags : [],
         ingredients: parseIngredients(cached.ingredients),
         instructions: parseInstructions(cached.instructions_steps || cached.instructions),
-        prep_time_minutes: cached.preparation_time || cached.prep_time_minutes || 15,
-        cook_time_minutes: cached.cook_time_minutes || 0,
+        prep_time_minutes: cached.preparation_time || cached.prep_time_minutes,
+        cook_time_minutes: cached.cook_time_minutes,
         total_calories: cached.nutrition?.calories || cached.total_calories || 0,
         protein_g: Number(cached.nutrition?.protein || cached.protein_g || 0),
         carbs_g: Number(cached.nutrition?.carbs || cached.carbs_g || 0),
         fat_g: Number(cached.nutrition?.fat || cached.fat_g || 0),
         servings: cached.servings || 2,
         description: cached.description || ''
-      }
-      return NextResponse.json(mapped)
+      })
+      return NextResponse.json(normalized)
     }
 
     // 2. Check recipes table (UUID, external_id, or spoonacular_id)
@@ -187,7 +189,8 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      const mapped: NormalizedRecipe = {
+      const normalized = RecipeInstructionNormalizer.normalizeRecipeDetails({
+        ...dbRecipe,
         id: String(dbRecipe.id),
         title: dbRecipe.title || 'Untitled Recipe',
         image_url: dbRecipe.image_url || '',
@@ -195,16 +198,31 @@ export async function POST(req: NextRequest) {
         dietary_tags: Array.isArray(dbRecipe.dietary_tags) ? dbRecipe.dietary_tags : [],
         ingredients,
         instructions,
-        prep_time_minutes: dbRecipe.prep_time_minutes || 15,
-        cook_time_minutes: dbRecipe.cook_time_minutes || 0,
+        prep_time_minutes: dbRecipe.prep_time_minutes,
+        cook_time_minutes: dbRecipe.cook_time_minutes,
         total_calories: calories,
         protein_g: protein_g != null ? protein_g : 0,
         carbs_g: carbs_g != null ? carbs_g : 0,
         fat_g: fat_g != null ? fat_g : 0,
         servings: 2,
         description: dbRecipe.description || ''
+      })
+
+      // Self-healing database repair: if instructions were single-step or times missing, update row
+      if (instructions.length <= 1 || !dbRecipe.prep_time_minutes || !dbRecipe.cook_time_minutes) {
+        try {
+          await supabase.from('recipes').update({
+            instructions: normalized.instructions,
+            prep_time_minutes: normalized.prep_time_minutes,
+            cook_time_minutes: normalized.cook_time_minutes,
+            description: normalized.description
+          }).eq('id', dbRecipe.id)
+        } catch (repairErr) {
+          console.warn('[recipe-details] Repair persistence notice:', repairErr)
+        }
       }
-      return NextResponse.json(mapped)
+
+      return NextResponse.json(normalized)
     }
 
     // 2.5 Check user_daily_meal_plans (matches today's AI-generated meal plan recipes)
@@ -232,7 +250,8 @@ export async function POST(req: NextRequest) {
             (m.title && cleanId.length > 3 && m.title.toLowerCase().includes(cleanId.toLowerCase()))
           )
           if (match) {
-            const mapped: NormalizedRecipe = {
+            const normalized = RecipeInstructionNormalizer.normalizeRecipeDetails({
+              ...match,
               id: match.id || rawId,
               title: match.title || match.name || 'Delicious Recipe',
               image_url: match.image_url || match.image || '',
@@ -240,16 +259,16 @@ export async function POST(req: NextRequest) {
               dietary_tags: match.dietary_tags || ['Chef Selected'],
               ingredients: parseIngredients(match.ingredients),
               instructions: parseInstructions(match.instructions || match.instructions_steps),
-              prep_time_minutes: match.prep_time_minutes || match.preparation_time || 10,
-              cook_time_minutes: match.cook_time_minutes || 15,
+              prep_time_minutes: match.prep_time_minutes || match.preparation_time,
+              cook_time_minutes: match.cook_time_minutes,
               total_calories: match.total_calories || match.calories || 350,
               protein_g: Number(match.protein_g || match.protein || 0),
               carbs_g: Number(match.carbs_g || match.carbs || 0),
               fat_g: Number(match.fat_g || match.fat || 0),
               servings: 2,
-              description: match.clinical_justification || ''
-            }
-            return NextResponse.json(mapped)
+              description: match.clinical_justification || match.description || ''
+            })
+            return NextResponse.json(normalized)
           }
         }
       }
@@ -287,7 +306,7 @@ export async function POST(req: NextRequest) {
 
             const instructions = parseInstructions(meal.strInstructions)
 
-            const normalized: NormalizedRecipe = {
+            const normalized = RecipeInstructionNormalizer.normalizeRecipeDetails({
               id: String(meal.idMeal),
               title: meal.strMeal,
               image_url: meal.strMealThumb,
@@ -303,7 +322,7 @@ export async function POST(req: NextRequest) {
               fat_g: estimatedFat,
               servings: 2,
               description: `${meal.strArea || ''} ${meal.strCategory || 'Dish'}`.trim()
-            }
+            })
 
             // Cache in cached_recipes for future fast lookups
             await supabase.from('cached_recipes').upsert({
@@ -356,7 +375,7 @@ export async function POST(req: NextRequest) {
           const estimatedCals = 120 + (numId % 80)
           const instructions = parseInstructions(drink.strInstructions)
 
-          const normalized: NormalizedRecipe = {
+          const normalized = RecipeInstructionNormalizer.normalizeRecipeDetails({
             id: String(drink.idDrink),
             title: drink.strDrink,
             image_url: drink.strDrinkThumb,
@@ -372,7 +391,7 @@ export async function POST(req: NextRequest) {
             fat_g: 0,
             servings: 1,
             description: `${drink.strCategory || 'Drink'} served in a ${drink.strGlass || 'glass'}`
-          }
+          })
 
           await supabase.from('cached_recipes').upsert({
             id: String(drink.idDrink),

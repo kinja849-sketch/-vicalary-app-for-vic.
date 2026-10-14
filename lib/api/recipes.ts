@@ -1,4 +1,5 @@
 import { supabase } from '../supabase'
+import { RecipeInstructionNormalizer } from '../services/recipes/RecipeInstructionNormalizer'
 
 // ============================================================================
 // HELPERS for External API mapping
@@ -138,7 +139,7 @@ export const getRecipeDetails = async (recipeId: string | number) => {
 
             if (cached) {
                 const c = cached as any;
-                return {
+                return RecipeInstructionNormalizer.normalizeRecipeDetails({
                     id: String(c.id),
                     title: c.title || 'Untitled Recipe',
                     image_url: c.image_url || '',
@@ -146,14 +147,14 @@ export const getRecipeDetails = async (recipeId: string | number) => {
                     dietary_tags: Array.isArray(c.dietary_tags) ? c.dietary_tags : [],
                     ingredients: typeof c.ingredients === 'string' ? JSON.parse(c.ingredients) : (c.ingredients || []),
                     instructions: typeof c.instructions_steps === 'string' ? JSON.parse(c.instructions_steps) : (c.instructions_steps || c.instructions || []),
-                    prep_time_minutes: c.preparation_time || c.prep_time_minutes || 15,
-                    cook_time_minutes: c.cook_time_minutes || 0,
+                    prep_time_minutes: c.preparation_time || c.prep_time_minutes,
+                    cook_time_minutes: c.cook_time_minutes,
                     total_calories: c.nutrition?.calories || c.total_calories || 0,
                     protein_g: Number(c.nutrition?.protein || c.protein_g || 0),
                     carbs_g: Number(c.nutrition?.carbs || c.carbs_g || 0),
                     fat_g: Number(c.nutrition?.fat || c.fat_g || 0),
                     servings: c.servings || 2
-                };
+                });
             }
 
             const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawId);
@@ -171,11 +172,11 @@ export const getRecipeDetails = async (recipeId: string | number) => {
             const { data: recipe } = await query.maybeSingle();
             if (recipe) {
                 const r = recipe as any;
-                return {
+                return RecipeInstructionNormalizer.normalizeRecipeDetails({
                     ...r,
                     ingredients: typeof r.ingredients === 'string' ? JSON.parse(r.ingredients) : (r.ingredients || []),
                     instructions: typeof r.instructions === 'string' ? JSON.parse(r.instructions) : (r.instructions || [])
-                };
+                });
             }
         } catch (dbErr) {
             console.warn('[getRecipeDetails] Direct DB fallback failed:', dbErr);
@@ -512,19 +513,24 @@ export const getDailyMealSuggestions = async (userId?: string, forceRefresh = fa
     // 3. Check if an active AI-generated plan exists for today in user_daily_meal_plans
     if (isUuid && !forceRefresh) {
         try {
-            const { data: existingPlan, error: existingError } = await (supabase as any)
-                .from('user_daily_meal_plans')
-                .select('*')
-                .eq('user_id', userId)
-                .eq('plan_date', today)
-                .order('updated_at', { ascending: false })
-                .limit(1)
-                .maybeSingle();
+            const [{ data: existingPlan, error: existingError }, { data: onboarding }] = await Promise.all([
+                (supabase as any)
+                    .from('user_daily_meal_plans')
+                    .select('*')
+                    .eq('user_id', userId)
+                    .eq('plan_date', today)
+                    .order('updated_at', { ascending: false })
+                    .limit(1)
+                    .maybeSingle(),
+                (supabase as any)
+                    .from('onboarding_responses')
+                    .select('allergies, restrictions, goal')
+                    .eq('user_id', userId)
+                    .maybeSingle()
+            ]);
 
-            if (existingError) {
-                if (existingError.code !== 'PGRST116') {
-                    console.warn("[Recipes] Database warning fetching daily plan:", existingError);
-                }
+            if (existingError && existingError.code !== 'PGRST116') {
+                console.warn("[Recipes] Database warning fetching daily plan:", existingError);
             }
 
             const rawPlan = existingPlan;
@@ -533,7 +539,35 @@ export const getDailyMealSuggestions = async (userId?: string, forceRefresh = fa
             const hasDuplicateImgs = breakfastImgs.length > 1 && new Set(breakfastImgs).size < breakfastImgs.length;
             const hasTwelveBreakfast = Array.isArray(rawPlan?.breakfast) && rawPlan.breakfast.length === 12;
 
-            if (rawPlan && hasTwelveBreakfast && !isLegacyPlaceholder && !hasDuplicateImgs) {
+            // Revalidate cached recommendations against current allergies / restrictions
+            let activeAllergies: string[] = [];
+            if (onboarding?.allergies) {
+                activeAllergies = Array.isArray(onboarding.allergies) ? onboarding.allergies : [String(onboarding.allergies)];
+            }
+            if (onboarding?.restrictions && Array.isArray(onboarding.restrictions)) {
+                activeAllergies = [...activeAllergies, ...onboarding.restrictions];
+            }
+            const cleanAllergies = activeAllergies.map(a => String(a).toLowerCase().trim()).filter(a => a && a !== 'none');
+
+            let hasConstraintViolation = false;
+            const allCachedMeals = [
+                ...(rawPlan?.breakfast || []),
+                ...(rawPlan?.lunch || []),
+                ...(rawPlan?.dinner || [])
+            ];
+
+            for (const meal of allCachedMeals) {
+                const mealText = `${meal.title || meal.name || ''} ${(meal.ingredients || []).map((i: any) => typeof i === 'string' ? i : (i?.item || '')).join(' ')}`.toLowerCase();
+                for (const allergy of cleanAllergies) {
+                    if (mealText.includes(allergy)) {
+                        hasConstraintViolation = true;
+                        break;
+                    }
+                }
+                if (hasConstraintViolation) break;
+            }
+
+            if (rawPlan && hasTwelveBreakfast && !isLegacyPlaceholder && !hasDuplicateImgs && !hasConstraintViolation) {
                 return {
                     breakfast: rawPlan.breakfast || [],
                     lunch: rawPlan.lunch || [],

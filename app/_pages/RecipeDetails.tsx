@@ -15,6 +15,8 @@ import { FavoriteButton } from "@/components/FavoriteButton";
 import { MealImage } from "@/components/MealImage";
 import ChefAvatar from "@/components/guide/ChefAvatar";
 import { getFoodImageUrl } from "@/lib/services/FoodImageService";
+import { IngredientImageService } from "@/lib/services/IngredientImageService";
+import { RecipeInstructionNormalizer } from "@/lib/services/recipes/RecipeInstructionNormalizer";
 import {
     SequentialSpeechPlayer,
     SpeechListener,
@@ -25,6 +27,7 @@ import {
     splitIntoSpeechChunks,
     type SpeechEndResult,
 } from "@/lib/voice/VoiceTurnController";
+import { getRoutineVoiceResponse, getCachedAudioUrl, setCachedAudioUrl } from "@/lib/voice/VoiceResponseCache";
 
 export default function RecipeDetails() {
     const { id } = useParams() as { id: string };
@@ -498,6 +501,17 @@ export default function RecipeDetails() {
         }
     }, [isVoiceMode]);
 
+    const handleExitCookingMode = () => {
+        stopAllVoice();
+        stopCamera();
+        setIsVoiceMode(false);
+        if (typeof window !== 'undefined' && window.history.length > 1) {
+            router.back();
+        } else {
+            router.push('/cookbook');
+        }
+    };
+
     // Transcribe audio using Whisper API (fallback path when Web Speech is unavailable).
     // Single-flight: one utterance => one transcription => one reply.
     const transcribeAudio = async (blob: Blob) => {
@@ -661,6 +675,8 @@ export default function RecipeDetails() {
 
     // --- SHARED VOICE ENGINE HELPERS (lib/voice/VoiceTurnController) ---
     const fetchTtsBlobUrl = async (text: string, signal: AbortSignal): Promise<string | null> => {
+        const cached = getCachedAudioUrl(text);
+        if (cached) return cached;
         if (Date.now() < ttsCooldownUntilRef.current) return null; // recent TTS failure: skip network, show text-only
         try {
             const res = await fetch('/api/text-to-speech', {
@@ -677,7 +693,9 @@ export default function RecipeDetails() {
             }
             const blob = await res.blob();
             if (!blob.size) return null;
-            return URL.createObjectURL(blob);
+            const url = URL.createObjectURL(blob);
+            setCachedAudioUrl(text, url);
+            return url;
         } catch (e: any) {
             if (e?.name === 'AbortError') return null;
             ttsCooldownUntilRef.current = Date.now() + 30000;
@@ -891,6 +909,34 @@ export default function RecipeDetails() {
             ? currentSession.steps.map((s: any) => s?.instruction || '')
             : [];
 
+        // Check for routine conversational pleasantries / presence checks (zero-latency fast path)
+        const routineFastReply = getRoutineVoiceResponse(cleanQuery, 'chef');
+        if (routineFastReply) {
+            setIsChefThinking(false);
+            const replyId = `chef-reply-${Date.now()}-${turn.id}`;
+            let appended = false;
+            await playTTS(routineFastReply.text, {
+                onFirstChunk: () => {
+                    if (appended || !turn.isCurrent()) return;
+                    appended = true;
+                    setChatMessages(prev => [
+                        ...prev,
+                        { id: replyId, sender: 'chef', text: '', timestamp: Date.now() }
+                    ]);
+                },
+                onEnd: (r) => {
+                    if (!appended) return;
+                    setChatMessages(prev => prev.map(m => m.id === replyId ? { ...m, text: r.deliveredText } : m));
+                }
+            });
+            if (turn.isCurrent()) {
+                setIsChefThinking(false);
+                processingRef.current = false;
+                if (isVoiceModeRef.current && !playerRef.current?.isActive) resumeListeningSoon();
+            }
+            return;
+        }
+
         try {
             const res = await fetch('/api/cooking-assistant/chat', {
                 method: 'POST',
@@ -1103,46 +1149,47 @@ export default function RecipeDetails() {
     }
 
     return (
-        <div className="flex flex-col h-screen max-w-2xl mx-auto w-full bg-white dark:bg-[#0d1418] overflow-hidden">
+        <div className="min-h-screen max-w-2xl mx-auto w-full bg-slate-50 dark:bg-[#0d1418]">
             {/* Normal UI hidden when Voice Mode is active */}
-            <div className={`flex flex-col h-full overflow-hidden ${isVoiceMode ? 'hidden' : 'block'}`}>
-                {/* Immersive Header */}
-                <div className="relative h-80 shrink-0 bg-slate-800">
+            <div className={`w-full min-h-screen ${isVoiceMode ? 'hidden' : 'block'}`}>
+                {/* Immersive Header Image (Natural Flow, Not Sticky) */}
+                <div className="relative w-full h-80 sm:h-96 bg-slate-900 overflow-hidden">
                     <MealImage 
                         src={recipe.image_url} 
                         alt={recipe.title || 'Recipe'} 
                         className="w-full h-full object-cover"
                     />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/20" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-black/30" />
                     
-                    <div className="absolute top-6 left-6 right-6 flex justify-between items-center">
-                        <button onClick={() => router.back()} className="size-10 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white">
+                    {/* Top Bar with Back Arrow only (Share and Heart removed) */}
+                    <div className="absolute top-6 left-6 z-20">
+                        <button 
+                            onClick={() => router.back()} 
+                            aria-label="Go back"
+                            className="size-10 bg-black/40 hover:bg-black/60 backdrop-blur-md rounded-full flex items-center justify-center text-white shadow-md transition-all active:scale-95"
+                        >
                             <ArrowLeft size={20} />
                         </button>
-                        <div className="flex gap-2">
-                            <button className="size-10 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white">
-                                <Share2 size={18} />
-                            </button>
-                            <FavoriteButton recipeId={id} className="relative !bg-white/20 !backdrop-blur-md" />
-                        </div>
-                    </div>
-
-                    <div className="absolute bottom-6 left-6 right-6">
-                        <div className="flex gap-2 mb-2">
-                            {recipe.dietary_tags?.slice(0, 3).map((tag: string) => (
-                                <span key={tag} className="text-[10px] font-bold uppercase tracking-widest bg-vic-green text-slate-900 px-2 py-1 rounded">
-                                    {tag}
-                                </span>
-                            ))}
-                        </div>
-                        <h1 className="text-3xl font-black text-white uppercase tracking-tighter leading-tight">
-                            {recipe.title}
-                        </h1>
                     </div>
                 </div>
 
-                {/* Content Dashboard */}
-                <main className="flex-1 overflow-y-auto no-scrollbar bg-slate-50 dark:bg-[#0d1418] rounded-t-[40px] -mt-10 relative z-10 p-6">
+                {/* Content Dashboard - curves gracefully over the photo */}
+                <main className="bg-slate-50 dark:bg-[#0d1418] rounded-t-[36px] -mt-8 relative z-10 px-6 pt-7 pb-24 shadow-sm">
+                    {/* Dietary Tags & Meal Title (Cleanly presented in content flow, NOT on top of the image) */}
+                    <div className="mb-6">
+                        {recipe.dietary_tags && recipe.dietary_tags.length > 0 && (
+                            <div className="flex flex-wrap gap-2 mb-2.5">
+                                {recipe.dietary_tags.slice(0, 3).map((tag: string) => (
+                                    <span key={tag} className="text-[10px] font-black uppercase tracking-wider bg-vic-green/15 text-vic-green border border-vic-green/25 px-2.5 py-1 rounded-full">
+                                        {tag}
+                                    </span>
+                                ))}
+                            </div>
+                        )}
+                        <h1 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white uppercase tracking-tight leading-tight">
+                            {recipe.title}
+                        </h1>
+                    </div>
                     
                     {/* Nutritional Dashboard */}
                     {/* Nutritional Dashboard */}
@@ -1200,17 +1247,17 @@ export default function RecipeDetails() {
                         </div>
                     </div>
 
-                    {/* Clinical Justification / Why This Meal Card */}
-                    {(recipe.clinical_justification || recipe.description) && (
+                    {/* History of the Meal Card */}
+                    {(recipe.description || recipe.clinical_justification) && (
                         <div className="mb-8 p-5 bg-gradient-to-br from-emerald-500/10 via-vic-green/5 to-transparent border border-vic-green/30 rounded-3xl shadow-sm">
-                            <div className="flex items-center gap-2 mb-2">
+                            <div className="flex items-center gap-2 mb-2.5">
                                 <div className="size-2 rounded-full bg-vic-green animate-pulse" />
                                 <h4 className="text-xs font-black uppercase tracking-wider text-vic-green">
-                                    {t('why_this_meal') || 'Why We Chose This For You'}
+                                    {t('history_of_the_meal') || 'History of the meal'}
                                 </h4>
                             </div>
                             <p className="text-sm text-slate-700 dark:text-slate-300 font-medium leading-relaxed">
-                                {recipe.clinical_justification || recipe.description}
+                                {recipe.description || recipe.clinical_justification}
                             </p>
                         </div>
                     )}
@@ -1242,20 +1289,49 @@ export default function RecipeDetails() {
                     })()}
 
                     {/* Ingredients */}
-                    <h3 className="text-xl font-black dark:text-white mb-4 uppercase tracking-tight">{t('ingredients') || 'Ingredients'}</h3>
-                    <div className="bg-white dark:bg-[#1f2c34] rounded-3xl p-6 shadow-sm mb-8">
-                        <div className="space-y-4">
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-xl font-black dark:text-white uppercase tracking-tight">{t('ingredients') || 'Ingredients'}</h3>
+                        {recipe.ingredients && recipe.ingredients.length > 0 && (
+                            <span className="text-xs font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest bg-slate-100 dark:bg-white/5 px-3 py-1 rounded-full">
+                                {recipe.ingredients.length} {t('items') || 'ITEMS'}
+                            </span>
+                        )}
+                    </div>
+                    <div className="bg-white dark:bg-[#1f2c34] rounded-3xl p-5 shadow-sm mb-8 border border-slate-100/80 dark:border-white/5">
+                        <div className="space-y-3">
                             {recipe.ingredients && recipe.ingredients.length > 0 ? (
                                 recipe.ingredients.map((ing: any, i: number) => {
-                                    const itemText = typeof ing === 'string' ? ing : (ing?.item || ing?.name || '');
-                                    const amountText = typeof ing === 'object' && (ing?.amount || ing?.unit)
-                                        ? `${ing?.amount || ''} ${ing?.unit || ''}`.trim()
-                                        : '';
+                                    const parsed = IngredientImageService.parseIngredient(ing);
 
                                     return (
-                                        <div key={i} className="flex justify-between items-center border-b border-slate-50 dark:border-white/5 pb-3 last:border-none">
-                                            <span className="text-slate-700 dark:text-slate-300 font-medium">{itemText}</span>
-                                            {amountText && <span className="text-sm font-black dark:text-white">{amountText}</span>}
+                                        <div key={i} className="flex items-center justify-between p-2.5 rounded-2xl bg-slate-50/70 dark:bg-white/[0.02] border border-slate-100/90 dark:border-white/5 transition-all">
+                                            <div className="flex items-center gap-3.5 min-w-0">
+                                                {/* Photorealistic ingredient photo container matching reference design */}
+                                                <div className="relative size-14 rounded-2xl bg-white dark:bg-[#1a232a] border border-slate-200/80 dark:border-white/10 shadow-sm flex items-center justify-center p-1 shrink-0 overflow-hidden group">
+                                                    <span className="absolute top-1 right-1.5 text-[10px] font-bold text-slate-400/90 dark:text-slate-500 leading-none select-none">
+                                                        +
+                                                    </span>
+                                                    <img 
+                                                        src={parsed.imageUrl} 
+                                                        alt={parsed.name} 
+                                                        className="size-11 object-contain drop-shadow-sm transition-transform duration-200 group-hover:scale-105"
+                                                        loading="lazy"
+                                                        onError={(e) => {
+                                                            (e.target as HTMLImageElement).src = 'https://www.themealdb.com/images/ingredients/Salt.png';
+                                                        }}
+                                                    />
+                                                </div>
+                                                <div className="truncate">
+                                                    <div className="text-sm font-bold text-slate-800 dark:text-slate-100 leading-snug truncate">
+                                                        {parsed.name}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            {parsed.amount && (
+                                                <div className="shrink-0 ml-3 bg-white dark:bg-[#1a232a] px-3 py-1.5 rounded-xl border border-slate-200/70 dark:border-white/10 text-xs font-black text-slate-700 dark:text-slate-200 shadow-sm whitespace-nowrap">
+                                                    {parsed.amount}
+                                                </div>
+                                            )}
                                         </div>
                                     );
                                 })
@@ -1265,28 +1341,63 @@ export default function RecipeDetails() {
                         </div>
                     </div>
 
-                    {/* Instructions */}
-                    <h3 className="text-xl font-black dark:text-white mb-4 uppercase tracking-tight">{t('instructions') || 'Instructions'}</h3>
-                    <div className="space-y-6 mb-20">
-                        {recipe.instructions && recipe.instructions.length > 0 ? (
-                            recipe.instructions.map((step: any, i: number) => {
-                                const stepText = typeof step === 'string' ? step : (step?.step || step?.instruction || String(step));
+                    {/* Steps */}
+                    {(() => {
+                        const totalMins = recipe.total_time_minutes || ((recipe.prep_time_minutes || 0) + (recipe.cook_time_minutes || 0)) || 40;
+                        const instructionsList = Array.isArray(recipe.instructions) ? recipe.instructions : [];
+                        const fallbackDurations = instructionsList.length > 0
+                            ? RecipeInstructionNormalizer.deriveStepDurations(instructionsList.length, totalMins, recipe.title)
+                            : [];
 
-                                return (
-                                    <div key={i} className="flex gap-4">
-                                        <div className="size-8 rounded-xl bg-vic-green/10 text-vic-green flex items-center justify-center font-black shrink-0">
-                                            {i + 1}
-                                        </div>
-                                        <p className="text-slate-600 dark:text-slate-400 leading-relaxed pt-1">
-                                            {stepText}
-                                        </p>
-                                    </div>
-                                );
-                            })
-                        ) : (
-                            <p className="text-sm text-slate-400 italic">No specific instructions listed for this meal.</p>
-                        )}
-                    </div>
+                        return (
+                            <>
+                                <div className="flex items-center justify-between mb-4">
+                                    <h3 className="text-xl font-black dark:text-white uppercase tracking-tight">{t('steps') || 'Steps'}</h3>
+                                    <span className="text-xs font-black text-vic-green uppercase tracking-widest bg-vic-green/10 px-3 py-1 rounded-full">
+                                        {totalMins} {t('minutes') || 'MIN'} TOTAL
+                                    </span>
+                                </div>
+                                <div className="space-y-4 mb-20">
+                                    {instructionsList.length > 0 ? (
+                                        instructionsList.map((step: any, i: number) => {
+                                            const stepText = typeof step === 'string' ? step : (step?.instruction || step?.step || String(step));
+                                            const detailed = Array.isArray(recipe.steps_detailed) ? recipe.steps_detailed[i] : null;
+                                            const stepTitle = detailed?.title || (typeof step === 'object' && step?.title ? step.title : RecipeInstructionNormalizer.deriveStepPhaseTitle(i, instructionsList.length));
+                                            const stepDuration = detailed?.duration_minutes || (typeof step === 'object' && step?.duration_minutes ? step.duration_minutes : fallbackDurations[i] || 1);
+
+                                            return (
+                                                <div key={i} className="p-4 rounded-3xl bg-white dark:bg-[#1f2c34] border border-slate-100 dark:border-white/5 shadow-sm flex gap-4 items-start">
+                                                    <div className="size-9 rounded-2xl bg-vic-green/15 text-vic-green font-black flex items-center justify-center shrink-0 text-sm">
+                                                        {i + 1}
+                                                    </div>
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="flex items-center justify-between gap-2 mb-1.5">
+                                                            {stepTitle && (
+                                                                <span className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-slate-200">
+                                                                    {stepTitle}
+                                                                </span>
+                                                            )}
+                                                            {stepDuration && (
+                                                                <span className="text-[11px] font-bold text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-white/5 px-2 py-0.5 rounded-lg shrink-0 flex items-center gap-1">
+                                                                    <Timer size={12} className="text-vic-green" />
+                                                                    {stepDuration} min
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed font-medium">
+                                                            {stepText}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })
+                                    ) : (
+                                        <p className="text-sm text-slate-400 italic">No specific instructions listed for this meal.</p>
+                                    )}
+                                </div>
+                            </>
+                        );
+                    })()}
                 </main>
             </div>
 
@@ -1299,8 +1410,13 @@ export default function RecipeDetails() {
                             <h2 className="text-vic-green font-black uppercase tracking-widest text-xs">{t('cooking_mode') || 'Cooking Mode'}</h2>
                             <p className="text-xl md:text-2xl font-black uppercase tracking-tighter truncate max-w-[250px]">{recipe.title}</p>
                         </div>
-                        <button onClick={() => { setIsVoiceMode(false); if(audioRef.current) audioRef.current.pause(); stopListening(); }} className="size-10 bg-slate-200 dark:bg-white/10 hover:bg-slate-300 dark:hover:bg-white/20 transition-colors rounded-full flex items-center justify-center shrink-0">
-                            <AlertCircle size={20} className="text-slate-600 dark:text-white" />
+                        <button 
+                            onClick={handleExitCookingMode} 
+                            className="size-10 bg-slate-200 dark:bg-white/10 hover:bg-slate-300 dark:hover:bg-white/20 transition-colors rounded-full flex items-center justify-center shrink-0"
+                            title="Exit Cooking Mode"
+                            aria-label="Exit Cooking Mode"
+                        >
+                            <X size={20} className="text-slate-600 dark:text-white" />
                         </button>
                     </div>
 
@@ -1442,19 +1558,8 @@ export default function RecipeDetails() {
                                     </div>
                                 )}
 
-                                {/* Centered Circular Capture Button & Audio Controls (No manual arrow navigation) */}
-                                <div className="flex items-center justify-center gap-6 px-4 py-1">
-                                    {/* Play / Pause Voice */}
-                                    <button 
-                                        type="button"
-                                        onClick={togglePlayback} 
-                                        className={`size-14 rounded-full flex items-center justify-center transition-all ${isSpeaking ? 'bg-white/20 text-white' : 'bg-white/10 text-slate-300 hover:text-white'}`}
-                                        title={isSpeaking ? 'Pause Chef' : 'Replay Chef'}
-                                    >
-                                        {isSpeaking ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" className="ml-0.5" />}
-                                    </button>
-
-                                    {/* Perfectly Centered Circular Capture Button */}
+                                {/* Perfectly Centered Circular Capture Button */}
+                                <div className="flex items-center justify-center py-2">
                                     <button 
                                         type="button"
                                         onClick={() => {
@@ -1469,14 +1574,6 @@ export default function RecipeDetails() {
                                             <Camera size={28} className="text-slate-900" />
                                         </div>
                                     </button>
-
-                                    {/* Mic Status Indicator / Toggle */}
-                                    <div 
-                                        className="size-14 rounded-full bg-white/10 flex items-center justify-center text-vic-green"
-                                        title="Microphone active"
-                                    >
-                                        <Mic size={22} className={isListening ? 'animate-pulse' : 'opacity-60'} />
-                                    </div>
                                 </div>
                             </div>
                         </div>

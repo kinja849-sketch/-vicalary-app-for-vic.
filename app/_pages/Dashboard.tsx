@@ -133,9 +133,9 @@ export default function Dashboard() {
 
   // Fetch suggestions
   const { data: suggestions } = useQuery({
-    queryKey: ['suggestions', user?.id, today],
+    queryKey: ['suggestions', user?.id || 'guest', today],
     queryFn: () => getDailyMealSuggestions(user?.id || ''),
-    enabled: !!user?.id,
+    enabled: true,
     staleTime: 1000 * 60 * 60, // 1 hour
     refetchOnWindowFocus: false,
     retry: 1

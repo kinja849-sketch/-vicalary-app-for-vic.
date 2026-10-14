@@ -383,5 +383,7 @@ export const en = {
     verified_local_price: "Verified Local Price",
     estimated_local_price: "Estimated Local Price",
     avoid_product_btn: "Avoid Product",
-    add_to_diary_btn: "Add to Diary"
+    add_to_diary_btn: "Add to Diary",
+    steps: "Steps",
+    history_of_the_meal: "History of the meal"
 };

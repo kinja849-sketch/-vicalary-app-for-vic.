@@ -19,6 +19,11 @@ import {
   splitIntoSpeechChunks,
   type SpeechEndResult,
 } from '@/lib/voice/VoiceTurnController';
+import {
+  getRoutineVoiceResponse,
+  getCachedAudioUrl,
+  setCachedAudioUrl,
+} from '@/lib/voice/VoiceResponseCache';
 const DEFAULT_COACH_VOICE = 'nova';
 
 interface AICoachVoiceModalProps {
@@ -336,6 +341,8 @@ export default function AICoachVoiceModal({
 
   // Fetch TTS audio blob as URL (using locked voice engine with Nova -> Aoede failover)
   const fetchTtsAudioUrl = useCallback(async (text: string, signal?: AbortSignal): Promise<string | null> => {
+    const cached = getCachedAudioUrl(text);
+    if (cached) return cached;
     if (Date.now() < ttsCooldownUntilRef.current) return null;
     try {
       const res = await fetch('/api/text-to-speech', {
@@ -354,7 +361,9 @@ export default function AICoachVoiceModal({
         return null;
       }
       const blob = await res.blob();
-      return URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
+      setCachedAudioUrl(text, url);
+      return url;
     } catch (e: any) {
       if (e?.name === 'AbortError') return null;
       ttsCooldownUntilRef.current = Date.now() + 30000;
@@ -593,6 +602,70 @@ export default function AICoachVoiceModal({
       content: cleanedText,
       created_at: new Date().toISOString(),
     });
+
+    // Fast-path routine response check (greetings, presence checks, thanks)
+    const routineFastReply = getRoutineVoiceResponse(cleanedText, 'coach');
+    if (routineFastReply) {
+      if (playerRef.current) {
+        playerRef.current.stop();
+        playerRef.current = null;
+      }
+
+      const reqStartTime = performance.now();
+      const player = new SequentialSpeechPlayer({
+        onFirstChunk: (info) => {
+          if (!turnHandle.isCurrent() || !isMountedRef.current) return;
+          const timeToFirstAudio = Math.round(performance.now() - reqStartTime);
+          updateVoiceState('speaking', 'SPEECH_CHUNK_FIRST');
+          setDebugHUD(prev => ({
+            ...prev,
+            apiStatus: '200 OK (FastPath)',
+            latencyMs: timeToFirstAudio,
+            audioStatus: info.textOnly ? 'Text Only' : 'Playing ⚡'
+          }));
+          chunkPlayingRef.current = !info.textOnly;
+          if (info.textOnly) {
+            toast.message('Voice unavailable - showing reply as text.');
+          }
+          if (isMountedRef.current && !isMutedRef.current) {
+            startListeningRef.current({ barge: true });
+          }
+        },
+        onProgress: (revealed) => {
+          if (!turnHandle.isCurrent() || !isMountedRef.current) return;
+          spokenTextRef.current = revealed;
+        },
+        onAudioElement: (audio) => {
+          currentAudioRef.current = audio;
+          attachAudioAnalyser(audio);
+        },
+        onEnd: (result) => {
+          if (!turnHandle.isCurrent()) return;
+          playerRef.current = null;
+          currentAudioRef.current = null;
+          chunkPlayingRef.current = false;
+          turnInProgressRef.current = false;
+          activeTurnIdRef.current = null;
+          sessionTurnsRef.current.push({
+            role: 'assistant',
+            content: result.deliveredText || routineFastReply.text,
+            created_at: new Date().toISOString(),
+          });
+          onTurnSpeechCompleted(turnId);
+        }
+      });
+
+      playerRef.current = player;
+      const chunks = splitIntoSpeechChunks(routineFastReply.text);
+      chunks.forEach(chunk => {
+        player.enqueue({
+          text: chunk,
+          fetchSrc: (sig) => fetchTtsAudioUrl(chunk, sig)
+        });
+      });
+      player.end();
+      return;
+    }
 
     try {
       supabase.from('messages').insert({

@@ -1,8 +1,5 @@
-/**
- * RecipeValidationGate
- * Clinical & dietary safety gate enforcing hard allergy exclusion,
- * preference validation, 7-day duplicate exclusion, and automated candidate replacement.
- */
+import { classifyHalal } from './recipes/HalalClassifier';
+
 
 export interface UserDietaryContext {
   allergies: string[];
@@ -164,6 +161,21 @@ export function validateCandidate(
     ...(dish.instructions || [])
   ].join(' ').toLowerCase();
 
+  // 0. Mandatory Halal Classification Gate (VicCalary Halal-Only Policy)
+  const halalCheck = classifyHalal({
+    title: dish.title || dish.name,
+    ingredients: dish.ingredients,
+    instructions: dish.instructions,
+    cuisine: dish.cuisine,
+  });
+
+  if (halalCheck.status !== 'HALAL_VERIFIED') {
+    return {
+      valid: false,
+      reason: `Halal Policy Exclusion (${halalCheck.status}): ${halalCheck.reasons.join('; ')}`
+    };
+  }
+
   // 1. Deep Allergy Scan (Hard Constraint)
   for (const allergy of context.allergies) {
     const cleanAllergy = allergy.toLowerCase().trim();
@@ -188,15 +200,7 @@ export function validateCandidate(
     }
   }
 
-  // 2. Dietary Lifestyle Scan (e.g. Vegetarian / Vegan / Halal)
-  const isHalal = context.dietaryLifestyle.some(d => d.toLowerCase().includes('halal'));
-  if (isHalal) {
-    for (const kw of ALLERGEN_KEYWORD_MAP.pork) {
-      if (dishText.includes(kw)) {
-        return { valid: false, reason: `Contains non-Halal ingredient: "${kw}"` };
-      }
-    }
-  }
+  // 2. Dietary Lifestyle Scan (e.g. Vegetarian / Vegan)
 
   const isVegetarian = context.dietaryLifestyle.some(d => d.toLowerCase().includes('vegetarian'));
   const isVegan = context.dietaryLifestyle.some(d => d.toLowerCase().includes('vegan'));

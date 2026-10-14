@@ -480,21 +480,21 @@ export interface SpeechListenerOptions {
 
 export function computeSpeechCommitDelay(text: string, isFinal: boolean, baseCommitMs?: number): number {
   const trimmed = text.trim();
-  if (!trimmed) return 1000;
+  if (!trimmed) return 600;
 
   // Words that indicate the speaker is in the middle of a clause or thought:
   const trailingIncomplete = /\b(and|or|but|so|because|to|for|with|about|in|on|at|of|can i|should i|could i|what if|what about|how do i|if|when|that|which|is|are|was|were|a|an|the)$/i;
   if (trailingIncomplete.test(trimmed)) {
-    return 1800; // Generous 1.8s pause window so user can finish their clause without being cut off
+    return 1500; // Allow comfortable 1.5s pause window when user is mid-clause
   }
 
   if (!isFinal) {
-    // User is actively streaming interim words; allow comfortable pause (1.3s) for breathing/thinking
-    return Math.max(baseCommitMs ?? 1300, 1300);
+    // User is actively streaming interim words; 950ms allows breathing without excessive waiting
+    return Math.max(baseCommitMs ?? 950, 950);
   }
 
-  // Browser speech recognition finalized the utterance; snappy transition (750ms)
-  return baseCommitMs ? Math.min(baseCommitMs, 850) : 750;
+  // Browser speech recognition finalized the utterance; immediate conversational response (380-450ms)
+  return baseCommitMs ? Math.min(baseCommitMs, 450) : 380;
 }
 
 export function getSpeechRecognitionCtor(): any {

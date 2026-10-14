@@ -384,5 +384,7 @@ export const id = {
     verified_local_price: "Harga Lokal Terverifikasi",
     estimated_local_price: "Estimasi Harga Lokal",
     avoid_product_btn: "Hindari Produk",
-    add_to_diary_btn: "Tambah ke Buku Harian"
+    add_to_diary_btn: "Tambah ke Buku Harian",
+    steps: "Langkah",
+    history_of_the_meal: "Sejarah Makanan"
 };

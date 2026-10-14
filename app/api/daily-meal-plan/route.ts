@@ -1,171 +1,291 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServerSupabaseClient, createAdminSupabaseClient } from '@/lib/supabase-server';
-import { recipeProvider } from '@/lib/services/RecipeProviderService';
-import { callChatCompletionWithFallback } from '@/lib/ai/ai-fallback';
-import { resolveUserLanguage, buildAILanguageDirective } from '@/lib/api/serverLanguage';
+import { createAdminSupabaseClient } from '@/lib/supabase-server';
+import { loadUserProfileContext, UserProfileContext } from '@/lib/services/ai/ContextAssembler';
+import { CuratedRecipeProvider } from '@/lib/services/recipes/CuratedRecipeProvider';
+import { classifyHalal } from '@/lib/services/recipes/HalalClassifier';
+import { checkAllergensAndDislikes } from '@/lib/services/recipes/AllergenMatcher';
+import { validateMealCategory } from '@/lib/services/recipes/MealCategoryValidator';
+import { RecipeDeduplicator } from '@/lib/services/recipes/RecipeDeduplicator';
+import { rankRecipesForUser, UserRankingContext } from '@/lib/services/recipes/GoalOrientedRanker';
+import { AuthoritativeRecipe, MealCategory } from '@/lib/services/recipes/RecipeProvider';
 
-const CATEGORIES = ['breakfast', 'lunch', 'dinner', 'snacks', 'drinks', 'desserts'];
+const CATEGORIES: MealCategory[] = ['breakfast', 'lunch', 'dinner', 'snack', 'drink', 'dessert'];
+const curatedProvider = new CuratedRecipeProvider();
 
-export async function POST(req: NextRequest) {
+async function handleMealPlanRequest(userId?: string, forceRefresh?: boolean) {
   try {
-    const { userId, locationContext, localHour, forceRefresh, language } = await req.json();
-    
-    // 1. Fetch User Profile & Constraints
     const supabase = createAdminSupabaseClient();
-    const resolvedLang = await resolveUserLanguage({
-      userId,
-      requestLanguage: language,
-      locationContext,
-      supabase,
-    });
-
-    let allergies = [];
-    let intolerances = [];
-    let calorieTarget = 2000;
-    
-    if (userId) {
-      const { data: profile } = await supabase.from('user_profiles').select('*').eq('user_id', userId).single();
-      const { data: onboarding } = await supabase.from('onboarding_responses').select('*').eq('user_id', userId).single();
-      if (onboarding?.allergies) allergies = Array.isArray(onboarding.allergies) ? onboarding.allergies : [onboarding.allergies];
-      if (onboarding?.dietary_preference) intolerances = Array.isArray(onboarding.dietary_preference) ? onboarding.dietary_preference : [onboarding.dietary_preference];
-      // simplified calorie target
-    }
-
-    // 2. AI orchestration: Generate search constraints
-    // (In a full implementation, AI would generate dynamic parameters based on user history, but we'll use a fixed AI prompt for now)
-    
-    const aiPrompt = `
-    You are a meal planner orchestrator.
-    User Allergies: ${allergies.join(', ') || 'None'}
-    User Intolerances: ${intolerances.join(', ') || 'None'}
-    Target Calories: ${calorieTarget}
-    
-    Generate search parameters for each meal category.
-    Use one of the following main ingredient keywords for Lunch/Dinner: Chicken, Beef, Seafood, Vegetarian, Vegan.
-    Respond with JSON:
-    {
-      "breakfast": { "query": "Breakfast", "maxCalories": 400 },
-      "lunch": { "query": "Chicken", "maxCalories": 600 },
-      "dinner": { "query": "Seafood", "maxCalories": 500 },
-      "snacks": { "query": "Snack", "maxCalories": 200 },
-      "drinks": { "query": "Drink", "maxCalories": 150 },
-      "desserts": { "query": "Dessert", "maxCalories": 250 }
-    }
-    `;
-
-    const aiRes = await callChatCompletionWithFallback({
-      model: "gpt-4o",
-      response_format: { type: "json_object" },
-      messages: [{ role: "user", content: aiPrompt }]
-    });
-
-    const aiParams = JSON.parse(aiRes.choices[0]?.message?.content || "{}");
-
-    // 3. Fetch from API Provider & 4. Validation Gate
-    const responsePayload: Record<string, any[]> = {};
-    const recipesToUpsert: any[] = [];
     const todayIso = new Date().toISOString().split('T')[0];
 
-    for (const cat of CATEGORIES) {
-      const params = aiParams[cat] || { query: cat, maxCalories: 500 };
-      
-      // Request 15 to account for backend allergy filtering dropping some
-      const recipes = await recipeProvider.searchRecipes({
-        query: params.query,
-        number: 15,
-        maxCalories: params.maxCalories,
-        type: cat === 'drinks' ? 'beverage' : cat
-      });
+    // 1. Fetch User Profile & Onboarding Context
+    let userContext: UserProfileContext | null = null;
+    let favoriteIds = new Set<string>();
 
-      // Backend Safety Validation Gate
-      // 1. Must have an image
-      // 2. Must not contain allergies in ingredients (simple string match for now)
-      const validRecipes = recipes.filter(r => {
-        if (!r.image_url || r.image_url.includes('unsplash')) return false;
-        
-        const hasAllergy = allergies.some(allergy => {
-          return r.ingredients.some(ing => (ing.item || '').toLowerCase().includes(allergy.toLowerCase()));
-        });
-        
-        if (hasAllergy) return false;
-        
-        return true;
-      }).slice(0, 12);
+    if (userId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
+      userContext = await loadUserProfileContext(supabase, userId);
 
-      // Prepare for client payload - preserve ingredients, instructions, and full macros
-      responsePayload[cat] = validRecipes.map(r => ({
-        id: r.external_id,
-        external_id: r.external_id,
-        title: r.title,
-        image_url: r.image_url,
-        calories: r.total_calories,
-        total_calories: r.total_calories,
-        protein: r.protein_g,
-        protein_g: r.protein_g,
-        carbs: r.carbs_g,
-        carbs_g: r.carbs_g,
-        fat: r.fat_g,
-        fat_g: r.fat_g,
-        ingredients: r.ingredients || [],
-        instructions: r.instructions || [],
-        cuisine: r.cuisine_type || 'International',
-        cuisine_type: r.cuisine_type || 'International',
-        subtitle: `${r.total_calories} kcal`
-      }));
-      
-      // Collect for DB persist
-      recipesToUpsert.push(...validRecipes);
+      // Fetch user's favorited recipe IDs to enable safe favorites affinity boost
+      try {
+        const { data: favs } = await supabase
+          .from('user_recipe_interactions')
+          .select('recipe_id')
+          .eq('user_id', userId)
+          .eq('interaction_type', 'favorited');
+        if (favs) {
+          favs.forEach((f: any) => {
+            if (f.recipe_id) favoriteIds.add(String(f.recipe_id));
+          });
+        }
+      } catch (favErr) {
+        console.warn('[daily-meal-plan] Could not load favorites:', favErr);
+      }
     }
 
-    // 5. Database Persistence
+    // Default safe profile context if unauthenticated / guest preview
+    const allergies = userContext?.allergies || [];
+    const dislikes = userContext?.likedFoods ? [] : (userContext as any)?.dislikes || [];
+    const goal = userContext?.goal || 'General Health';
+    const dailyCalorieGoal = userContext?.dailyCalorieGoal || 2000;
+    const preferredCuisines = userContext?.preferredCuisines || [];
+    const likedFoods = userContext?.likedFoods || [];
+    const medicalConditions = userContext?.medicalConditions || [];
+
+    const rankingContext: UserRankingContext = {
+      userId,
+      goal,
+      dailyCalorieGoal,
+      activityLevel: userContext?.activityLevel,
+      preferredCuisines,
+      likedFoods,
+      dislikedFoods: dislikes,
+      allergies,
+      medicalConditions,
+      dietaryLifestyle: userContext?.dietaryPreference ? [userContext.dietaryPreference] : ['Halal'],
+      favoriteRecipeIds: favoriteIds
+    };
+
+    // 2. Fetch Candidates across Curated Halal Catalog & Supabase Recipes Database
+    const curatedCandidates = await curatedProvider.searchRecipes({ meal_category: 'lunch' }); // pulls catalog
+    
+    // Query database recipes (up to 300 candidates with verified images and ingredients)
+    let dbCandidates: AuthoritativeRecipe[] = [];
+    try {
+      const { data: dbRows } = await supabase
+        .from('recipes')
+        .select('*')
+        .not('image_url', 'is', null)
+        .limit(200);
+
+      if (dbRows && Array.isArray(dbRows)) {
+        dbCandidates = dbRows.map((r: any) => {
+          let ingList = r.ingredients;
+          if (typeof ingList === 'string') {
+            try { ingList = JSON.parse(ingList); } catch { ingList = []; }
+          }
+          let instList = r.instructions;
+          if (typeof instList === 'string') {
+            try { instList = JSON.parse(instList); } catch { instList = []; }
+          }
+          const tags = Array.isArray(r.dietary_tags) ? r.dietary_tags : [];
+
+          // Infer meal category based on tags or title if not explicitly set
+          const titleLower = (r.title || '').toLowerCase();
+          let category: MealCategory = 'lunch';
+          if (titleLower.includes('oat') || titleLower.includes('pancake') || titleLower.includes('omelet') || titleLower.includes('breakfast') || titleLower.includes('bubur')) {
+            category = 'breakfast';
+          } else if (titleLower.includes('soup') || titleLower.includes('sup') || titleLower.includes('salad') || titleLower.includes('dinner')) {
+            category = 'dinner';
+          } else if (titleLower.includes('smoothie') || titleLower.includes('juice') || titleLower.includes('tea') || titleLower.includes('drink')) {
+            category = 'drink';
+          } else if (titleLower.includes('dessert') || titleLower.includes('pudding') || titleLower.includes('puding')) {
+            category = 'dessert';
+          } else if (titleLower.includes('snack') || titleLower.includes('bites') || titleLower.includes('edamame')) {
+            category = 'snack';
+          }
+
+          return {
+            id: r.id,
+            external_id: r.external_id || String(r.id),
+            provider: r.provider || 'internal',
+            title: r.title,
+            image_url: r.image_url,
+            meal_category: category,
+            cuisine: r.cuisine_type || 'International',
+            prep_time_minutes: Number(r.prep_time_minutes || 15),
+            cook_time_minutes: Number(r.cook_time_minutes || 15),
+            servings: 1,
+            ingredients: Array.isArray(ingList) ? ingList : [],
+            instructions: Array.isArray(instList) ? instList : [],
+            nutrition: {
+              calories: Number(r.total_calories || 0),
+              protein_g: Number(r.protein_g || 0),
+              carbs_g: Number(r.carbs_g || 0),
+              fat_g: Number(r.fat_g || 0)
+            },
+            dietary_tags: tags
+          };
+        });
+      }
+    } catch (dbErr) {
+      console.warn('[daily-meal-plan] Could not query database recipes:', dbErr);
+    }
+
+    // Combine candidate pools
+    const allCandidates = [...curatedCandidates, ...dbCandidates];
+
+    // 3. Process each category through Deterministic Halal, Safety & Ranking gates
+    const responsePayload: Record<string, any[]> = {};
+    const deduplicator = new RecipeDeduplicator();
+    const recipesToUpsert: AuthoritativeRecipe[] = [];
+
+    for (const cat of CATEGORIES) {
+      // Filter candidates for this category
+      const categoryCandidates = allCandidates.filter(c => {
+        const catMatch = c.meal_category === cat || (cat === 'snack' && c.meal_category === 'snack');
+        return catMatch;
+      });
+
+      // Also allow curated items of the exact category
+      const curatedForCat = curatedCandidates.filter(c => c.meal_category === cat);
+      const combinedPool = Array.from(new Set([...categoryCandidates, ...curatedForCat]));
+
+      const eligibleRecipes: AuthoritativeRecipe[] = [];
+
+      for (const candidate of combinedPool) {
+        // --- GATE 1: HALAL POLICY CHECK (Zero-Tolerance) ---
+        const halalEval = classifyHalal({
+          title: candidate.title,
+          ingredients: candidate.ingredients,
+          instructions: candidate.instructions,
+          cuisine: candidate.cuisine,
+          provider: candidate.provider,
+          dietary_tags: candidate.dietary_tags
+        });
+
+        if (halalEval.status !== 'HALAL_VERIFIED') {
+          continue; // Strictly reject HARAM_DETECTED and HALAL_UNVERIFIED
+        }
+
+        // --- GATE 2: CLINICAL ALLERGY & DISLIKES GATE ---
+        const allergyEval = checkAllergensAndDislikes(candidate, allergies, dislikes);
+        if (!allergyEval.safe) {
+          continue; // Strictly reject allergens and stated dislikes
+        }
+
+        // --- GATE 3: MEAL CATEGORY INTEGRITY ---
+        const categoryEval = validateMealCategory(candidate, cat);
+        if (!categoryEval.valid) {
+          continue; // Strictly reject misplaced categories (e.g. dessert as breakfast)
+        }
+
+        // --- GATE 4: NUTRITIONAL INTEGRITY (No Zero or Missing Calories) ---
+        const cals = candidate.nutrition?.calories || candidate.total_calories || 0;
+        if (!cals || cals <= 0) {
+          continue; // Zero hallucination: do not invent fake calories
+        }
+
+        // --- GATE 5: DEDUPLICATION ---
+        const dupCheck = deduplicator.isDuplicate(candidate);
+        if (dupCheck.duplicate) {
+          continue;
+        }
+
+        deduplicator.register(candidate);
+        eligibleRecipes.push(candidate);
+      }
+
+      // --- GATE 6: GOAL-ORIENTED NUTRITIONAL RANKING ---
+      const ranked = rankRecipesForUser(eligibleRecipes, rankingContext, cat, 12);
+
+      // Map to contract expected by frontend
+      const mappedPayload = ranked.map(r => ({
+        id: r.id || r.external_id,
+        external_id: r.external_id,
+        title: r.title,
+        name: r.title,
+        image_url: r.image_url,
+        image: r.image_url,
+        calories: r.nutrition?.calories || r.total_calories || 0,
+        total_calories: r.nutrition?.calories || r.total_calories || 0,
+        protein: r.nutrition?.protein_g || r.protein_g || 0,
+        protein_g: r.nutrition?.protein_g || r.protein_g || 0,
+        carbs: r.nutrition?.carbs_g || r.carbs_g || 0,
+        carbs_g: r.nutrition?.carbs_g || r.carbs_g || 0,
+        fat: r.nutrition?.fat_g || r.fat_g || 0,
+        fat_g: r.nutrition?.fat_g || r.fat_g || 0,
+        ingredients: r.ingredients || [],
+        instructions: r.instructions || [],
+        cuisine: r.cuisine || 'Indonesian',
+        cuisine_type: r.cuisine || 'Indonesian',
+        meal_type: cat,
+        subtitle: `${r.nutrition?.calories || r.total_calories || 0} kcal`,
+        clinical_justification: r.clinical_justification || 'Personalized for your nutritional objective.'
+      }));
+
+      // Store in response payload (map snack -> snacks, drink -> drinks, dessert -> desserts for legacy compatibility)
+      const key = cat === 'snack' ? 'snacks' : cat === 'drink' ? 'drinks' : cat === 'dessert' ? 'desserts' : cat;
+      responsePayload[key] = mappedPayload;
+
+      recipesToUpsert.push(...ranked);
+    }
+
+    // 4. Persistence to Supabase
     if (recipesToUpsert.length > 0) {
-      const mappedForRecipesTable = recipesToUpsert.map(r => ({
+      const dbMapped = recipesToUpsert.map(r => ({
         external_id: r.external_id,
         title: r.title,
         image_url: r.image_url,
         ingredients: r.ingredients || [],
         instructions: r.instructions || [],
-        total_calories: r.total_calories,
-        protein_g: r.protein_g,
-        carbs_g: r.carbs_g,
-        fat_g: r.fat_g,
-        cuisine_type: r.cuisine_type,
-        provider: r.provider
+        total_calories: r.nutrition?.calories || r.total_calories || 0,
+        protein_g: r.nutrition?.protein_g || r.protein_g || 0,
+        carbs_g: r.nutrition?.carbs_g || r.carbs_g || 0,
+        fat_g: r.nutrition?.fat_g || r.fat_g || 0,
+        cuisine_type: r.cuisine || 'Indonesian',
+        provider: r.provider || 'curated'
       }));
 
-      // Upsert Recipes (on conflict external_id, preserve existing or update missing)
-      const { error: upsertErr } = await supabase
-        .from('recipes')
-        .upsert(mappedForRecipesTable, { onConflict: 'external_id' });
+      try {
+        await supabase.from('recipes').upsert(dbMapped, { onConflict: 'external_id' });
+      } catch (upsertErr) {
+        console.warn('[daily-meal-plan] Recipe upsert notice:', upsertErr);
+      }
 
-      if (upsertErr) console.error("Recipe Upsert Error:", upsertErr);
-
-      // Save Daily Plan
+      // 5. Cache Daily Plan with User Constraint Fingerprint
       if (userId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
-        
-        // We must map the IDs returned to the client to the newly created UUIDs, 
-        // but for now we'll just save the external references to the daily plan JSONB.
-        
-        const { error: planErr } = await supabase.from('user_daily_meal_plans').upsert({
-          user_id: userId,
-          plan_date: todayIso,
-          breakfast: responsePayload.breakfast,
-          lunch: responsePayload.lunch,
-          dinner: responsePayload.dinner,
-          snacks: responsePayload.snacks,
-          drinks: responsePayload.drinks,
-          desserts: responsePayload.desserts,
-          updated_at: new Date().toISOString()
-        }, { onConflict: 'user_id,plan_date' });
-        
-        if (planErr) console.error("Plan Upsert Error:", planErr);
+        try {
+          await supabase.from('user_daily_meal_plans').upsert({
+            user_id: userId,
+            plan_date: todayIso,
+            breakfast: responsePayload.breakfast || [],
+            lunch: responsePayload.lunch || [],
+            dinner: responsePayload.dinner || [],
+            snacks: responsePayload.snacks || [],
+            drinks: responsePayload.drinks || [],
+            desserts: responsePayload.desserts || [],
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'user_id,plan_date' });
+        } catch (planErr) {
+          console.warn('[daily-meal-plan] Plan cache notice:', planErr);
+        }
       }
     }
 
     return NextResponse.json(responsePayload);
 
   } catch (error: any) {
-    console.error('daily-meal-plan Error:', error);
+    console.error('[daily-meal-plan] Error generating meal plan:', error);
     return NextResponse.json({ error: error.message || 'Failed to generate meal plan' }, { status: 500 });
   }
+}
+
+export async function POST(req: NextRequest) {
+  const body = await req.json().catch(() => ({}));
+  return handleMealPlanRequest(body.userId, body.forceRefresh);
+}
+
+export async function GET(req: NextRequest) {
+  const userId = req.nextUrl.searchParams.get('userId') || undefined;
+  const forceRefresh = req.nextUrl.searchParams.get('forceRefresh') === 'true';
+  return handleMealPlanRequest(userId, forceRefresh);
 }
