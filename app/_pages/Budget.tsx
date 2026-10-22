@@ -6,26 +6,36 @@ import { useCurrency } from "@/lib/CurrencyContext";
 import { getBudgetStatus } from "@/lib/api/budget";
 import { useTranslation } from "@/lib/api/translation";
 import { ArrowLeft, Wallet, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp } from "lucide-react";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { useRouter } from "next/navigation";
 
 // Zero-decimal currencies that should not show fractional amounts
 const ZERO_DECIMAL_CURRENCIES = ['IDR', 'JPY', 'KRW', 'VND', 'CLP', 'HUF'];
 
 export default function Budget() {
+    const router = useRouter();
     const { user } = useAuth();
     const { t } = useTranslation();
     const { currencyCode: clientCurrency, countryCode: clientCountry } = useCurrency();
     const [showDiagnostics, setShowDiagnostics] = useState(false);
 
     // Fetch active budget using deterministic BudgetEngine
-    const { data: activeBudget, isLoading: budgetLoading, isError } = useQuery({
+    const { data: activeBudget, isLoading: budgetLoading, isError, refetch } = useQuery({
         queryKey: ['active-budget', user?.id, clientCurrency],
         queryFn: () => getBudgetStatus(user!.id, clientCurrency, clientCountry),
         enabled: !!user?.id,
         retry: false,
         staleTime: 0,          // Always re-fetch on mount to get fresh data
+        gcTime: 0,             // Prevent keeping stale cached data between navigations
         refetchOnMount: 'always',
+        refetchOnWindowFocus: true,
     });
+
+    // Ensure App Router cache does not serve stale pages on client navigation
+    useEffect(() => {
+        router.refresh();
+        refetch();
+    }, [router, refetch]);
 
     /**
      * Format currency using the API-returned currency code (authoritative).

@@ -8,16 +8,19 @@ export const getBudgetStatus = async (userId: string, clientCurrency?: string, c
     const { data: { session } } = await supabase.auth.getSession();
     
     const headers: Record<string, string> = {
-        'Authorization': session ? `Bearer ${session.access_token}` : ''
+        'Authorization': session ? `Bearer ${session.access_token}` : '',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache'
     };
     if (clientCurrency) headers['x-user-currency'] = clientCurrency;
     if (clientCountry) headers['x-user-country'] = clientCountry;
 
     // In V2 Architecture, the backend's deterministic BudgetEngine is responsible for
     // returning the daily budget status, fetching from user_budget_profiles and financial_transactions.
-    const res = await fetch(`/api/budget/daily?userId=${encodeURIComponent(userId)}`, {
+    const res = await fetch(`/api/budget/daily?userId=${encodeURIComponent(userId)}&_t=${Date.now()}`, {
         method: 'GET',
-        headers
+        headers,
+        cache: 'no-store'
     });
     
     if (!res.ok) {

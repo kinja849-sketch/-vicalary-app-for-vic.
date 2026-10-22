@@ -218,16 +218,17 @@ export function ProductDetails({
 
       // save with isPurchaseConfirmed = true -> creates financial_transactions and budget_transactions entries
       await saveFoodAnalysis(user.id, analysisToSave, true);
-      await queryClient.invalidateQueries({ queryKey: ['active-budget'] });
-      await queryClient.invalidateQueries({ queryKey: ['budget'] });
-      await queryClient.invalidateQueries({ queryKey: ['financial-transactions'] });
+      await queryClient.invalidateQueries({ queryKey: ['active-budget'], refetchType: 'all' });
+      await queryClient.resetQueries({ queryKey: ['active-budget'] });
+      await queryClient.invalidateQueries({ queryKey: ['budget'], refetchType: 'all' });
+      await queryClient.invalidateQueries({ queryKey: ['financial-transactions'], refetchType: 'all' });
       await queryClient.invalidateQueries({ queryKey: ['daily-progress'] });
       await queryClient.invalidateQueries({ queryKey: ['progress'] });
       await queryClient.invalidateQueries({ queryKey: ['food-history'] });
-      await queryClient.refetchQueries({ queryKey: ['active-budget'] });
 
       toast.success(`${productName} logged! Deducted from your daily food budget.`);
 
+      router.refresh();
       router.push("/budget");
     } catch (err: any) {
       console.error("Log error:", err);

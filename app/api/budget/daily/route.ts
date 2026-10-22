@@ -4,6 +4,7 @@ import { BudgetEngine } from '@/lib/financial/BudgetEngine';
 import { BudgetNormalizationService } from '@/lib/financial/BudgetNormalizationService';
 import type { GeoContext } from '@/lib/financial/BudgetNormalizationService';
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 export async function GET(request: Request) {
     try {
@@ -118,8 +119,14 @@ export async function GET(request: Request) {
         // ── Calculate budget using the full geo context ──
         const summary = await BudgetEngine.calculateBudgetStatus(user.id, geo);
         
+        const noCacheHeaders = {
+            'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+            'Pragma': 'no-cache',
+            'Expires': '0',
+        };
+
         if (!summary) {
-             return NextResponse.json({ success: true, needs_setup: true, summary: null });
+             return NextResponse.json({ success: true, needs_setup: true, summary: null }, { headers: noCacheHeaders });
         }
 
         // Strip diagnostics in production
@@ -128,10 +135,16 @@ export async function GET(request: Request) {
             delete responseData.diagnostics;
         }
 
-        return NextResponse.json({ success: true, summary: responseData });
+        return NextResponse.json({ success: true, summary: responseData }, { headers: noCacheHeaders });
 
     } catch (err: any) {
         console.error("Budget engine daily route error:", err);
-        return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+        return NextResponse.json({ success: false, error: err.message }, { 
+            status: 500,
+            headers: {
+                'Cache-Control': 'no-store, no-cache, must-revalidate',
+                'Pragma': 'no-cache'
+            }
+        });
     }
 }
