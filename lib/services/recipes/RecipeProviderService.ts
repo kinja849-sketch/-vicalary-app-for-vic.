@@ -1,14 +1,33 @@
-﻿import { AuthoritativeRecipe, RecipeProvider, RecipeSearchCriteria } from './RecipeProvider';
-import { SpoonacularRecipeProvider } from './SpoonacularRecipeProvider';
+import { AuthoritativeRecipe, MealCategory, RecipeProvider, RecipeSearchCriteria } from './RecipeProvider';
+import { TheMealDBRecipeProvider } from './TheMealDBRecipeProvider';
 import { CuratedRecipeProvider } from './CuratedRecipeProvider';
+
+export interface NormalizedRecipe {
+  id: string;
+  externalId: string;
+  sourceProvider: 'curated' | 'themealdb' | 'database';
+  title: string;
+  imageUrl: string;
+  category: MealCategory;
+  cuisine: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  prepTime: number;
+  servings: number;
+  ingredients: string[];
+  instructions: string[];
+  halalStatus: 'HALAL_VERIFIED' | 'HARAM_DETECTED' | 'HALAL_UNVERIFIED';
+}
 
 export class RecipeProviderService {
   private static instance: RecipeProviderService;
   private providers: RecipeProvider[] = [];
 
   private constructor() {
-    this.providers.push(new SpoonacularRecipeProvider());
     this.providers.push(new CuratedRecipeProvider());
+    this.providers.push(new TheMealDBRecipeProvider());
   }
 
   public static getInstance(): RecipeProviderService {
@@ -19,7 +38,7 @@ export class RecipeProviderService {
   }
 
   /**
-   * Searches recipes across active providers with fallback support.
+   * Searches recipes across active providers (Curated Halal Catalog + TheMealDB).
    */
   public async searchRecipes(criteria: RecipeSearchCriteria): Promise<AuthoritativeRecipe[]> {
     const combined: AuthoritativeRecipe[] = [];
@@ -53,3 +72,5 @@ export class RecipeProviderService {
     return null;
   }
 }
+
+export type { RecipeProvider };

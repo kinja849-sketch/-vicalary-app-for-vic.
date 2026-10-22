@@ -1,4 +1,4 @@
-﻿import { AuthoritativeRecipe, Ingredient, Instruction, MealCategory, Nutrition } from './RecipeProvider';
+import { AuthoritativeRecipe, Ingredient, Instruction, MealCategory, Nutrition } from './RecipeProvider';
 
 export function normalizeRecipePayload(raw: any, defaultCategory: MealCategory = 'lunch', provider = 'spoonacular'): AuthoritativeRecipe {
   // 1. Ingredients normalization
@@ -49,33 +49,38 @@ export function normalizeRecipePayload(raw: any, defaultCategory: MealCategory =
     });
   }
 
-  // 3. Nutrition normalization
-  const calories = raw.nutrition?.calories || raw.calories || raw.total_calories || (raw.nutrition?.nutrients?.find((n: any) => n.name === 'Calories')?.amount) || 400;
-  const protein_g = raw.nutrition?.protein || raw.protein_g || (raw.nutrition?.nutrients?.find((n: any) => n.name === 'Protein')?.amount) || 20;
-  const carbs_g = raw.nutrition?.carbs || raw.carbs_g || (raw.nutrition?.nutrients?.find((n: any) => n.name === 'Carbohydrates')?.amount) || 30;
-  const fat_g = raw.nutrition?.fat || raw.fat_g || (raw.nutrition?.nutrients?.find((n: any) => n.name === 'Fat')?.amount) || 10;
+  // 3. Nutrition normalization (zero-hallucination: never invent default calories/macros)
+  const calories = raw.nutrition?.calories ?? raw.calories ?? raw.total_calories ?? (raw.nutrition?.nutrients?.find((n: any) => n.name === 'Calories')?.amount) ?? 0;
+  const protein_g = raw.nutrition?.protein ?? raw.protein_g ?? (raw.nutrition?.nutrients?.find((n: any) => n.name === 'Protein')?.amount) ?? 0;
+  const carbs_g = raw.nutrition?.carbs ?? raw.carbs_g ?? (raw.nutrition?.nutrients?.find((n: any) => n.name === 'Carbohydrates')?.amount) ?? 0;
+  const fat_g = raw.nutrition?.fat ?? raw.fat_g ?? (raw.nutrition?.nutrients?.find((n: any) => n.name === 'Fat')?.amount) ?? 0;
 
   const nutrition: Nutrition = {
-    calories: Math.round(Number(calories)),
-    protein_g: Math.round(Number(protein_g)),
-    carbs_g: Math.round(Number(carbs_g)),
-    fat_g: Math.round(Number(fat_g))
+    calories: Math.round(Number(calories) || 0),
+    protein_g: Math.round(Number(protein_g) || 0),
+    carbs_g: Math.round(Number(carbs_g) || 0),
+    fat_g: Math.round(Number(fat_g) || 0)
   };
+
+  const rawExtId = String(raw.external_id || raw.id || `rec_${Date.now()}`);
+  const externalId = provider === 'spoonacular' && !rawExtId.startsWith('spoonacular_')
+    ? `spoonacular_${rawExtId}`
+    : rawExtId;
 
   return {
     id: raw.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw.id) ? raw.id : undefined,
-    external_id: String(raw.external_id || raw.id || `rec_${Date.now()}`),
+    external_id: externalId,
     provider,
     title: raw.title || raw.name || 'Untitled Dish',
     description: raw.description || raw.summary || '',
     image_url: raw.image || raw.image_url || raw.strMealThumb || '',
     meal_category: raw.meal_category || defaultCategory,
-    cuisine: raw.cuisine || raw.cuisine_type || raw.strArea || 'International',
+    cuisine: raw.cuisine || (Array.isArray(raw.cuisines) && raw.cuisines[0]) || raw.cuisine_type || raw.strArea || 'International',
     prep_time_minutes: Number(raw.readyInMinutes || raw.prep_time_minutes || 15),
     cook_time_minutes: Number(raw.cook_time_minutes || 15),
     servings: Number(raw.servings || 2),
     ingredients,
-    instructions: instructions.length > 0 ? instructions : [{ step: 1, instruction: 'Prepare ingredients and cook until done.' }],
+    instructions,
     nutrition,
     dietary_tags: Array.isArray(raw.dietary_tags) ? raw.dietary_tags : (raw.diets || []),
     clinical_justification: raw.clinical_justification || ''

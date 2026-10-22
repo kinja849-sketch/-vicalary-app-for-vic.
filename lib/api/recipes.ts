@@ -1,5 +1,9 @@
 import { supabase } from '../supabase'
 import { RecipeInstructionNormalizer } from '../services/recipes/RecipeInstructionNormalizer'
+import { parseAllergyTokens, checkAllergensAndDislikes } from '../services/recipes/AllergenMatcher'
+import { passesDietaryAndPracticalityGate } from '../services/recipes/GoalOrientedRanker'
+import { isBrokenImageUrl, getCanonicalImageKey } from '../services/FoodImageService'
+import { getMealSessionFromHour, getUserLocalHour } from '../utils/mealSession'
 
 // ============================================================================
 // HELPERS for External API mapping
@@ -114,15 +118,27 @@ export const getRecipes = async (filters?: {
     return data
 }
 
-export const getRecipeDetails = async (recipeId: string | number) => {
+export const getRecipeDetails = async (recipeId: string | number, userId?: string) => {
     const rawId = String(recipeId || '').trim();
     if (!rawId) throw new Error("Recipe ID is required");
+
+    let resolvedUserId = userId;
+    if (!resolvedUserId) {
+        try {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session?.user?.id) {
+                resolvedUserId = session.user.id;
+            }
+        } catch {
+            // Ignore client session error
+        }
+    }
 
     try {
         const res = await fetch('/api/recipe-details', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: rawId })
+            body: JSON.stringify({ id: rawId, userId: resolvedUserId })
         });
         const data = await res.json();
         if (!res.ok || data.error) throw new Error(data?.error || "Failed to fetch details");
@@ -186,12 +202,21 @@ export const getRecipeDetails = async (recipeId: string | number) => {
     }
 }
 
-export const searchRecipes = async (searchTerm: string) => {
+export const searchRecipes = async (searchTerm: string, userId?: string) => {
     try {
+        let resolvedUserId = userId;
+        if (!resolvedUserId) {
+            try {
+                const { data: sessionData } = await supabase.auth.getSession();
+                resolvedUserId = sessionData?.session?.user?.id;
+            } catch {
+                // ignore
+            }
+        }
         const res = await fetch('/api/search-recipes', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query: searchTerm, number: 12 })
+            body: JSON.stringify({ query: searchTerm, number: 12, userId: resolvedUserId })
         })
         if (!res.ok) throw new Error('search-recipes failed');
         const data = await res.json();
@@ -498,15 +523,10 @@ export const getDailyMealSuggestions = async (userId?: string, forceRefresh = fa
         }
     }
 
-    // 2. Calculate current hour based on user's timezone
+    // 2. Calculate current hour and canonical meal session based on user's timezone
     const now = new Date();
-    const localDateStr = now.toLocaleString("en-US", { timeZone: userTz });
-    const localHour = new Date(localDateStr).getHours();
-    
-    let currentSession = 'breakfast';
-    if (localHour >= 4 && localHour < 11) currentSession = 'breakfast';
-    else if (localHour >= 11 && localHour < 16) currentSession = 'lunch';
-    else currentSession = 'dinner';
+    const localHour = getUserLocalHour(userTz);
+    const currentSession = getMealSessionFromHour(localHour);
 
     const today = now.toISOString().split('T')[0];
     
@@ -524,7 +544,7 @@ export const getDailyMealSuggestions = async (userId?: string, forceRefresh = fa
                     .maybeSingle(),
                 (supabase as any)
                     .from('onboarding_responses')
-                    .select('allergies, restrictions, goal')
+                    .select('*')
                     .eq('user_id', userId)
                     .maybeSingle()
             ]);
@@ -535,39 +555,82 @@ export const getDailyMealSuggestions = async (userId?: string, forceRefresh = fa
 
             const rawPlan = existingPlan;
             const isLegacyPlaceholder = rawPlan?.breakfast?.[0]?.id === 'b1' || rawPlan?.lunch?.[0]?.id === 'l1';
-            const breakfastImgs = (rawPlan?.breakfast || []).map((m: any) => m.image_url || m.image).filter(Boolean);
-            const hasDuplicateImgs = breakfastImgs.length > 1 && new Set(breakfastImgs).size < breakfastImgs.length;
-            const hasTwelveBreakfast = Array.isArray(rawPlan?.breakfast) && rawPlan.breakfast.length === 12;
+            const hasTwelveInAllCategories =
+                Array.isArray(rawPlan?.breakfast) && rawPlan.breakfast.length === 12 &&
+                Array.isArray(rawPlan?.lunch) && rawPlan.lunch.length === 12 &&
+                Array.isArray(rawPlan?.dinner) && rawPlan.dinner.length === 12 &&
+                Array.isArray(rawPlan?.snacks) && rawPlan.snacks.length === 12 &&
+                Array.isArray(rawPlan?.drinks) && rawPlan.drinks.length === 12 &&
+                Array.isArray(rawPlan?.desserts) && rawPlan.desserts.length === 12;
 
-            // Revalidate cached recommendations against current allergies / restrictions
-            let activeAllergies: string[] = [];
-            if (onboarding?.allergies) {
-                activeAllergies = Array.isArray(onboarding.allergies) ? onboarding.allergies : [String(onboarding.allergies)];
-            }
-            if (onboarding?.restrictions && Array.isArray(onboarding.restrictions)) {
-                activeAllergies = [...activeAllergies, ...onboarding.restrictions];
-            }
-            const cleanAllergies = activeAllergies.map(a => String(a).toLowerCase().trim()).filter(a => a && a !== 'none');
+            // Revalidate cached recommendations against current allergies / restrictions / dislikes, dietary lifestyle, broken images, and step completeness
+            const activeAllergies = [
+                ...parseAllergyTokens(onboarding?.allergies),
+                ...parseAllergyTokens(onboarding?.restrictions)
+            ];
+            const rawDisliked = onboarding?.disliked_foods ?? onboarding?.dislikes;
+            const activeDislikes = parseAllergyTokens(rawDisliked);
+            const activeLifestyle: string[] = [];
+            if (onboarding?.dietary_preference) activeLifestyle.push(String(onboarding.dietary_preference));
+            if (Array.isArray(onboarding?.dietary_lifestyle)) activeLifestyle.push(...onboarding.dietary_lifestyle.map(String));
 
-            let hasConstraintViolation = false;
+            let hasConstraintOrCompletenessViolation = false;
             const allCachedMeals = [
                 ...(rawPlan?.breakfast || []),
                 ...(rawPlan?.lunch || []),
-                ...(rawPlan?.dinner || [])
+                ...(rawPlan?.dinner || []),
+                ...(rawPlan?.snacks || []),
+                ...(rawPlan?.drinks || []),
+                ...(rawPlan?.desserts || [])
             ];
 
+            const seenCachedImages = new Set<string>();
             for (const meal of allCachedMeals) {
-                const mealText = `${meal.title || meal.name || ''} ${(meal.ingredients || []).map((i: any) => typeof i === 'string' ? i : (i?.item || '')).join(' ')}`.toLowerCase();
-                for (const allergy of cleanAllergies) {
-                    if (mealText.includes(allergy)) {
-                        hasConstraintViolation = true;
-                        break;
-                    }
+                const steps = Array.isArray(meal?.instructions) ? meal.instructions : [];
+                const ings = Array.isArray(meal?.ingredients) ? meal.ingredients : [];
+                const imgUrl = meal?.image_url || meal?.image || '';
+                const imgKey = getCanonicalImageKey(imgUrl);
+                if (
+                    steps.length < 2 ||
+                    ings.length < 2 ||
+                    !(Number(meal?.calories || meal?.total_calories) > 0) ||
+                    isBrokenImageUrl(imgUrl) ||
+                    !imgKey ||
+                    seenCachedImages.has(imgKey) ||
+                    String(meal?.external_id || meal?.id || '').startsWith('spoonacular_')
+                ) {
+                    hasConstraintOrCompletenessViolation = true;
+                    break;
                 }
-                if (hasConstraintViolation) break;
+                seenCachedImages.add(imgKey);
+                const safety = checkAllergensAndDislikes(
+                    { title: meal.title || meal.name || '', ingredients: ings },
+                    activeAllergies,
+                    activeDislikes
+                );
+                if (!safety.safe) {
+                    hasConstraintOrCompletenessViolation = true;
+                    break;
+                }
+                if (
+                    !passesDietaryAndPracticalityGate(
+                        {
+                            ...meal,
+                            title: meal.title || meal.name || '',
+                            ingredients: ings
+                        } as any,
+                        {
+                            dietaryPreference: onboarding?.dietary_preference,
+                            dietaryLifestyle: activeLifestyle
+                        }
+                    )
+                ) {
+                    hasConstraintOrCompletenessViolation = true;
+                    break;
+                }
             }
 
-            if (rawPlan && hasTwelveBreakfast && !isLegacyPlaceholder && !hasDuplicateImgs && !hasConstraintViolation) {
+            if (rawPlan && hasTwelveInAllCategories && !isLegacyPlaceholder && !hasConstraintOrCompletenessViolation) {
                 return {
                     breakfast: rawPlan.breakfast || [],
                     lunch: rawPlan.lunch || [],

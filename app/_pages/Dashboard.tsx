@@ -32,6 +32,7 @@ import { requestCameraAccess } from "@/lib/api/permissions";
 import { useNotificationStore } from "@/store/notificationStore";
 import { useCoachInjectionStore } from "@/store/coachInjectionStore";
 import { useAnalysisStore } from "@/store/analysisStore";
+import { getMealSessionFromHour } from "@/lib/utils/mealSession";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -43,13 +44,8 @@ export default function Dashboard() {
   const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
   const [isSwitchingCamera, setIsSwitchingCamera] = useState(false);
 
-  // Determine current meal type based on time
-  const getCurrentMealType = () => {
-    const hour = localHour;
-    if (hour < 11) return "breakfast";
-    if (hour < 16) return "lunch";
-    return "dinner";
-  };
+  // Determine current meal type based on canonical local session
+  const getCurrentMealType = () => getMealSessionFromHour(localHour);
   const [activeMealType, setActiveMealType] = useState<"breakfast" | "lunch" | "dinner">(getCurrentMealType());
 
 
@@ -135,7 +131,7 @@ export default function Dashboard() {
   const { data: suggestions } = useQuery({
     queryKey: ['suggestions', user?.id || 'guest', today],
     queryFn: () => getDailyMealSuggestions(user?.id || ''),
-    enabled: true,
+    enabled: !authLoading,
     staleTime: 1000 * 60 * 60, // 1 hour
     refetchOnWindowFocus: false,
     retry: 1

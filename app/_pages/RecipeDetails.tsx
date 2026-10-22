@@ -136,8 +136,8 @@ export default function RecipeDetails() {
 
     // Fetch recipe details
     const { data: recipe, isLoading, isError, error, refetch } = useQuery<any>({
-        queryKey: ['recipe', id],
-        queryFn: () => getRecipeDetails(id!),
+        queryKey: ['recipe', id, user?.id || 'guest'],
+        queryFn: () => getRecipeDetails(id!, user?.id),
         enabled: !!id,
         retry: 1
     });

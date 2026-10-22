@@ -1,4 +1,5 @@
 import { SupabaseClient } from '@supabase/supabase-js';
+import { parseAllergyTokens } from '@/lib/services/recipes/AllergenMatcher';
 
 export interface UserProfileContext {
   id: string;
@@ -10,6 +11,7 @@ export interface UserProfileContext {
   goal?: string;
   activityLevel?: string;
   dietaryPreference?: string;
+  dietaryLifestyle?: string[];
   allergies?: string[];
   medicalConditions?: string[];
   dailyCalorieGoal?: number;
@@ -21,6 +23,7 @@ export interface UserProfileContext {
     sugar?: number;
   };
   likedFoods?: string[];
+  dislikedFoods?: string[];
   preferredCuisines?: string[];
   cookingSkill?: string;
   mealPrepTime?: string;
@@ -86,59 +89,40 @@ export async function loadUserProfileContext(
     const [profileRes, onboardingRes] = await Promise.all([
       supabase
         .from('user_profiles')
-        .select('id, full_name, age, gender, height, current_weight, primary_goal, dietary_preference, allergies, medical_conditions, daily_calorie_target')
+        .select('*')
         .eq('id', userId)
-        .maybeSingle(),
+        .limit(1),
       supabase
         .from('onboarding_responses')
-        .select('full_name, age, gender, height_cm, weight_kg, goal, dietary_lifestyle, dietary_preference, restrictions, allergies, liked_foods, preferences, preferred_cuisines, cooking_skill, meal_prep_time, activity_level, daily_meal_frequency, calorie_flexibility, protein_goal, carbs_goal, fat_goal, fiber_goal, sugar_goal, medical_conditions, health_conditions, daily_calorie_goal, budget')
+        .select('*')
         .eq('user_id', userId)
-        .maybeSingle()
+        .order('created_at', { ascending: false })
+        .limit(1)
     ]);
 
-    const profile = profileRes.data;
-    const onboarding = onboardingRes.data;
+    const profile: Record<string, any> | null = Array.isArray(profileRes.data) ? profileRes.data[0] || null : profileRes.data;
+    const onboarding: Record<string, any> | null = Array.isArray(onboardingRes.data) ? onboardingRes.data[0] || null : onboardingRes.data;
 
     if (!profile && !onboarding) return null;
 
-    // Collect allergies and restrictions
+    // Collect allergies and restrictions via normalized parseAllergyTokens
     const rawAllergies: string[] = [];
     if (profile?.allergies) {
-      if (Array.isArray(profile.allergies)) rawAllergies.push(...profile.allergies);
-      else if (typeof profile.allergies === 'string') rawAllergies.push(...profile.allergies.split(/[,;\n]+/).map((s: string) => s.trim()));
+      rawAllergies.push(...parseAllergyTokens(profile.allergies));
     }
     if (onboarding?.allergies) {
-      if (Array.isArray(onboarding.allergies)) {
-        rawAllergies.push(...onboarding.allergies);
-      } else if (typeof onboarding.allergies === 'string') {
-        const cleanedStr = onboarding.allergies.trim();
-        if (cleanedStr && cleanedStr.toLowerCase() !== 'none') {
-          if (cleanedStr.includes(',')) {
-            rawAllergies.push(...cleanedStr.split(',').map((s: string) => s.trim()));
-          } else {
-            const tokens = cleanedStr.split(/\s+/).filter(Boolean);
-            const merged: string[] = [];
-            for (let i = 0; i < tokens.length; i++) {
-              if (tokens[i].toLowerCase() === 'egg' && tokens[i+1]?.toLowerCase() === 'whites') {
-                merged.push('Egg whites');
-                i++;
-              } else {
-                merged.push(tokens[i]);
-              }
-            }
-            rawAllergies.push(...merged);
-          }
-        }
-      }
+      rawAllergies.push(...parseAllergyTokens(onboarding.allergies));
     }
     if (onboarding?.restrictions) {
-      if (Array.isArray(onboarding.restrictions)) {
-        rawAllergies.push(...onboarding.restrictions.filter((r: any) => typeof r === 'string' && r.toLowerCase() !== 'none'));
-      } else if (typeof onboarding.restrictions === 'string' && onboarding.restrictions.toLowerCase() !== 'none') {
-        rawAllergies.push(...onboarding.restrictions.split(/[,;\n]+/).map((s: string) => s.trim()));
-      }
+      rawAllergies.push(...parseAllergyTokens(onboarding.restrictions));
     }
-    const allergies = Array.from(new Set(rawAllergies.map((a: string) => a.trim()).filter((a: string) => a && a.toLowerCase() !== 'none')));
+    const allergies = Array.from(
+      new Set(
+        rawAllergies
+          .map((a: string) => a.trim())
+          .filter((a: string) => a && a.toLowerCase() !== 'none')
+      )
+    );
 
     // Collect medical conditions
     const rawConditions: string[] = [];
@@ -146,19 +130,26 @@ export async function loadUserProfileContext(
       if (Array.isArray(profile.medical_conditions)) rawConditions.push(...profile.medical_conditions);
       else rawConditions.push(String(profile.medical_conditions));
     }
+    if (profile?.health_conditions) {
+      if (Array.isArray(profile.health_conditions)) rawConditions.push(...profile.health_conditions);
+      else if (typeof profile.health_conditions === 'string') rawConditions.push(profile.health_conditions);
+    }
     if (onboarding?.medical_conditions && String(onboarding.medical_conditions).toLowerCase() !== 'none') {
       rawConditions.push(String(onboarding.medical_conditions).trim());
     }
     if (onboarding?.health_conditions && String(onboarding.health_conditions).toLowerCase() !== 'none') {
       rawConditions.push(String(onboarding.health_conditions).trim());
     }
-    const medicalConditions = Array.from(new Set(rawConditions.filter(Boolean)));
+    const medicalConditions = Array.from(new Set(rawConditions.map(String).filter((c) => c && c.toLowerCase() !== 'none' && c !== '[]')));
 
     // Dietary lifestyles / preferences
     const dietaryLifestyles: string[] = [];
-    if (profile?.dietary_preference) dietaryLifestyles.push(profile.dietary_preference);
-    if (onboarding?.dietary_preference && onboarding.dietary_preference.toLowerCase() !== 'none') {
-      dietaryLifestyles.push(onboarding.dietary_preference);
+    if (profile?.dietary_preference) dietaryLifestyles.push(String(profile.dietary_preference));
+    if (Array.isArray(profile?.dietary_preferences)) {
+      dietaryLifestyles.push(...profile.dietary_preferences.map(String));
+    }
+    if (onboarding?.dietary_preference && String(onboarding.dietary_preference).toLowerCase() !== 'none') {
+      dietaryLifestyles.push(String(onboarding.dietary_preference));
     }
     if (onboarding?.dietary_lifestyle) {
       if (Array.isArray(onboarding.dietary_lifestyle)) {
@@ -169,11 +160,21 @@ export async function loadUserProfileContext(
     }
     const cleanDietary = Array.from(new Set(dietaryLifestyles.map((d: string) => d.trim()).filter(Boolean)));
 
-    // Parse Liked Foods & Cuisines
+    // Parse Liked Foods, Disliked Foods & Cuisines
     let likedFoods: string[] = [];
     if (onboarding?.liked_foods) {
       if (Array.isArray(onboarding.liked_foods)) likedFoods = onboarding.liked_foods.map(String);
       else if (typeof onboarding.liked_foods === 'string') likedFoods = onboarding.liked_foods.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+    }
+
+    let dislikedFoods: string[] = [];
+    const rawDisliked = onboarding?.disliked_foods ?? onboarding?.dislikes ?? profile?.disliked_foods;
+    if (rawDisliked) {
+      if (Array.isArray(rawDisliked)) {
+        dislikedFoods = rawDisliked.map(String).map(s => s.trim()).filter(s => s && s.toLowerCase() !== 'none');
+      } else if (typeof rawDisliked === 'string') {
+        dislikedFoods = rawDisliked.split(/[,;\n]+/).map(s => s.trim()).filter(s => s && s.toLowerCase() !== 'none');
+      }
     }
 
     let preferredCuisines: string[] = [];
@@ -182,27 +183,37 @@ export async function loadUserProfileContext(
       else if (typeof onboarding.preferred_cuisines === 'string') preferredCuisines = onboarding.preferred_cuisines.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
     }
 
+    const rawHeight = profile?.height_cm ?? profile?.height ?? onboarding?.height_cm;
+    const rawWeight = profile?.weight_kg ?? profile?.current_weight ?? onboarding?.weight_kg;
+    const rawCalorieGoal =
+      onboarding?.daily_calorie_goal ||
+      profile?.goal_calories ||
+      profile?.daily_calorie_target ||
+      2000;
+
     const result: UserProfileContext = {
       id: profile?.id || userId,
       fullName: profile?.full_name || onboarding?.full_name || 'User',
       age: profile?.age || onboarding?.age || undefined,
       gender: profile?.gender || onboarding?.gender || undefined,
-      height: profile?.height ? Number(profile.height) : (onboarding?.height_cm ? Number(onboarding.height_cm) : undefined),
-      weight: profile?.current_weight ? Number(profile.current_weight) : (onboarding?.weight_kg ? Number(onboarding.weight_kg) : undefined),
-      goal: profile?.primary_goal || onboarding?.goal || 'General Health',
-      activityLevel: onboarding?.activity_level || undefined,
+      height: rawHeight ? Number(rawHeight) : undefined,
+      weight: rawWeight ? Number(rawWeight) : undefined,
+      goal: onboarding?.goal || profile?.primary_goal || 'General Health',
+      activityLevel: onboarding?.activity_level || profile?.activity_level || undefined,
       dietaryPreference: cleanDietary.join(', ') || 'Standard',
+      dietaryLifestyle: cleanDietary,
       allergies,
       medicalConditions,
-      dailyCalorieGoal: profile?.daily_calorie_target || onboarding?.daily_calorie_goal || 2000,
+      dailyCalorieGoal: Number(rawCalorieGoal) || 2000,
       macroGoals: {
-        protein: Number(onboarding?.protein_goal) || undefined,
-        carbs: Number(onboarding?.carbs_goal) || undefined,
-        fat: Number(onboarding?.fat_goal) || undefined,
+        protein: Number(onboarding?.protein_goal || profile?.daily_protein_goal_g) || undefined,
+        carbs: Number(onboarding?.carbs_goal || profile?.daily_carbs_goal_g) || undefined,
+        fat: Number(onboarding?.fat_goal || profile?.daily_fat_goal_g) || undefined,
         fiber: Number(onboarding?.fiber_goal) || undefined,
         sugar: Number(onboarding?.sugar_goal) || undefined,
       },
       likedFoods,
+      dislikedFoods,
       preferredCuisines,
       cookingSkill: onboarding?.cooking_skill || undefined,
       mealPrepTime: onboarding?.meal_prep_time || undefined,

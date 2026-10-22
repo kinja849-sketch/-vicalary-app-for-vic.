@@ -10,7 +10,8 @@ import FoodCarousel from "@/components/FoodCarousel";
 import { FavoriteButton } from "@/components/FavoriteButton";
 import { MealImage } from "@/components/MealImage";
 import { getFavoriteRecipes } from "@/lib/api/recipes";
-import { getFoodImageUrl } from "@/lib/services/FoodImageService";
+import { getFoodImageUrl, sanitizeFoodImageUrl } from "@/lib/services/FoodImageService";
+import { getMealSessionFromHour, getUserLocalHour } from "@/lib/utils/mealSession";
 
 const CATEGORIES = [
     { id: 'breakfast', label: 'Breakfast', fallbackIcon: Coffee, animUrl: '/oat.gif' },
@@ -22,11 +23,13 @@ const CATEGORIES = [
 ] as const;
 
 export default function Cookbook() {
-    const { user } = useAuth();
+    const { user, loading: authLoading } = useAuth();
     const [searchQuery, setSearchQuery] = useState("");
     const [activeTab, setActiveTab] = useState<"all" | "for you" | "favorites">("for you");
     const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
-    const [currentSession, setCurrentSession] = useState<'breakfast' | 'lunch' | 'dinner'>('breakfast');
+    const [currentSession, setCurrentSession] = useState<'breakfast' | 'lunch' | 'dinner'>(() => {
+        return getMealSessionFromHour(getUserLocalHour());
+    });
     const { t } = useTranslation();
 
     const today = new Date().toISOString().split('T')[0];
@@ -34,7 +37,7 @@ export default function Cookbook() {
     const { data: suggestions } = useQuery({
         queryKey: ['suggestions', user?.id || 'guest', today],
         queryFn: () => getDailyMealSuggestions(user?.id || ''),
-        enabled: true,
+        enabled: !authLoading,
         staleTime: 1000 * 60 * 60, // 1 hour
         refetchOnWindowFocus: false,
         retry: 1
@@ -68,9 +71,9 @@ export default function Cookbook() {
     });
 
     const { data: searchResults } = useQuery({
-        queryKey: ['recipes-search', searchQuery],
-        queryFn: () => searchRecipes(searchQuery),
-        enabled: searchQuery.length > 2
+        queryKey: ['recipes-search', searchQuery.trim(), user?.id || 'guest'],
+        queryFn: () => searchRecipes(searchQuery.trim(), user?.id),
+        enabled: searchQuery.trim().length >= 2
     });
 
     return (
@@ -87,10 +90,10 @@ export default function Cookbook() {
                     <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                     <input
                         type="text"
-                        placeholder={t('search_placeholder')}
+                        placeholder=""
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full pl-12 pr-4 py-3 bg-slate-100 dark:bg-[#1f2c34] rounded-2xl border-none focus:ring-2 focus:ring-vic-green text-slate-900 dark:text-white font-medium placeholder:text-slate-400"
+                        className="w-full pl-12 pr-4 py-3 bg-slate-100 dark:bg-[#1f2c34] rounded-2xl border-none focus:ring-2 focus:ring-vic-green text-slate-900 dark:text-white font-medium"
                     />
                 </div>
 
@@ -256,7 +259,8 @@ function CookbookCard({ item }: { item: any }) {
     const id = item.internal_id || item.external_id || item.id;
     if (!id) return null;
     const title = item.title || item.name || t('untitled_recipe');
-    const image = item.image_url || item.image || getFoodImageUrl(title, item.cuisine, item.meal_type);
+    const fallbackImage = getFoodImageUrl(title, item.cuisine || 'International', item.meal_type || 'lunch');
+    const image = sanitizeFoodImageUrl(item.image_url || item.image, title, item.cuisine || 'International', item.meal_type || 'lunch');
     const calories = item.total_calories || item.calories || 350;
     const time = item.readyInMinutes || (item.prep_time_minutes ? Number(item.prep_time_minutes) + Number(item.cook_time_minutes || 0) : 20);
 
@@ -265,6 +269,7 @@ function CookbookCard({ item }: { item: any }) {
             <Link href={`/recipe/${id}`} className="block w-full h-full">
                 <MealImage 
                     src={image} 
+                    fallbackSrc={fallbackImage}
                     alt={title} 
                     className="absolute inset-0 w-full h-full object-cover object-center transition-transform duration-700 group-hover:scale-110" 
                 />

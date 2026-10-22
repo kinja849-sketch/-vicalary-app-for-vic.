@@ -31,6 +31,8 @@ const PORK_KEYWORDS = [
 // Alcohol used in cooking does NOT become halal even if cooked/simmered.
 const ALCOHOL_KEYWORDS = [
   'wine', 'red wine', 'white wine', 'cooking wine', 'shaoxing', 'shaoxing wine',
+  'sherry', 'marsala', 'port wine', 'vermouth', 'prosecco', 'madeira', 'sangria',
+  'merlot', 'cabernet', 'chardonnay', 'pinot noir', 'pinot grigio', 'riesling',
   'mirin', 'hon-mirin', 'sake', 'champagne', 'beer', 'ale', 'cider', 'stout',
   'lager', 'rum', 'brandy', 'cognac', 'vodka', 'gin', 'whiskey', 'whisky',
   'bourbon', 'tequila', 'mezcal', 'liqueur', 'liquor', 'spirits', 'kirsch',
@@ -61,8 +63,8 @@ const LAND_MEATS = [
   'ayam', 'sapi', 'kambing', 'daging sapi', 'daging ayam', 'daging kambing', 'bebek'
 ];
 
-// 7. Verified Halal Culinary Traditions & Certifications
-const VERIFIED_HALAL_PROVIDERS = ['curated', 'halal_curated', 'internal'];
+// 7. Verified Halal Culinary Traditions & Home-Cooked Recipe Providers (after passing zero-tolerance Haram & Additive gates)
+const VERIFIED_HALAL_PROVIDERS = ['curated', 'halal_curated', 'internal', 'spoonacular', 'themealdb'];
 const VERIFIED_HALAL_REGIONS = ['indonesian', 'malaysian', 'middle eastern', 'arabic', 'turkish', 'moroccan'];
 
 function normalizeText(text: string): string {
@@ -137,16 +139,19 @@ export function classifyHalal(candidate: {
   // Check Pork & Swine derivatives
   for (const pork of PORK_KEYWORDS) {
     const regex = new RegExp(`(^|\\s)${pork.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|$)`, 'i');
-    if (regex.test(normalizedSearch) || allText.includes(pork)) {
+    if (regex.test(normalizedSearch)) {
       detectedHaramIngredients.push(pork);
       reasons.push(`Contains prohibited pork or swine derivative: "${pork}"`);
     }
   }
 
-  // Check Alcohol & Cooking Alcohol
+  // Check Alcohol & Cooking Alcohol (ignoring explicit "alcohol-free" / "non-alcoholic" qualifiers)
+  const alcoholSearch = normalizeText(
+    allText.replace(/\b(?:alcohol[-\s]+free|non[-\s]+alcoholic|zero[-\s]+alcohol)\b/gi, ' ')
+  );
   for (const alcohol of ALCOHOL_KEYWORDS) {
     const regex = new RegExp(`(^|\\s)${alcohol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|$)`, 'i');
-    if (regex.test(normalizedSearch)) {
+    if (regex.test(alcoholSearch)) {
       detectedHaramIngredients.push(alcohol);
       reasons.push(`Contains prohibited alcoholic ingredient: "${alcohol}"`);
     }
@@ -199,7 +204,7 @@ export function classifyHalal(candidate: {
   // Determine if land meat is present
   const hasLandMeat = LAND_MEATS.some(meat => {
     const regex = new RegExp(`(^|\\s)${meat}(\\s|$)`, 'i');
-    return regex.test(normalizedSearch) || allText.includes(meat);
+    return regex.test(normalizedSearch);
   });
 
   if (hasLandMeat) {

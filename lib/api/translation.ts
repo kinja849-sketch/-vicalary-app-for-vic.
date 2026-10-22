@@ -6,6 +6,7 @@ import { useAuth } from '../AuthContext';
 import { detectLocation, getPrimaryLanguage } from './location';
 import { updateSettings } from './settings';
 import { toast } from 'sonner';
+import { getUserLocalHour } from '../utils/mealSession';
 
 import i18n from 'i18next';
 import { initReactI18next, useTranslation as useI18nextTranslation } from 'react-i18next';
@@ -229,18 +230,7 @@ export const useTranslation = () => {
         return `${currencySymbol}${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     };
 
-    const getLocalHour = () => {
-        try {
-            const now = new Date();
-            const options: Intl.DateTimeFormatOptions = { hour: 'numeric', hour12: false, timeZone: timezone };
-            const formatter = new Intl.DateTimeFormat('en-US', options);
-            return parseInt(formatter.format(now));
-        } catch (e) {
-            return new Date().getHours();
-        }
-    };
-
-    const localHour = getLocalHour();
+    const localHour = getUserLocalHour(timezone);
 
     const speak = (text: string) => {
         if (!text) return;

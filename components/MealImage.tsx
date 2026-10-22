@@ -1,19 +1,39 @@
-﻿"use client";
+"use client";
 
 import React, { useState } from "react";
 import { UtensilsCrossed } from "lucide-react";
 
 interface MealImageProps {
   src?: string | null;
+  fallbackSrc?: string | null;
   alt?: string;
   className?: string;
 }
 
-export function MealImage({ src, alt = "Meal", className = "" }: MealImageProps) {
+export function MealImage({ src, fallbackSrc, alt = "Meal", className = "" }: MealImageProps) {
+  const [currentSrc, setCurrentSrc] = useState<string | null>(src || fallbackSrc || null);
+  const [hasTriedFallback, setHasTriedFallback] = useState(false);
   const [hasError, setHasError] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  if (!src || hasError) {
+  React.useEffect(() => {
+    setCurrentSrc(src || fallbackSrc || null);
+    setHasTriedFallback(false);
+    setHasError(false);
+    setIsLoaded(false);
+  }, [src, fallbackSrc]);
+
+  const handleError = () => {
+    if (!hasTriedFallback && fallbackSrc && fallbackSrc !== currentSrc) {
+      setHasTriedFallback(true);
+      setCurrentSrc(fallbackSrc);
+      setIsLoaded(false);
+    } else {
+      setHasError(true);
+    }
+  };
+
+  if (!currentSrc || hasError) {
     return (
       <div className={`flex flex-col items-center justify-center bg-gradient-to-br from-slate-800 via-slate-900 to-[#0d1418] text-slate-500 ${className}`}>
         <div className="size-12 rounded-full bg-white/5 flex items-center justify-center mb-2">
@@ -28,11 +48,11 @@ export function MealImage({ src, alt = "Meal", className = "" }: MealImageProps)
 
   return (
     <img
-      src={src}
+      src={currentSrc}
       alt={alt}
       loading="lazy"
       onLoad={() => setIsLoaded(true)}
-      onError={() => setHasError(true)}
+      onError={handleError}
       className={`${className} ${!isLoaded ? "opacity-0" : "opacity-100"} transition-opacity duration-300`}
     />
   );

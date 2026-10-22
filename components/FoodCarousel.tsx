@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { FavoriteButton } from "./FavoriteButton";
 import { MealImage } from "./MealImage";
-import { getFoodImageUrl } from "@/lib/services/FoodImageService";
+import { getFoodImageUrl, sanitizeFoodImageUrl } from "@/lib/services/FoodImageService";
 
 
 interface Meal {
@@ -41,9 +41,9 @@ export default function FoodCarousel({
     // Process meals: ensure exactly 12 items and map unified schema to legacy props
     const processMeals = (meals: any[], cat: string = 'lunch') => (meals || []).slice(0, 12).map(m => {
         const mappedName = m.title || m.name || 'Healthy Meal';
-        const mappedCuisine = m.cuisine || m.cuisine_type || 'Indonesian';
+        const mappedCuisine = m.cuisine || m.cuisine_type || 'International';
         const mappedCategory = m.meal_type || cat;
-        const mappedImage = (m.image_url || m.image || "").trim() || getFoodImageUrl(mappedName, mappedCuisine, mappedCategory);
+        const mappedImage = sanitizeFoodImageUrl(m.image_url || m.image, mappedName, mappedCuisine, mappedCategory);
         const mappedCalories = m.total_calories || m.calories || 0;
         const mappedId = m.id || m.external_id || '';
         
@@ -184,6 +184,7 @@ export default function FoodCarousel({
                                         <div className="product-media">
                                             <MealImage
                                                 src={meal.image_url || meal.image}
+                                                fallbackSrc={getFoodImageUrl(meal.name, meal.cuisine, meal.meal_type || selectedTab)}
                                                 alt={meal.name}
                                                 className="w-full h-full object-cover"
                                             />

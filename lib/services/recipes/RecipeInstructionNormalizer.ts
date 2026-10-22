@@ -143,21 +143,28 @@ export class RecipeInstructionNormalizer {
    */
   private static extractSteps(raw: any): string[] {
     if (!raw) return [];
+    const extractStepText = (s: any): string => {
+      if (typeof s === 'string') return s.trim();
+      if (typeof s?.instruction === 'string' && s.instruction.trim()) return s.instruction.trim();
+      if (typeof s?.step === 'string' && s.step.trim()) return s.step.trim();
+      if (typeof s?.text === 'string' && s.text.trim()) return s.text.trim();
+      return '';
+    };
     if (typeof raw === 'string') {
       try {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          return parsed.map((s: any) => typeof s === 'string' ? s : s?.step || s?.instruction || String(s)).filter(Boolean);
+          return parsed.map(extractStepText).filter(Boolean);
         }
       } catch {
         // Check if there are newline or numbered steps
         const lines = raw.split(/\r?\n+/).map(s => s.replace(/^\d+[\.\)]\s*/, '').trim()).filter(Boolean);
         if (lines.length > 1) return lines;
-        return [raw.trim()];
+        return [raw.trim()].filter(Boolean);
       }
     }
     if (Array.isArray(raw)) {
-      return raw.map((s: any) => typeof s === 'string' ? s : s?.step || s?.instruction || String(s)).filter(Boolean);
+      return raw.map(extractStepText).filter(Boolean);
     }
     return [];
   }
@@ -166,10 +173,12 @@ export class RecipeInstructionNormalizer {
    * Checks if existing steps lack essential culinary detail.
    */
   private static needsCompletenessEnhancement(steps: string[], title: string): boolean {
-    if (steps.length <= 1) return true;
+    if (steps.length < 5) return true;
+    const avgLen = steps.reduce((sum, s) => sum + s.length, 0) / (steps.length || 1);
+    if (avgLen < 35) return true;
     const lowerTitle = title.toLowerCase();
-    // Rice dishes and stews with fewer than 4 steps are almost certainly summarized
-    if ((lowerTitle.includes('rice') || lowerTitle.includes('stew') || lowerTitle.includes('soup')) && steps.length < 4) {
+    // Rice dishes, stews, soups, and curries with fewer than 6 steps are almost certainly summarized
+    if ((lowerTitle.includes('rice') || lowerTitle.includes('stew') || lowerTitle.includes('soup') || lowerTitle.includes('curry')) && steps.length < 6) {
       return true;
     }
     return false;
@@ -208,15 +217,15 @@ export class RecipeInstructionNormalizer {
       return this.buildSaladSteps(title, ingredients);
     }
 
-    // 5. GENERAL CASE: Smart semantic sentence decomposition
-    if (rawSingleParagraph && rawSingleParagraph.length > 50) {
+    // 5. GENERAL CASE: Smart semantic sentence decomposition (only if 5+ complete sentences)
+    if (rawSingleParagraph && rawSingleParagraph.length > 80) {
       // Split on punctuation followed by space and capital letter or cooking verbs
       const sentenceParts = rawSingleParagraph
         .split(/(?<=[.!?])\s+(?=[A-Z])/)
         .map(s => s.trim())
-        .filter(s => s.length > 10);
+        .filter(s => s.length > 15);
 
-      if (sentenceParts.length >= 3) {
+      if (sentenceParts.length >= 5) {
         return sentenceParts;
       }
     }
@@ -265,17 +274,18 @@ export class RecipeInstructionNormalizer {
     const veg = ingredients.filter(i => !aromatics.includes(i) && !proteins.includes(i) && !/broth|water|salt|pepper|oil/i.test(i.item));
 
     return [
-      `Rinse and prepare all ingredients: chop the vegetables, mince aromatics, and portion proteins as specified.`,
+      `Mise en place: Rinse and prepare all soup ingredients; chop vegetables into bite-sized pieces, mince aromatics, and portion proteins as specified.`,
       aromatics.length > 0 
-        ? `Heat 1 tablespoon of cooking oil in a large soup pot over medium heat. Sauté the aromatics (${aromatics.map(a => a.item).join(', ')}) for 2-3 minutes until fragrant.`
-        : `Bring 4 to 5 cups of water or halal broth to a gentle boil in a large pot.`,
+        ? `Heat 1 tablespoon of cooking oil in a large soup pot over medium heat. Sauté the aromatics (${aromatics.map(a => a.item).join(', ')}) for 2-3 minutes until golden and fragrant.`
+        : `Heat your soup pot over medium heat with a light drizzle of oil.`,
       proteins.length > 0
-        ? `Add ${proteins.map(p => p.item).join(' and ')} to the pot. Simmer gently over medium-low heat for 10-15 minutes until thoroughly cooked.`
-        : `Pour in water or halal broth and bring to a simmer.`,
+        ? `Add ${proteins.map(p => p.item).join(' and ')} to the pot. Sauté gently for 4-5 minutes until lightly seared on the outside.`
+        : `Add root vegetables and firmer produce to develop base flavor.`,
+      `Pour in 4 to 5 cups of water or Halal broth. Bring the pot to a vigorous boil over high heat, skimming any foam from the surface.`,
       veg.length > 0
-        ? `Add the vegetables (${veg.map(v => v.item).join(', ')}). Season with salt and black pepper to taste, simmering for 5-8 minutes until tender-crisp.`
-        : `Season with salt, ground pepper, and herbs to taste. Simmer for 5 minutes to let flavors meld.`,
-      `Taste and adjust seasoning. Ladle steaming hot into soup bowls and serve warm.`
+        ? `Reduce heat to medium-low. Add the vegetables (${veg.map(v => v.item).join(', ')}). Season with salt and black pepper, simmering gently for 10-12 minutes until vegetables are tender-crisp.`
+        : `Reduce heat to low, season with salt, ground pepper, and herbs to taste, and simmer for 10 minutes to allow flavors to meld completely.`,
+      `Taste and adjust seasoning with a dash of lime juice or herbs. Ladle steaming hot into soup bowls and serve warm.`
     ];
   }
 
@@ -312,11 +322,12 @@ export class RecipeInstructionNormalizer {
     ingredients: Array<{ item: string; amount: string | number; unit: string }>
   ): string[] {
     return [
-      `Rinse all fresh greens and vegetables thoroughly in cold water, then spin or pat dry with clean towels.`,
-      `Chop, slice, or steam vegetables according to the recipe's requirement, placing prepared ingredients into a large mixing bowl.`,
-      `If the recipe includes cooked items (such as boiled eggs, warm quinoa, or baked tofu), prepare and let them cool to room temperature.`,
-      `Prepare the dressing or peanut sauce by whisking the seasonings and listed dressing ingredients until smooth.`,
-      `Drizzle dressing over the salad just before serving, tossing gently to coat every ingredient evenly without bruising greens. Serve fresh.`
+      `Mise en place: Rinse all fresh salad greens and crisp vegetables thoroughly under cold running water, then spin or pat dry with clean towels.`,
+      `Chop, slice, or ribbon the vegetables into bite-sized, aesthetic cuts according to the recipe's requirement.`,
+      `If the recipe includes cooked items (such as boiled eggs, warm quinoa, or baked tofu), prepare and let them cool completely to room temperature.`,
+      `Prepare the dressing or vinaigrette in a small bowl by whisking olive oil, citrus or vinegar, and seasonings until emulsified and smooth.`,
+      `Combine the crisp greens and sliced produce in a wide salad bowl, reserving delicate toppings and seeds for the finish.`,
+      `Drizzle dressing over the salad just before serving, tossing gently to coat every ingredient evenly without bruising greens. Garnish and serve fresh.`
     ];
   }
 
@@ -330,11 +341,12 @@ export class RecipeInstructionNormalizer {
     const ingsList = ingredients.map(i => `${i.amount ? i.amount + ' ' : ''}${i.unit ? i.unit + ' ' : ''}${i.item}`.trim()).filter(Boolean);
 
     return [
-      `Mise en place: Gather and measure all recipe ingredients (${ingsList.slice(0, 4).join(', ') || 'all listed ingredients'}). Rinse and slice produce as needed.`,
-      `Heat the cooking pan or preheat your cooking equipment over medium heat with the appropriate cooking oil or liquid.`,
-      `Cook the primary ingredients according to their texture: start with aromatics and proteins, cooking until lightly browned and fragrant.`,
-      `Add secondary vegetables, cooking liquids, and seasonings as listed. Lower heat to a gentle simmer, cover if necessary, and cook until tender.`,
-      `Check for doneness and taste for seasoning. Remove from heat, allow to rest for 2-3 minutes, and plate hot.`
+      `Mise en place: Gather and measure all recipe ingredients (${ingsList.slice(0, 4).join(', ') || 'all listed ingredients'}). Rinse fresh produce, mince aromatics, and portion proteins into uniform pieces.`,
+      `Heat & Preparation: Preheat your cooking skillet, pot, or baking equipment over medium heat with the appropriate healthy cooking oil or broth until lightly shimmering.`,
+      `Aromatics & Searing: Add aromatics and primary ingredients to the pan. Sauté for 3 to 5 minutes until fragrant, lightly browned, and translucent.`,
+      `Liquid & Seasonings Integration: Pour in cooking liquids, sauces, and seasonings (${ingsList.slice(4).join(', ') || 'seasonings to taste'}). Stir thoroughly to ensure all ingredients are well combined.`,
+      `Simmer & Doneness Check: Lower heat to medium-low, cover loosely if simmering, and cook for 8 to 12 minutes until tender, checking that components have reached optimal doneness.`,
+      `Resting & Plating: Remove from heat, taste and adjust seasoning to preference. Allow to rest for 2 minutes to settle flavors, then plate the prepared ${title} warm and serve.`
     ];
   }
 
@@ -396,6 +408,10 @@ export class RecipeInstructionNormalizer {
    * Generates a grounded, culturally authentic culinary backstory and origin for the recipe.
    */
   private static resolveCulinaryBackground(title: string, existingDesc: string | undefined, cuisine: string): string {
+    if (existingDesc && existingDesc.trim().startsWith('Since you have an allergy to')) {
+      return existingDesc.trim();
+    }
+
     const lowerTitle = title.toLowerCase();
     if (lowerTitle.includes('rice') && (lowerTitle.includes('bean') || lowerTitle.includes('peas'))) {
       return "Originating centuries ago from the culinary crossroads of West Africa and the Caribbean basin, Rice and Beans (widely celebrated across Jamaica and the islands as 'Rice and Peas' or 'Waakye') was born as a cherished communal Sunday dish. West African culinary pioneers carried the tradition of pairing wholesome legumes with native grains across historical trade routes, adapting the recipe with rich coconut milk, fresh thyme, and indigenous Scotch bonnet peppers. Over generations, this humble combination evolved into a timeless cultural staple symbolizing endurance, community warmth, and celebratory family nourishment.";

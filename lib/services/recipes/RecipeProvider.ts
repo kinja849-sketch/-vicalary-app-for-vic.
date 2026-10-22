@@ -49,7 +49,7 @@ export interface AuthoritativeRecipe {
 
 export interface RecipeSearchCriteria {
   query?: string;
-  meal_category: MealCategory;
+  meal_category?: MealCategory;
   cuisine?: string;
   dietary_lifestyle?: string[];
   allergies?: string[];

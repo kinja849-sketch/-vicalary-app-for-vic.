@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { callChatCompletionWithFallback } from '@/lib/ai/ai-fallback';
 import { resolveUserLanguage, buildAILanguageDirective } from '@/lib/api/serverLanguage';
+import { loadUserProfileContext } from '@/lib/services/ai/ContextAssembler';
+import { formatUserAllergiesList } from '@/lib/services/recipes/AllergySafeRecipeAdapter';
 
 export async function POST(req: NextRequest) {
     try {
@@ -23,6 +25,25 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: 'No cooking instructions available for this recipe' }, { status: 400 });
         }
 
+        // Fetch User Profile & Onboarding Context
+        const supabase = createServerSupabaseClient();
+        const resolvedLang = await resolveUserLanguage({
+            userId,
+            requestLanguage: language,
+            supabase,
+        });
+        const langDirective = buildAILanguageDirective(resolvedLang);
+
+        const loadedProfile = await loadUserProfileContext(supabase, userId);
+        const allergiesListText = formatUserAllergiesList(loadedProfile.allergies);
+        const hasAllergies = Boolean(allergiesListText);
+        const allergyOpeningNote = hasAllergies
+            ? `Since you have an allergy to ${allergiesListText}, I have opted to go for ${recipe.title} prepared completely free of ${allergiesListText}. `
+            : '';
+        const allergyClosingReason = hasAllergies
+            ? ` Because you are allergic to ${allergiesListText}, I specifically suggest this allergen-safe recipe so you can enjoy every bite safely while supporting your ${loadedProfile.goal || 'healthy lifestyle'} goal.`
+            : '';
+
         const generateFallbackSession = () => {
             const rawIngredients = Array.isArray(recipe.ingredients) ? recipe.ingredients : [];
             const ingredientsList = rawIngredients
@@ -32,7 +53,7 @@ export async function POST(req: NextRequest) {
 
             return {
                 overview: {
-                    text: `Oh, hi! How are you doing? Today this is what is on the menu: ${recipe.title}. You've selected this—very good! Let's start cooking it together. To start, make sure you have: ${ingText}. Ask me anything if you're unsure about measurements or substitutions. Once you have everything ready, take a photo so I can confirm you're good to begin!`,
+                    text: `${allergyOpeningNote}Oh, hi! How are you doing? Today this is what is on the menu: ${recipe.title}. You've selected this—very good!${allergyClosingReason} Let's start cooking it together. To start, make sure you have: ${ingText}. Ask me anything if you're unsure about measurements or substitutions. Once you have everything ready, take a photo so I can confirm you're good to begin!`,
                     equipment: ['Cooking pan', 'Utensils'],
                     ingredients_image_prompt: `A beautiful culinary setup with raw ingredients for ${recipe.title}`
                 },
@@ -45,29 +66,14 @@ export async function POST(req: NextRequest) {
             };
         };
 
-        // Fetch User Profile to get VCalorie Context
-        const supabase = createServerSupabaseClient();
-        const resolvedLang = await resolveUserLanguage({
-            userId,
-            requestLanguage: language,
-            supabase,
-        });
-        const langDirective = buildAILanguageDirective(resolvedLang);
-
-        let userContext = '';
-        if (userId) {
-            const { data: userProfile } = await supabase.from('user_profiles').select('goal, dietary_lifestyle').eq('id', userId).maybeSingle();
-            if (userProfile) {
-                userContext = `User Goal: ${userProfile.goal || 'General Health'}. Dietary Restrictions: ${(userProfile.dietary_lifestyle || []).join(', ') || 'None'}.`;
-            }
-        }
+        const userContext = `User Goal: ${loadedProfile.goal || 'General Health'}. Dietary Preferences: ${loadedProfile.dietaryPreference || (loadedProfile.dietaryLifestyle || []).join(', ') || 'Halal'}. Strict Allergies: ${allergiesListText || 'None'}.`;
 
         const systemPrompt = `You are Chef Vic, a warm, Michelin-experienced, encouraging personal chef coaching the user live in their kitchen.
 You are transforming a standard recipe into an interactive two-way guided cooking session.
 
 CRITICAL REQUIREMENTS:
 1. You MUST output the exact same number of steps as the original recipe instructions. DO NOT summarize or group steps together. If the original recipe has ${validInstructions.length} steps, you must output exactly ${validInstructions.length} steps in your JSON array.
-2. In overview.text: You MUST greet the user warmly as Chef Vic: "Oh, hi! How are you doing? Today this is what is on the menu: ${recipe.title}. You've selected this—very good! Let's start cooking it together." Then read out the key ingredients with their exact amounts, remind them that they can talk or ask questions at any time (e.g. asking for spoons of salt or substitutions), and invite them: "Once you have everything gathered, take a photo and show me so I can confirm you're ready to start cooking!"
+2. In overview.text: ${hasAllergies ? `Start directly with: "${allergyOpeningNote.trim()}" Then greet` : 'Greet'} the user warmly as Chef Vic: "Oh, hi! How are you doing? Today this is what is on the menu: ${recipe.title}. You've selected this—very good! Let's start cooking it together." ${hasAllergies ? `Also distinctively explain why you suggest this recipe because the user is allergic to ${allergiesListText}. ` : ''}Then read out the key ingredients with their exact amounts, remind them that they can talk or ask questions at any time (e.g. asking for spoons of salt or substitutions), and invite them: "Once you have everything gathered, take a photo and show me so I can confirm you're ready to start cooking!"
 3. In steps[].instruction: Conversational chef guidance explaining textures and cues (e.g. 'until fragrant and golden brown'). End each step by reminding them to snap a picture when done so Chef can review and approve moving to the next step.
 
 RECIPE PROVIDED:

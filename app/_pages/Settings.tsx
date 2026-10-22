@@ -88,6 +88,8 @@ export default function Settings() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings', user?.id] });
+      queryClient.invalidateQueries({ queryKey: ['suggestions', user?.id] });
+      queryClient.invalidateQueries({ queryKey: ['daily-meal-plan', user?.id] });
     }
   });
 

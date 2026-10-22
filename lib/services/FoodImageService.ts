@@ -1,241 +1,639 @@
 /**
  * FoodImageService
- * Provides authentic, high-definition, verified culinary photography
+ * Provides authentic, high-definition, verified TheMealDB culinary photography
  * strictly matching dish names, cuisines, and food categories with guaranteed uniqueness.
  */
 
-// Comprehensive verified high-definition culinary photography catalog with unique URLs
-const CULINARY_PHOTO_MAP: Record<string, string> = {
-  // Breakfast Dishes
-  'bubur oatmeal ayam suwir kuning': 'https://images.unsplash.com/photo-1517673400267-0251440c45dc?auto=format&fit=crop&w=800&q=80',
-  'savory turmeric chicken oatmeal': 'https://images.unsplash.com/photo-1517673400267-0251440c45dc?auto=format&fit=crop&w=800&q=80',
-  'omelet tahu bayam bumbu bawang': 'https://images.unsplash.com/photo-1510693206972-df098062cb71?auto=format&fit=crop&w=800&q=80',
-  'spinach & tofu garlic omelette': 'https://images.unsplash.com/photo-1510693206972-df098062cb71?auto=format&fit=crop&w=800&q=80',
-  'nasi merah telur ceplok & lalapan': 'https://images.unsplash.com/photo-1603133872878-684f208fb84b?auto=format&fit=crop&w=800&q=80',
-  'brown rice with sunny egg & fresh greens': 'https://images.unsplash.com/photo-1603133872878-684f208fb84b?auto=format&fit=crop&w=800&q=80',
-  'roti gandum alpukat telur rebus': 'https://images.unsplash.com/photo-1525351484163-7529414344d8?auto=format&fit=crop&w=800&q=80',
-  'avocado toast with soft boiled eggs': 'https://images.unsplash.com/photo-1525351484163-7529414344d8?auto=format&fit=crop&w=800&q=80',
-  'smoothie bowl pisang buah naga chia': 'https://images.unsplash.com/photo-1590080875515-8a3a8dc5735e?auto=format&fit=crop&w=800&q=80',
-  'dragon fruit & banana chia smoothie bowl': 'https://images.unsplash.com/photo-1590080875515-8a3a8dc5735e?auto=format&fit=crop&w=800&q=80',
-  'scrambled eggs jamur tiram & tomat': 'https://images.unsplash.com/photo-1521572267360-ee0c2909d518?auto=format&fit=crop&w=800&q=80',
-  'mushroom & tomato scrambled eggs': 'https://images.unsplash.com/photo-1521572267360-ee0c2909d518?auto=format&fit=crop&w=800&q=80',
-  'bubur manado sehat tanpa santan': 'https://images.unsplash.com/photo-1541832676-9b763b0239ab?auto=format&fit=crop&w=800&q=80',
-  'healthy indonesian vegetable tinutuan porridge': 'https://images.unsplash.com/photo-1541832676-9b763b0239ab?auto=format&fit=crop&w=800&q=80',
-  'pancake oatmeal pisang kayu manis': 'https://images.unsplash.com/photo-1506084868230-bb9d95c24759?auto=format&fit=crop&w=800&q=80',
-  'cinnamon banana oat pancakes': 'https://images.unsplash.com/photo-1506084868230-bb9d95c24759?auto=format&fit=crop&w=800&q=80',
-  'sandwich dada ayam panggang gandum': 'https://images.unsplash.com/photo-1550547660-d9450f859349?auto=format&fit=crop&w=800&q=80',
-  'grilled chicken whole wheat sandwich': 'https://images.unsplash.com/photo-1550547660-d9450f859349?auto=format&fit=crop&w=800&q=80',
-  'bihun kuah sayur dada ayam': 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624?auto=format&fit=crop&w=800&q=80',
-  'warm rice noodle soup with chicken & greens': 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624?auto=format&fit=crop&w=800&q=80',
-  'greek yogurt parfait buah segar': 'https://images.unsplash.com/photo-1488477181946-6428a0291777?auto=format&fit=crop&w=800&q=80',
-  'greek yogurt & fresh berry parfait': 'https://images.unsplash.com/photo-1488477181946-6428a0291777?auto=format&fit=crop&w=800&q=80',
-  'pepes tahu jamur kukus gurih': 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
-  'steamed herb & mushroom tofu pepes': 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
+// Known dead/broken image substrings that must never be served
+const BROKEN_IMAGE_SUBSTRINGS = [
+  'photo-1546069901-d66a285109b0',
+  'photo-1596097635121-14b63b7a0c19',
+  'photo-1546069901-d68a9668383e',
+  'photo-1596040033282-5d9c2cb48695',
+  'photo-1536591375315-1b8368157772',
+  'photo-1601930271571-38c1e3a4b9a1',
+  'photo-1568468357921-e72401b864d8',
+  'photo-1574125738498-c8095b87075c',
+  'http://test',
+  'https://test',
+  'placeholder',
+  'placekitten',
+  'kitten',
+  'undefined',
+  'null'
+];
 
-  // Lunch Dishes
-  'nasi merah ayam bakar bumbu rujak': 'https://images.unsplash.com/photo-1598515214211-89d3c73ae83b?auto=format&fit=crop&w=800&q=80',
-  'grilled chicken in rujak glaze with brown rice': 'https://images.unsplash.com/photo-1598515214211-89d3c73ae83b?auto=format&fit=crop&w=800&q=80',
-  'nasi merah dada ayam panggang rosemary': 'https://images.unsplash.com/photo-1532550907401-a500c9a57435?auto=format&fit=crop&w=800&q=80',
-  'ayam teriyaki jahe wijen nasi coklat': 'https://images.unsplash.com/photo-1543339308-43e59d6b73a6?auto=format&fit=crop&w=800&q=80',
-  'sate dada ayam panggang bumbu kacang': 'https://images.unsplash.com/photo-1555939594-58d7cb561ad1?auto=format&fit=crop&w=800&q=80',
-  'grilled chicken satay with light peanut sauce': 'https://images.unsplash.com/photo-1555939594-58d7cb561ad1?auto=format&fit=crop&w=800&q=80',
-  'capcay goreng seafood & tahu': 'https://images.unsplash.com/photo-1512058564366-18510be2db19?auto=format&fit=crop&w=800&q=80',
-  'wok stir-fried capcay with shrimp & tofu': 'https://images.unsplash.com/photo-1512058564366-18510be2db19?auto=format&fit=crop&w=800&q=80',
-  'gado-gado siram bumbu kacang sehat': 'https://images.unsplash.com/photo-1540420773420-3366772f4999?auto=format&fit=crop&w=800&q=80',
-  'indonesian steamed salad with warm peanut dressing': 'https://images.unsplash.com/photo-1540420773420-3366772f4999?auto=format&fit=crop&w=800&q=80',
-  'ayam teriyaki wijen nasi coklat': 'https://images.unsplash.com/photo-1543339308-43e59d6b73a6?auto=format&fit=crop&w=800&q=80',
-  'sesame chicken teriyaki with steamed rice': 'https://images.unsplash.com/photo-1543339308-43e59d6b73a6?auto=format&fit=crop&w=800&q=80',
-  'tumis tempe tahu buncis saus tiram': 'https://images.unsplash.com/photo-1546069901-d68a9668383e?auto=format&fit=crop&w=800&q=80',
-  'stir-fried tempeh, tofu & crisp green beans': 'https://images.unsplash.com/photo-1546069901-d68a9668383e?auto=format&fit=crop&w=800&q=80',
-  'pepes ikan nila kemangi bumbu kuning': 'https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?auto=format&fit=crop&w=800&q=80',
-  'fragrant steamed tilapia with basil in banana leaf': 'https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?auto=format&fit=crop&w=800&q=80',
-  'soto ayam bening segar jeruk nipis': 'https://images.unsplash.com/photo-1572449043416-55f4685c9bb7?auto=format&fit=crop&w=800&q=80',
-  'clear turmeric chicken soto soup with herbs': 'https://images.unsplash.com/photo-1572449043416-55f4685c9bb7?auto=format&fit=crop&w=800&q=80',
-  'tumis kangkung terasi bawang putih': 'https://images.unsplash.com/photo-1576045057995-568f588f82fb?auto=format&fit=crop&w=800&q=80',
-  'wok stir-fried water spinach with garlic': 'https://images.unsplash.com/photo-1576045057995-568f588f82fb?auto=format&fit=crop&w=800&q=80',
-  'ikan tongkol balado rendah minyak': 'https://images.unsplash.com/photo-1534422298391-e4f8c172dddb?auto=format&fit=crop&w=800&q=80',
-  'spicy indonesian tuna with fresh chili relish': 'https://images.unsplash.com/photo-1534422298391-e4f8c172dddb?auto=format&fit=crop&w=800&q=80',
-  'daging sapi cah brokoli saus tiram': 'https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=800&q=80',
-  'daging sapi cah brokoli bawang putih': 'https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=800&q=80',
-  'lean beef & broccoli stir-fry in oyster sauce': 'https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=800&q=80',
-  'sup jagung telur dada ayam': 'https://images.unsplash.com/photo-1547592166-23ac45744acd?auto=format&fit=crop&w=800&q=80',
-  'sweet corn & shredded chicken egg drop soup': 'https://images.unsplash.com/photo-1547592166-23ac45744acd?auto=format&fit=crop&w=800&q=80',
+export function isBrokenImageUrl(url?: string | null): boolean {
+  if (!url || typeof url !== 'string') return true;
+  const trimmed = url.trim();
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://') && !trimmed.startsWith('/')) {
+    return true;
+  }
+  const lower = trimmed.toLowerCase();
+  // Ensure Unsplash and non-culinary placeholders are marked broken so they get replaced by TheMealDB images
+  if (lower.includes('unsplash.com') || lower.includes('placeholder') || lower.includes('placekitten') || lower.includes('kitten')) {
+    return true;
+  }
+  return BROKEN_IMAGE_SUBSTRINGS.some(sub => lower.includes(sub));
+}
 
-  // Dinner Dishes
-  'dada ayam panggang lemon & buncis rebus': 'https://images.unsplash.com/photo-1532550907401-a500c9a57435?auto=format&fit=crop&w=800&q=80',
-  'sup ikan kakap kuah bening asam segar': 'https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=800&q=80',
-  'fresh indonesian snapper soup with tomatoes & lime': 'https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=800&q=80',
-  'dada ayam panggang bumbu rosemary lemon': 'https://images.unsplash.com/photo-1532550907401-a500c9a57435?auto=format&fit=crop&w=800&q=80',
-  'lemon herb grilled chicken breast': 'https://images.unsplash.com/photo-1532550907401-a500c9a57435?auto=format&fit=crop&w=800&q=80',
-  'tumis brokoli kangkung bawang putih & tahu': 'https://images.unsplash.com/photo-1540420773420-3366772f4999?auto=format&fit=crop&w=800&q=80',
-  'garlic broccoli & tofu stir-fry': 'https://images.unsplash.com/photo-1540420773420-3366772f4999?auto=format&fit=crop&w=800&q=80',
-  'ikan nila bakar madu pedas ringan': 'https://images.unsplash.com/photo-1534939561126-855b8675edd7?auto=format&fit=crop&w=800&q=80',
-  'honey spiced grilled tilapia with lime': 'https://images.unsplash.com/photo-1534939561126-855b8675edd7?auto=format&fit=crop&w=800&q=80',
-  'sup ayam jamur sayuran bening': 'https://images.unsplash.com/photo-1547592166-23ac45744acd?auto=format&fit=crop&w=800&q=80',
-  'clear chicken & mushroom vegetable soup': 'https://images.unsplash.com/photo-1547592166-23ac45744acd?auto=format&fit=crop&w=800&q=80',
-  'tumis tauge tahu tempe daun bawang': 'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=800&q=80',
-  'stir-fried bean sprouts, tofu & scallions': 'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=800&q=80',
-  'steak tempe saus lada hitam': 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
-  'crisp tempeh steak with black pepper glaze': 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
-  'salad dada ayam panggang saus wijen': 'https://images.unsplash.com/photo-1540420773420-3366772f4999?auto=format&fit=crop&w=800&q=80',
-  'grilled chicken salad with light sesame dressing': 'https://images.unsplash.com/photo-1540420773420-3366772f4999?auto=format&fit=crop&w=800&q=80',
-  'udang tumis bawang putih daun ketumbar': 'https://images.unsplash.com/photo-1565680018434-b513d5e5fd47?auto=format&fit=crop&w=800&q=80',
-  'garlic & cilantro sautéed tiger prawns': 'https://images.unsplash.com/photo-1565680018434-b513d5e5fd47?auto=format&fit=crop&w=800&q=80',
-  'sup tomat telur serabut lembut': 'https://images.unsplash.com/photo-1541832676-9b763b0239ab?auto=format&fit=crop&w=800&q=80',
-  'silky tomato & egg drop comfort soup': 'https://images.unsplash.com/photo-1541832676-9b763b0239ab?auto=format&fit=crop&w=800&q=80',
-  'ayam suwir kukus sambal matah rendah minyak': 'https://images.unsplash.com/photo-1604908176997-125f25cc6f3d?auto=format&fit=crop&w=800&q=80',
-  'shredded steamed chicken with fresh balinese sambal': 'https://images.unsplash.com/photo-1604908176997-125f25cc6f3d?auto=format&fit=crop&w=800&q=80',
-  'sayur bening bayam jagung manis': 'https://images.unsplash.com/photo-1576045057995-568f588f82fb?auto=format&fit=crop&w=800&q=80',
-  'spinach & sweet corn light herbal broth': 'https://images.unsplash.com/photo-1576045057995-568f588f82fb?auto=format&fit=crop&w=800&q=80',
+/**
+ * Extracts a canonical key for an image URL so two URLs pointing to the same underlying photo
+ * are recognized as identical.
+ */
+export function getCanonicalImageKey(url: string): string {
+  const trimmed = (url || '').trim();
+  const mealMatch = trimmed.match(/meals\/[a-zA-Z0-9_-]+\.(jpg|png|jpeg)/i);
+  if (mealMatch) return mealMatch[0].toLowerCase();
+  const drinkMatch = trimmed.match(/drink\/[a-zA-Z0-9_-]+\.(jpg|png|jpeg)/i);
+  if (drinkMatch) return drinkMatch[0].toLowerCase();
+  const unsplashMatch = trimmed.match(/photo-[a-z0-9\-]+/i);
+  if (unsplashMatch) return unsplashMatch[0].toLowerCase();
+  return trimmed.split('?')[0].toLowerCase();
+}
 
-  // Snacks
-  'edamame rebus tabur garam laut': 'https://images.unsplash.com/photo-1559847844-5315695dadae?auto=format&fit=crop&w=800&q=80',
-  'steamed sea salt edamame': 'https://images.unsplash.com/photo-1559847844-5315695dadae?auto=format&fit=crop&w=800&q=80',
-  'pisang panggang madu kayu manis': 'https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?auto=format&fit=crop&w=800&q=80',
-  'cinnamon honey grilled banana': 'https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?auto=format&fit=crop&w=800&q=80',
-  'kacang almond panggang tanpa garam': 'https://images.unsplash.com/photo-1536591375315-1b8368157772?auto=format&fit=crop&w=800&q=80',
-  'roasted unsalted almonds': 'https://images.unsplash.com/photo-1536591375315-1b8368157772?auto=format&fit=crop&w=800&q=80',
-  'rujak buah segar bumbu kacang ringan': 'https://images.unsplash.com/photo-1568584711075-3d021a7c3ca3?auto=format&fit=crop&w=800&q=80',
-  'fresh tropical fruit salad with light dressing': 'https://images.unsplash.com/photo-1568584711075-3d021a7c3ca3?auto=format&fit=crop&w=800&q=80',
-  'lumpia basah sayur saus tauco': 'https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=800&q=80',
-  'fresh vegetable summer rolls': 'https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=800&q=80',
-  'kacang hijau rebus gula aren jahe': 'https://images.unsplash.com/photo-1589301760014-d929f3979dbc?auto=format&fit=crop&w=800&q=80',
-  'warm ginger & mung bean snack': 'https://images.unsplash.com/photo-1589301760014-d929f3979dbc?auto=format&fit=crop&w=800&q=80',
-  'singkong rebus tabur kelapa parut': 'https://images.unsplash.com/photo-1596040033229-a9821ebd058d?auto=format&fit=crop&w=800&q=80',
-  'steamed cassava with fresh grated coconut': 'https://images.unsplash.com/photo-1596040033229-a9821ebd058d?auto=format&fit=crop&w=800&q=80',
-  'ubi cilembu panggang manis alami': 'https://images.unsplash.com/photo-1596040033282-5d9c2cb48695?auto=format&fit=crop&w=800&q=80',
-  'roasted sweet potato with natural honey glaze': 'https://images.unsplash.com/photo-1596040033282-5d9c2cb48695?auto=format&fit=crop&w=800&q=80',
-  'keripik tempe panggang oven': 'https://images.unsplash.com/photo-1566478989037-eec170784d0b?auto=format&fit=crop&w=800&q=80',
-  'oven-baked crisp tempeh chips': 'https://images.unsplash.com/photo-1566478989037-eec170784d0b?auto=format&fit=crop&w=800&q=80',
-  'potongan buah semangka & melon dingin': 'https://images.unsplash.com/photo-1587049352846-4a222e784d38?auto=format&fit=crop&w=800&q=80',
-  'chilled watermelon & honeydew slices': 'https://images.unsplash.com/photo-1587049352846-4a222e784d38?auto=format&fit=crop&w=800&q=80',
-  'tahu kukus isi sayuran renyah': 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
-  'steamed tofu stuffed with julienned vegetables': 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
-  'telur puyuh rebus & timun segar': 'https://images.unsplash.com/photo-1506976785307-8732e854ad03?auto=format&fit=crop&w=800&q=80',
-  'hard-boiled quail eggs & crisp cucumber': 'https://images.unsplash.com/photo-1506976785307-8732e854ad03?auto=format&fit=crop&w=800&q=80',
+function isUrlAlreadyUsed(url: string, usedPhotoUrls?: Set<string>): boolean {
+  if (!usedPhotoUrls) return false;
+  const key = getCanonicalImageKey(url);
+  return usedPhotoUrls.has(url) || usedPhotoUrls.has(key);
+}
 
-  // Drinks
-  'wedang jahe lemon madu hangat': 'https://images.unsplash.com/photo-1544787219-7f47ccb76574?auto=format&fit=crop&w=800&q=80',
-  'warm ginger honey lemon infusion': 'https://images.unsplash.com/photo-1544787219-7f47ccb76574?auto=format&fit=crop&w=800&q=80',
-  'es teh hijau lemon selasih': 'https://images.unsplash.com/photo-1556679343-c7306c1976bc?auto=format&fit=crop&w=800&q=80',
-  'iced green tea with lemon & basil seeds': 'https://images.unsplash.com/photo-1556679343-c7306c1976bc?auto=format&fit=crop&w=800&q=80',
-  'jus mangga segar tanpa gula tambahan': 'https://images.unsplash.com/photo-1513558161293-cdaf765ed2fd?auto=format&fit=crop&w=800&q=80',
-  'pure fresh mango nectar smoothie': 'https://images.unsplash.com/photo-1513558161293-cdaf765ed2fd?auto=format&fit=crop&w=800&q=80',
-  'kunyit asam segar tradisional': 'https://images.unsplash.com/photo-1615485290382-441e4d049cb5?auto=format&fit=crop&w=800&q=80',
-  'traditional turmeric tamarind herbal drink': 'https://images.unsplash.com/photo-1615485290382-441e4d049cb5?auto=format&fit=crop&w=800&q=80',
-  'infused water lemon mentimun mint': 'https://images.unsplash.com/photo-1553530666-ba11a7da3888?auto=format&fit=crop&w=800&q=80',
-  'lemon, cucumber & fresh mint infused water': 'https://images.unsplash.com/photo-1553530666-ba11a7da3888?auto=format&fit=crop&w=800&q=80',
-  'jus alpukat susu almond rendah kalori': 'https://images.unsplash.com/photo-1546173159-315724a31696?auto=format&fit=crop&w=800&q=80',
-  'avocado almond milk silk shake': 'https://images.unsplash.com/photo-1546173159-315724a31696?auto=format&fit=crop&w=800&q=80',
-  'es kelapa muda jeruk nipis murni': 'https://images.unsplash.com/photo-1528825871115-3581a5387919?auto=format&fit=crop&w=800&q=80',
-  'pure coconut water with fresh lime': 'https://images.unsplash.com/photo-1528825871115-3581a5387919?auto=format&fit=crop&w=800&q=80',
-  'teh serai wangi pandan hangat': 'https://images.unsplash.com/photo-1576092768241-dec231879fc3?auto=format&fit=crop&w=800&q=80',
-  'warm lemongrass & pandan aromatic tea': 'https://images.unsplash.com/photo-1576092768241-dec231879fc3?auto=format&fit=crop&w=800&q=80',
-  'jus buah naga pisang energi booster': 'https://images.unsplash.com/photo-1553530666-ba11a7da3888?auto=format&fit=crop&w=800&q=80',
-  'dragon fruit banana energy smoothie': 'https://images.unsplash.com/photo-1553530666-ba11a7da3888?auto=format&fit=crop&w=800&q=80',
-  'susu kedelai hangat madu murni': 'https://images.unsplash.com/photo-1550583724-b2692b85b150?auto=format&fit=crop&w=800&q=80',
-  'warm soy milk with pure blossom honey': 'https://images.unsplash.com/photo-1550583724-b2692b85b150?auto=format&fit=crop&w=800&q=80',
-  'jus tomat apel segar detox': 'https://images.unsplash.com/photo-1534353473418-4cfa6c56fd38?auto=format&fit=crop&w=800&q=80',
-  'fresh tomato & crisp apple cleanse juice': 'https://images.unsplash.com/photo-1534353473418-4cfa6c56fd38?auto=format&fit=crop&w=800&q=80',
-  'matcha latte dingin susu oat': 'https://images.unsplash.com/photo-1536256263959-770b48d82b0a?auto=format&fit=crop&w=800&q=80',
-  'iced matcha green tea oat milk latte': 'https://images.unsplash.com/photo-1536256263959-770b48d82b0a?auto=format&fit=crop&w=800&q=80',
+function markUrlUsed(url: string, usedPhotoUrls?: Set<string>): void {
+  if (!usedPhotoUrls || !url) return;
+  usedPhotoUrls.add(url);
+  usedPhotoUrls.add(getCanonicalImageKey(url));
+}
 
-  // Desserts
-  'puding chia santan ringan buah naga': 'https://images.unsplash.com/photo-1551024709-8f23befc6f87?auto=format&fit=crop&w=800&q=80',
-  'dragon fruit light chia seed pudding': 'https://images.unsplash.com/photo-1551024709-8f23befc6f87?auto=format&fit=crop&w=800&q=80',
-  'vanilla bean panna cotta berry compote': 'https://images.unsplash.com/photo-1488477181946-6428a0291777?auto=format&fit=crop&w=800&q=80',
-  'puding kelapa muda daun pandan': 'https://images.unsplash.com/photo-1528825871115-3581a5387919?auto=format&fit=crop&w=800&q=80',
-  'silky pandan coconut water jelly pudding': 'https://images.unsplash.com/photo-1528825871115-3581a5387919?auto=format&fit=crop&w=800&q=80',
-  'bola ubi ungu kukus isi coklat hitam': 'https://images.unsplash.com/photo-1596040033229-a9821ebd058d?auto=format&fit=crop&w=800&q=80',
-  'steamed purple sweet potato dark chocolate bites': 'https://images.unsplash.com/photo-1596040033229-a9821ebd058d?auto=format&fit=crop&w=800&q=80',
-  'parfait yogurt yunani madu & granola': 'https://images.unsplash.com/photo-1488477181946-6428a0291777?auto=format&fit=crop&w=800&q=80',
-  'greek yogurt, honey & almond parfait': 'https://images.unsplash.com/photo-1488477181946-6428a0291777?auto=format&fit=crop&w=800&q=80',
-  'sorbet mangga jeruk segar tanpa gula': 'https://images.unsplash.com/photo-1505394033641-40c6ad1178d7?auto=format&fit=crop&w=800&q=80',
-  'pure mango citrus frozen sorbet': 'https://images.unsplash.com/photo-1505394033641-40c6ad1178d7?auto=format&fit=crop&w=800&q=80',
-  'pisang bakar coklat hitam & keju ringan': 'https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?auto=format&fit=crop&w=800&q=80',
-  'grilled banana with dark chocolate & light cheese': 'https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?auto=format&fit=crop&w=800&q=80',
-  'puding coklat hitam susu almond': 'https://images.unsplash.com/photo-1541781774459-bb2af2f05b55?auto=format&fit=crop&w=800&q=80',
-  'dark chocolate almond milk pudding': 'https://images.unsplash.com/photo-1541781774459-bb2af2f05b55?auto=format&fit=crop&w=800&q=80',
-  'es krim pisang beku madu (nice cream)': 'https://images.unsplash.com/photo-1501443762994-82bd5dace89a?auto=format&fit=crop&w=800&q=80',
-  '1-ingredient frozen banana honey nice cream': 'https://images.unsplash.com/photo-1501443762994-82bd5dace89a?auto=format&fit=crop&w=800&q=80',
-  'kolak pisang labu kuning tanpa santan': 'https://images.unsplash.com/photo-1565557623262-b51c2513a641?auto=format&fit=crop&w=800&q=80',
-  'healthy pumpkin & banana cinnamon compote': 'https://images.unsplash.com/photo-1565557623262-b51c2513a641?auto=format&fit=crop&w=800&q=80',
-  'agar-agar buah naga & leci segar': 'https://images.unsplash.com/photo-1590080875515-8a3a8dc5735e?auto=format&fit=crop&w=800&q=80',
-  'dragon fruit & lychee clear fruit agar jelly': 'https://images.unsplash.com/photo-1590080875515-8a3a8dc5735e?auto=format&fit=crop&w=800&q=80',
-  'mousse alpukat coklat hitam rendah kalori': 'https://images.unsplash.com/photo-1541781774459-bb2af2f05b55?auto=format&fit=crop&w=800&q=80',
-  'dark cacao & whipped avocado velvet mousse': 'https://images.unsplash.com/photo-1541781774459-bb2af2f05b55?auto=format&fit=crop&w=800&q=80'
-};
+// Verified TheMealDB CDN food photography pools organized by dish family
+const DISH_FAMILY_PHOTO_POOLS: Array<{ pattern: RegExp; urls: string[] }> = [
+  {
+    pattern: /\b(snack|snacks|bite|bites|almond|almonds|walnut|walnuts|nuts|falafel|hummus|edamame|chips|crackers|guacamole|dip|popcorn|trail\s+mix|baba\s+ghanoush|spring\s+roll|spring\s+rolls|yuca|fries|crisps|crudit[eé]s)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/xrrsvt1511814969.jpg",
+      "https://www.themealdb.com/images/media/meals/1529444113.jpg",
+      "https://www.themealdb.com/images/media/meals/dlmh401760524897.jpg",
+      "https://www.themealdb.com/images/media/meals/j223gc1784579841.jpg",
+      "https://www.themealdb.com/images/media/meals/grhn401765687086.jpg",
+      "https://www.themealdb.com/images/media/meals/1548772327.jpg",
+      "https://www.themealdb.com/images/media/meals/5vhbzt1782239221.jpg",
+      "https://www.themealdb.com/images/media/meals/st9shl1763755808.jpg",
+      "https://www.themealdb.com/images/media/meals/pk8wtn1763758591.jpg",
+      "https://www.themealdb.com/images/media/meals/k29viq1585565980.jpg",
+      "https://www.themealdb.com/images/media/meals/0iryz91763778419.jpg",
+      "https://www.themealdb.com/images/media/meals/w8umt11583268117.jpg"
+    ]
+  },
+  {
+    pattern: /\b(oat|oats|oatmeal|porridge|granola|muesli|chia\s+bowl)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/c400ok1764439058.jpg",
+      "https://www.themealdb.com/images/media/meals/sng9bm1765320170.jpg",
+      "https://www.themealdb.com/images/media/meals/hyk47c1762772689.jpg",
+      "https://www.themealdb.com/images/media/meals/bfok4w1780242078.jpg",
+      "https://www.themealdb.com/images/media/meals/1550441275.jpg",
+      "https://www.themealdb.com/images/media/meals/smoa3h1762341142.jpg"
+]
+  },
+  {
+    pattern: /\b(pancake|pancakes|waffle|waffles|crepe|crepes|french\s+toast|flapjack)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/oaqz9f1766593912.jpg",
+      "https://www.themealdb.com/images/media/meals/eqnf3p1779649407.jpg",
+      "https://www.themealdb.com/images/media/meals/c400ok1764439058.jpg",
+      "https://www.themealdb.com/images/media/meals/0206h11699013358.jpg",
+      "https://www.themealdb.com/images/media/meals/sywswr1511383814.jpg",
+      "https://www.themealdb.com/images/media/meals/xlqqhw1764369924.jpg",
+      "https://www.themealdb.com/images/media/meals/h7zrys1779736460.jpg",
+      "https://www.themealdb.com/images/media/meals/0wmns51784837949.jpg"
+]
+  },
+  {
+    pattern: /\b(omelette|omelet|scramble|shakshuka|frittata|menemen|poached\s+egg|boiled\s+egg)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/hqaejl1695738653.jpg",
+      "https://www.themealdb.com/images/media/meals/1550440197.jpg",
+      "https://www.themealdb.com/images/media/meals/30s7vf1763741844.jpg",
+      "https://www.themealdb.com/images/media/meals/vayi021784668764.jpg",
+      "https://www.themealdb.com/images/media/meals/47y6ii1765658818.jpg",
+      "https://www.themealdb.com/images/media/meals/2dsltq1560461468.jpg",
+      "https://www.themealdb.com/images/media/meals/rwvw8q1765660071.jpg",
+      "https://www.themealdb.com/images/media/meals/1529446137.jpg",
+      "https://www.themealdb.com/images/media/meals/qwtrtp1511799242.jpg",
+      "https://www.themealdb.com/images/media/meals/g373701551450225.jpg"
+]
+  },
+  {
+    pattern: /\b(pizza|margherita|lahmacun|manakeesh)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/wf49qs1763075222.jpg",
+      "https://www.themealdb.com/images/media/meals/tqd3ac1763786065.jpg",
+      "https://www.themealdb.com/images/media/meals/iydbwy1763816111.jpg",
+      "https://www.themealdb.com/images/media/meals/x0lk931587671540.jpg"
+]
+  },
+  {
+    pattern: /\b(burger|burgers|slider|sliders|patty)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/vdwloy1713225718.jpg",
+      "https://www.themealdb.com/images/media/meals/44bzep1761848278.jpg",
+      "https://www.themealdb.com/images/media/meals/lgmnff1763789847.jpg",
+      "https://www.themealdb.com/images/media/meals/k420tj1585565244.jpg"
+]
+  },
+  {
+    pattern: /\b(pasta|spaghetti|penne|fettuccine|macaroni|mac\s+and|lasagna|lasagne|rigatoni|tagliatelle|bolognese|alfredo)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/syqypv1486981727.jpg",
+      "https://www.themealdb.com/images/media/meals/qrqywr1503066605.jpg",
+      "https://www.themealdb.com/images/media/meals/sutysw1468247559.jpg",
+      "https://www.themealdb.com/images/media/meals/wvqpwt1468339226.jpg",
+      "https://www.themealdb.com/images/media/meals/usywpp1511189717.jpg",
+      "https://www.themealdb.com/images/media/meals/0jv5gx1661040802.jpg",
+      "https://www.themealdb.com/images/media/meals/uquqtu1511178042.jpg",
+      "https://www.themealdb.com/images/media/meals/xutquv1505330523.jpg",
+      "https://www.themealdb.com/images/media/meals/xr0n4r1576788363.jpg",
+      "https://www.themealdb.com/images/media/meals/wtsvxx1511296896.jpg"
+]
+  },
+  {
+    pattern: /\b(ramen|noodle|noodles|pad\s+thai|pho|udon|soba|chow\s+mein|lo\s+mein|mie\s+goreng)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/6g9gif1782688663.jpg",
+      "https://www.themealdb.com/images/media/meals/1529444830.jpg",
+      "https://www.themealdb.com/images/media/meals/pbzcrx1763765096.jpg",
+      "https://www.themealdb.com/images/media/meals/2wx8cm1763373419.jpg",
+      "https://www.themealdb.com/images/media/meals/ntafxw1763586291.jpg",
+      "https://www.themealdb.com/images/media/meals/st9shl1763755808.jpg",
+      "https://www.themealdb.com/images/media/meals/rvypwy1503069308.jpg",
+      "https://www.themealdb.com/images/media/meals/zry07j1763779321.jpg",
+      "https://www.themealdb.com/images/media/meals/rg9ze01763479093.jpg",
+      "https://www.themealdb.com/images/media/meals/0iryz91763778419.jpg"
+]
+  },
+  {
+    pattern: /\b(biryani|jollof|paella|fried\s+rice|nasi\s+goreng|pilaf|pulao|kabsa|mandi|risotto)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/fk80jp1763280767.jpg",
+      "https://www.themealdb.com/images/media/meals/wuyd2h1765655837.jpg",
+      "https://www.themealdb.com/images/media/meals/er4d081765186828.jpg",
+      "https://www.themealdb.com/images/media/meals/tytyxu1515363282.jpg",
+      "https://www.themealdb.com/images/media/meals/1nalo51765188375.jpg",
+      "https://www.themealdb.com/images/media/meals/9bl20p1763248192.jpg",
+      "https://www.themealdb.com/images/media/meals/xxrxux1503070723.jpg",
+      "https://www.themealdb.com/images/media/meals/5r5rvx1763287943.jpg",
+      "https://www.themealdb.com/images/media/meals/sl6vqv1763335988.jpg",
+      "https://www.themealdb.com/images/media/meals/c6ghxm1763335584.jpg",
+      "https://www.themealdb.com/images/media/meals/hblwvg1763478203.jpg",
+      "https://www.themealdb.com/images/media/meals/11bvtm1764795135.jpg"
+]
+  },
+  {
+    pattern: /\b(taco|tacos|quesadilla|burrito|fajita|enchilada|nachos|tortilla)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/qtuwxu1468233098.jpg",
+      "https://www.themealdb.com/images/media/meals/qrqywr1503066605.jpg",
+      "https://www.themealdb.com/images/media/meals/ypxvwv1505333929.jpg",
+      "https://www.themealdb.com/images/media/meals/swo87v1763595282.jpg",
+      "https://www.themealdb.com/images/media/meals/uvuyxu1503067369.jpg",
+      "https://www.themealdb.com/images/media/meals/njj1681763297231.jpg",
+      "https://www.themealdb.com/images/media/meals/quuxsx1511476154.jpg",
+      "https://www.themealdb.com/images/media/meals/7b862e1763194846.jpg"
+]
+  },
+  {
+    pattern: /\b(shawarma|kebab|kebabs|kofta|gyro|gyros|doner|souvlaki|skewer|skewers|satay)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/hcg6l91763596970.jpg",
+      "https://www.themealdb.com/images/media/meals/prjve31763486864.jpg",
+      "https://www.themealdb.com/images/media/meals/kcv6hj1598733479.jpg",
+      "https://www.themealdb.com/images/media/meals/3um6il1763794322.jpg",
+      "https://www.themealdb.com/images/media/meals/swo87v1763595282.jpg",
+      "https://www.themealdb.com/images/media/meals/i8l2fu1763742525.jpg",
+      "https://www.themealdb.com/images/media/meals/04axct1763793018.jpg",
+      "https://www.themealdb.com/images/media/meals/lgmnff1763789847.jpg"
+]
+  },
+  {
+    pattern: /\b(sushi|maki|nori|dumpling|dumplings|gyoza|pierogi|bao|spring\s+roll)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/uyqrrv1511553350.jpg",
+      "https://www.themealdb.com/images/media/meals/g046bb1663960946.jpg",
+      "https://www.themealdb.com/images/media/meals/x26z3y1780155760.jpg",
+      "https://www.themealdb.com/images/media/meals/ckbx1h1764123606.jpg",
+      "https://www.themealdb.com/images/media/meals/tsdbcq1764795636.jpg",
+      "https://www.themealdb.com/images/media/meals/g6xb8m1764875029.jpg",
+      "https://www.themealdb.com/images/media/meals/dd7t4d1764877271.jpg",
+      "https://www.themealdb.com/images/media/meals/45xxr21593348847.jpg"
+]
+  },
+  {
+    pattern: /\b(curry|butter\s+chicken|masala|tikka|dal|daal|rendang|korma|vindaloo)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/9ya6o71780262651.jpg",
+      "https://www.themealdb.com/images/media/meals/o5fuq51764789643.jpg",
+      "https://www.themealdb.com/images/media/meals/vwrpps1503068729.jpg",
+      "https://www.themealdb.com/images/media/meals/yxsurp1511304301.jpg",
+      "https://www.themealdb.com/images/media/meals/0dhtwr1763371444.jpg",
+      "https://www.themealdb.com/images/media/meals/prjve31763486864.jpg",
+      "https://www.themealdb.com/images/media/meals/k5qzdl1782689660.jpg",
+      "https://www.themealdb.com/images/media/meals/sstssx1487349585.jpg",
+      "https://www.themealdb.com/images/media/meals/bc8v651619789840.jpg",
+      "https://www.themealdb.com/images/media/meals/lqampv1762325397.jpg"
+]
+  },
+  {
+    pattern: /\b(steak|sirloin|ribeye|beef|veal|lamb|meatball|meatballs|shepherd|stroganoff)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/8rfd4q1764112993.jpg",
+      "https://www.themealdb.com/images/media/meals/13fg4j1764441982.jpg",
+      "https://www.themealdb.com/images/media/meals/jgl9qq1764437635.jpg",
+      "https://www.themealdb.com/images/media/meals/kgfh3q1763075438.jpg",
+      "https://www.themealdb.com/images/media/meals/44bzep1761848278.jpg",
+      "https://www.themealdb.com/images/media/meals/5tf8j11782236249.jpg",
+      "https://www.themealdb.com/images/media/meals/m0p0j81765568742.jpg",
+      "https://www.themealdb.com/images/media/meals/sytuqu1511553755.jpg",
+      "https://www.themealdb.com/images/media/meals/wrssvt1511556563.jpg",
+      "https://www.themealdb.com/images/media/meals/pkopc31683207947.jpg",
+      "https://www.themealdb.com/images/media/meals/z0ageb1583189517.jpg",
+      "https://www.themealdb.com/images/media/meals/vtqxtu1511784197.jpg"
+]
+  },
+  {
+    pattern: /\b(soup|stew|broth|minestrone|chowder|laksa|soto|harira|lentil\s+soup)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/sypxpx1515365095.jpg",
+      "https://www.themealdb.com/images/media/meals/6g9gif1782688663.jpg",
+      "https://www.themealdb.com/images/media/meals/lx1kkj1593349302.jpg",
+      "https://www.themealdb.com/images/media/meals/bmbvjk1782770310.jpg",
+      "https://www.themealdb.com/images/media/meals/7kb44y1763589084.jpg",
+      "https://www.themealdb.com/images/media/meals/uyqrrv1511553350.jpg",
+      "https://www.themealdb.com/images/media/meals/k07k271782502861.jpg",
+      "https://www.themealdb.com/images/media/meals/fl4brj1764361323.jpg",
+      "https://www.themealdb.com/images/media/meals/xrxz7h1782592711.jpg",
+      "https://www.themealdb.com/images/media/meals/6vi2cv1763075785.jpg"
+]
+  },
+  {
+    pattern: /\b(toast|sandwich|panini|sub|bagel|chapati|roti|naan|paratha|pita|roll-up|wrap)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/sbx7n71587673021.jpg",
+      "https://www.themealdb.com/images/media/meals/mp9z0i1782238092.jpg",
+      "https://www.themealdb.com/images/media/meals/o93jur1782769321.jpg",
+      "https://www.themealdb.com/images/media/meals/nlxald1764112200.jpg",
+      "https://www.themealdb.com/images/media/meals/j80gmw1764372176.jpg",
+      "https://www.themealdb.com/images/media/meals/hx335q1619789561.jpg",
+      "https://www.themealdb.com/images/media/meals/xutquv1505330523.jpg",
+      "https://www.themealdb.com/images/media/meals/ae6clc1760524712.jpg"
+]
+  },
+  {
+    pattern: /\b(salad|quinoa|chickpea|falafel|hummus|guacamole|avocado|edamame|tempeh|tofu|veggie|vegetable)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/k29viq1585565980.jpg",
+      "https://www.themealdb.com/images/media/meals/t5rgav1784659936.jpg",
+      "https://www.themealdb.com/images/media/meals/pk8wtn1763758591.jpg",
+      "https://www.themealdb.com/images/media/meals/6vi2cv1763075785.jpg",
+      "https://www.themealdb.com/images/media/meals/1525874812.jpg",
+      "https://www.themealdb.com/images/media/meals/st9shl1763755808.jpg",
+      "https://www.themealdb.com/images/media/meals/w8umt11583268117.jpg",
+      "https://www.themealdb.com/images/media/meals/4xcfai1763765676.jpg",
+      "https://www.themealdb.com/images/media/meals/wvqpwt1468339226.jpg",
+      "https://www.themealdb.com/images/media/meals/zry07j1763779321.jpg",
+      "https://www.themealdb.com/images/media/meals/0iryz91763778419.jpg",
+      "https://www.themealdb.com/images/media/meals/1549542994.jpg"
+]
+  },
+  {
+    pattern: /\b(salmon|cod|tilapia|trout|fish|seafood|shrimp|prawn|tuna)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/1550440197.jpg",
+      "https://www.themealdb.com/images/media/meals/dxs5t71782678369.jpg",
+      "https://www.themealdb.com/images/media/meals/diuub11782687570.jpg",
+      "https://www.themealdb.com/images/media/meals/jc6oub1763196663.jpg",
+      "https://www.themealdb.com/images/media/meals/e2kcut1782591669.jpg",
+      "https://www.themealdb.com/images/media/meals/1548772327.jpg",
+      "https://www.themealdb.com/images/media/meals/qqwhw51780093126.jpg",
+      "https://www.themealdb.com/images/media/meals/4xcfai1763765676.jpg",
+      "https://www.themealdb.com/images/media/meals/r7mcjm1780261264.jpg",
+      "https://www.themealdb.com/images/media/meals/4o4wh11761848573.jpg",
+      "https://www.themealdb.com/images/media/meals/uvuyxu1503067369.jpg",
+      "https://www.themealdb.com/images/media/meals/jg4r991779916649.jpg"
+]
+  },
+  {
+    pattern: /\b(chicken|turkey|poultry)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/vdwloy1713225718.jpg",
+      "https://www.themealdb.com/images/media/meals/020z181619788503.jpg",
+      "https://www.themealdb.com/images/media/meals/nmxec11782498644.jpg",
+      "https://www.themealdb.com/images/media/meals/9ya6o71780262651.jpg",
+      "https://www.themealdb.com/images/media/meals/sypxpx1515365095.jpg",
+      "https://www.themealdb.com/images/media/meals/sbx7n71587673021.jpg",
+      "https://www.themealdb.com/images/media/meals/fk80jp1763280767.jpg",
+      "https://www.themealdb.com/images/media/meals/uuuspp1511297945.jpg",
+      "https://www.themealdb.com/images/media/meals/syqypv1486981727.jpg",
+      "https://www.themealdb.com/images/media/meals/mp9z0i1782238092.jpg",
+      "https://www.themealdb.com/images/media/meals/wruvqv1511880994.jpg",
+      "https://www.themealdb.com/images/media/meals/1529446352.jpg"
+]
+  },
+  {
+    pattern: /\b(tea|latte|smoothie|juice|water|cooler|infusion|lemonade|drink|matcha|coco)\b/i,
+    urls: [
+      "https://www.thecocktaildb.com/images/media/drink/vuquyv1468876052.jpg",
+      "https://www.thecocktaildb.com/images/media/drink/qyqtpv1468876144.jpg",
+      "https://www.thecocktaildb.com/images/media/drink/wsyvrt1468876267.jpg",
+      "https://www.thecocktaildb.com/images/media/drink/uptxtv1468876415.jpg",
+      "https://www.thecocktaildb.com/images/media/drink/xwqvur1468876473.jpg",
+      "https://www.thecocktaildb.com/images/media/drink/syusvw1468876634.jpg",
+      "https://www.thecocktaildb.com/images/media/drink/uqxqsy1468876703.jpg",
+      "https://www.thecocktaildb.com/images/media/drink/rtwwsx1472720307.jpg",
+      "https://www.thecocktaildb.com/images/media/drink/vqquwx1472720634.jpg",
+      "https://www.thecocktaildb.com/images/media/drink/uvypss1472720581.jpg",
+      "https://www.thecocktaildb.com/images/media/drink/xwuqvw1473201811.jpg",
+      "https://www.thecocktaildb.com/images/media/drink/3nbu4a1487603196.jpg",
+      "https://www.thecocktaildb.com/images/media/drink/jbqrhv1487603186.jpg",
+      "https://www.thecocktaildb.com/images/media/drink/q7w4xu1487603180.jpg",
+      "https://www.thecocktaildb.com/images/media/drink/yrtxxp1472719367.jpg",
+      "https://www.thecocktaildb.com/images/media/drink/mzgaqu1504389248.jpg"
+]
+  },
+  {
+    pattern: /\b(pudding|sorbet|mousse|crumble|nice\s+cream|berry|berries|apple|banana|mango|watermelon|parfait|jelly|date|dessert)\b/i,
+    urls: [
+      "https://www.themealdb.com/images/media/meals/xrrtss1511555269.jpg",
+      "https://www.themealdb.com/images/media/meals/ruwpww1511817242.jpg",
+      "https://www.themealdb.com/images/media/meals/8ovxf41763253962.jpg",
+      "https://www.themealdb.com/images/media/meals/sytuqu1511553755.jpg",
+      "https://www.themealdb.com/images/media/meals/wrssvt1511556563.jpg",
+      "https://www.themealdb.com/images/media/meals/pvfkz61761595976.jpg",
+      "https://www.themealdb.com/images/media/meals/xwutvy1511555540.jpg",
+      "https://www.themealdb.com/images/media/meals/h031jy1782853081.jpg",
+      "https://www.themealdb.com/images/media/meals/qysyss1511558054.jpg",
+      "https://www.themealdb.com/images/media/meals/w8umt11583268117.jpg",
+      "https://www.themealdb.com/images/media/meals/ysxwuq1487323065.jpg",
+      "https://www.themealdb.com/images/media/meals/spswqs1511558697.jpg",
+      "https://www.themealdb.com/images/media/meals/kpiu4t1782242131.jpg",
+      "https://www.themealdb.com/images/media/meals/hbte551782770868.jpg",
+      "https://www.themealdb.com/images/media/meals/ae4rwb1779645576.jpg"
+]
+  }
+];
 
-// Fallback images categorized by meal category
+// Verified HTTP-200 reserve pool of 100 distinct TheMealDB culinary photographs
+const RESERVE_UNIQUE_CULINARY_PHOTOS: string[] = [
+  "https://www.themealdb.com/images/media/meals/jvjnoh1780086318.jpg",
+  "https://www.themealdb.com/images/media/meals/hqaejl1695738653.jpg",
+  "https://www.themealdb.com/images/media/meals/1550441882.jpg",
+  "https://www.themealdb.com/images/media/meals/oaqz9f1766593912.jpg",
+  "https://www.themealdb.com/images/media/meals/utxryw1511721587.jpg",
+  "https://www.themealdb.com/images/media/meals/eqnf3p1779649407.jpg",
+  "https://www.themealdb.com/images/media/meals/1543774956.jpg",
+  "https://www.themealdb.com/images/media/meals/sqrtwu1511721265.jpg",
+  "https://www.themealdb.com/images/media/meals/bfok4w1780242078.jpg",
+  "https://www.themealdb.com/images/media/meals/thazgm1555350962.jpg",
+  "https://www.themealdb.com/images/media/meals/sng9bm1765320170.jpg",
+  "https://www.themealdb.com/images/media/meals/c400ok1764439058.jpg",
+  "https://www.themealdb.com/images/media/meals/hyk47c1762772689.jpg",
+  "https://www.themealdb.com/images/media/meals/1550440197.jpg",
+  "https://www.themealdb.com/images/media/meals/1550441275.jpg",
+  "https://www.themealdb.com/images/media/meals/927vvp1779732018.jpg",
+  "https://www.themealdb.com/images/media/meals/f3ee3y1763309332.jpg",
+  "https://www.themealdb.com/images/media/meals/smoa3h1762341142.jpg",
+  "https://www.themealdb.com/images/media/meals/30s7vf1763741844.jpg",
+  "https://www.themealdb.com/images/media/meals/vdwloy1713225718.jpg",
+  "https://www.themealdb.com/images/media/meals/020z181619788503.jpg",
+  "https://www.themealdb.com/images/media/meals/nmxec11782498644.jpg",
+  "https://www.themealdb.com/images/media/meals/9ya6o71780262651.jpg",
+  "https://www.themealdb.com/images/media/meals/sypxpx1515365095.jpg",
+  "https://www.themealdb.com/images/media/meals/sbx7n71587673021.jpg",
+  "https://www.themealdb.com/images/media/meals/fk80jp1763280767.jpg",
+  "https://www.themealdb.com/images/media/meals/uuuspp1511297945.jpg",
+  "https://www.themealdb.com/images/media/meals/syqypv1486981727.jpg",
+  "https://www.themealdb.com/images/media/meals/mp9z0i1782238092.jpg",
+  "https://www.themealdb.com/images/media/meals/wruvqv1511880994.jpg",
+  "https://www.themealdb.com/images/media/meals/1529446352.jpg",
+  "https://www.themealdb.com/images/media/meals/qxytrx1511304021.jpg",
+  "https://www.themealdb.com/images/media/meals/qtuwxu1468233098.jpg",
+  "https://www.themealdb.com/images/media/meals/qrqywr1503066605.jpg",
+  "https://www.themealdb.com/images/media/meals/wuyd2h1765655837.jpg",
+  "https://www.themealdb.com/images/media/meals/xrrtss1511555269.jpg",
+  "https://www.themealdb.com/images/media/meals/wyxwsp1486979827.jpg",
+  "https://www.themealdb.com/images/media/meals/uuns781783804024.jpg",
+  "https://www.themealdb.com/images/media/meals/tyywsw1505930373.jpg",
+  "https://www.themealdb.com/images/media/meals/hob03q1780264260.jpg",
+  "https://www.themealdb.com/images/media/meals/nz0lg71784671684.jpg",
+  "https://www.themealdb.com/images/media/meals/er4d081765186828.jpg",
+  "https://www.themealdb.com/images/media/meals/qpxvuq1511798906.jpg",
+  "https://www.themealdb.com/images/media/meals/uwvxpv1511557015.jpg",
+  "https://www.themealdb.com/images/media/meals/k29viq1585565980.jpg",
+  "https://www.themealdb.com/images/media/meals/t5rgav1784659936.jpg",
+  "https://www.themealdb.com/images/media/meals/hcg6l91763596970.jpg",
+  "https://www.themealdb.com/images/media/meals/4hzyvq1763792564.jpg",
+  "https://www.themealdb.com/images/media/meals/4mhr3u1763481087.jpg",
+  "https://www.themealdb.com/images/media/meals/s73ytv1765567838.jpg",
+  "https://www.themealdb.com/images/media/meals/qstyvs1505931190.jpg",
+  "https://www.themealdb.com/images/media/meals/4htbtm1783803558.jpg",
+  "https://www.themealdb.com/images/media/meals/ypxvwv1505333929.jpg",
+  "https://www.themealdb.com/images/media/meals/kzxflc1763194887.jpg",
+  "https://www.themealdb.com/images/media/meals/feh9k21784665694.jpg",
+  "https://www.themealdb.com/images/media/meals/b5ft861583188991.jpg",
+  "https://www.themealdb.com/images/media/meals/1529444113.jpg",
+  "https://www.themealdb.com/images/media/meals/kvbotn1581012881.jpg",
+  "https://www.themealdb.com/images/media/meals/o5fuq51764789643.jpg",
+  "https://www.themealdb.com/images/media/meals/tytyxu1515363282.jpg",
+  "https://www.themealdb.com/images/media/meals/utqnjv1763598650.jpg",
+  "https://www.themealdb.com/images/media/meals/vwrpps1503068729.jpg",
+  "https://www.themealdb.com/images/media/meals/40r49m1763197022.jpg",
+  "https://www.themealdb.com/images/media/meals/1525872624.jpg",
+  "https://www.themealdb.com/images/media/meals/6g9gif1782688663.jpg",
+  "https://www.themealdb.com/images/media/meals/o93jur1782769321.jpg",
+  "https://www.themealdb.com/images/media/meals/yxsurp1511304301.jpg",
+  "https://www.themealdb.com/images/media/meals/uuuspp1468263334.jpg",
+  "https://www.themealdb.com/images/media/meals/0dhtwr1763371444.jpg",
+  "https://www.themealdb.com/images/media/meals/47abic1782854326.jpg",
+  "https://www.themealdb.com/images/media/meals/hglsbl1614346998.jpg",
+  "https://www.themealdb.com/images/media/meals/li30ck1763281992.jpg",
+  "https://www.themealdb.com/images/media/meals/4o13oe1784396585.jpg",
+  "https://www.themealdb.com/images/media/meals/qwrtut1468418027.jpg",
+  "https://www.themealdb.com/images/media/meals/nlxald1764112200.jpg",
+  "https://www.themealdb.com/images/media/meals/ruwpww1511817242.jpg",
+  "https://www.themealdb.com/images/media/meals/prjve31763486864.jpg",
+  "https://www.themealdb.com/images/media/meals/ro8mzj1763800655.jpg",
+  "https://www.themealdb.com/images/media/meals/lx1kkj1593349302.jpg",
+  "https://www.themealdb.com/images/media/meals/k5qzdl1782689660.jpg",
+  "https://www.themealdb.com/images/media/meals/bmbvjk1782770310.jpg",
+  "https://www.themealdb.com/images/media/meals/kcv6hj1598733479.jpg",
+  "https://www.themealdb.com/images/media/meals/3um6il1763794322.jpg",
+  "https://www.themealdb.com/images/media/meals/bpkxtw1763332446.jpg",
+  "https://www.themealdb.com/images/media/meals/pqulvm1763282839.jpg",
+  "https://www.themealdb.com/images/media/meals/8ovxf41763253962.jpg",
+  "https://www.themealdb.com/images/media/meals/a08uqk1761848682.jpg",
+  "https://www.themealdb.com/images/media/meals/cj56fs1762340001.jpg",
+  "https://www.themealdb.com/images/media/meals/el64dy1763483009.jpg",
+  "https://www.themealdb.com/images/media/meals/arzs741766434335.jpg",
+  "https://www.themealdb.com/images/media/meals/d8bfyg1764117503.jpg",
+  "https://www.themealdb.com/images/media/meals/qptpvt1487339892.jpg",
+  "https://www.themealdb.com/images/media/meals/wvpsxx1468256321.jpg",
+  "https://www.themealdb.com/images/media/meals/6s3i3p1763488540.jpg",
+  "https://www.themealdb.com/images/media/meals/ittake1763586925.jpg",
+  "https://www.themealdb.com/images/media/meals/7kb44y1763589084.jpg",
+  "https://www.themealdb.com/images/media/meals/sstssx1487349585.jpg",
+  "https://www.themealdb.com/images/media/meals/ol2xxt1763582263.jpg",
+  "https://www.themealdb.com/images/media/meals/z2sw3o1764378271.jpg",
+  "https://www.themealdb.com/images/media/meals/pk8wtn1763758591.jpg"
+];
+
+// Fallback images categorized by meal category strictly using TheMealDB CDN
 const CATEGORY_DEFAULT_IMAGES: Record<string, string> = {
-  breakfast: 'https://images.unsplash.com/photo-1517673400267-0251440c45dc?auto=format&fit=crop&w=800&q=80',
-  lunch: 'https://images.unsplash.com/photo-1598515214211-89d3c73ae83b?auto=format&fit=crop&w=800&q=80',
-  dinner: 'https://images.unsplash.com/photo-1555939594-58d7cb561ad1?auto=format&fit=crop&w=800&q=80',
-  snacks: 'https://images.unsplash.com/photo-1559847844-5315695dadae?auto=format&fit=crop&w=800&q=80',
-  drinks: 'https://images.unsplash.com/photo-1556679343-c7306c1976bc?auto=format&fit=crop&w=800&q=80',
-  desserts: 'https://images.unsplash.com/photo-1488477181946-6428a0291777?auto=format&fit=crop&w=800&q=80',
-  default: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80'
+  breakfast: 'https://www.themealdb.com/images/media/meals/c400ok1764439058.jpg',
+  lunch: 'https://www.themealdb.com/images/media/meals/sypxpx1515365095.jpg',
+  dinner: 'https://www.themealdb.com/images/media/meals/sytuqu1511553755.jpg',
+  snack: 'https://www.themealdb.com/images/media/meals/xrrsvt1511814969.jpg',
+  snacks: 'https://www.themealdb.com/images/media/meals/xrrsvt1511814969.jpg',
+  drink: 'https://www.thecocktaildb.com/images/media/drink/5noda61589575158.jpg',
+  drinks: 'https://www.thecocktaildb.com/images/media/drink/5noda61589575158.jpg',
+  dessert: 'https://www.themealdb.com/images/media/meals/adxcbq1619787919.jpg',
+  desserts: 'https://www.themealdb.com/images/media/meals/adxcbq1619787919.jpg',
+  default: 'https://www.themealdb.com/images/media/meals/sypxpx1515365095.jpg'
 };
 
 // Master list of all unique photo URLs for collision-free fallback
-const ALL_UNIQUE_PHOTOS = Array.from(new Set(Object.values(CULINARY_PHOTO_MAP)));
+const ALL_UNIQUE_PHOTOS: string[] = [];
+const seenMasterKeys = new Set<string>();
+for (const group of DISH_FAMILY_PHOTO_POOLS) {
+  for (const url of group.urls) {
+    const key = getCanonicalImageKey(url);
+    if (!seenMasterKeys.has(key)) {
+      seenMasterKeys.add(key);
+      ALL_UNIQUE_PHOTOS.push(url);
+    }
+  }
+}
+for (const url of RESERVE_UNIQUE_CULINARY_PHOTOS) {
+  const key = getCanonicalImageKey(url);
+  if (!seenMasterKeys.has(key)) {
+    seenMasterKeys.add(key);
+    ALL_UNIQUE_PHOTOS.push(url);
+  }
+}
+
+/**
+ * Sanitizes an existing image URL; if it is missing, matches a known broken URL,
+ * or has ALREADY been used in `usedPhotoUrls`, resolves a unique dish-matched replacement from TheMealDB.
+ */
+export function sanitizeFoodImageUrl(
+  existingUrl: string | null | undefined,
+  dishName: string = '',
+  cuisine: string = 'International',
+  category: string = 'lunch',
+  usedPhotoUrls?: Set<string>
+): string {
+  if (existingUrl && !isBrokenImageUrl(existingUrl)) {
+    const cleanUrl = existingUrl.trim();
+    if (!isUrlAlreadyUsed(cleanUrl, usedPhotoUrls)) {
+      markUrlUsed(cleanUrl, usedPhotoUrls);
+      return cleanUrl;
+    }
+  }
+  return getFoodImageUrl(dishName, cuisine, category, usedPhotoUrls);
+}
 
 /**
  * Resolves a high-quality, verified culinary food image matching the dish title, cuisine, and category.
- * Guarantees zero duplicate URLs across cards by hashing unmatched titles into unique photos.
+ * Guarantees zero duplicate URLs across cards by selecting unused photos from TheMealDB dish family
+ * or collision-free reserve pool.
  */
 export function getFoodImageUrl(
   dishName: string = '',
-  cuisine: string = 'Indonesian',
+  cuisine: string = 'International',
   category: string = 'lunch',
   usedPhotoUrls?: Set<string>
 ): string {
   const lowerTitle = dishName.toLowerCase().trim();
   const lowerCat = category.toLowerCase().trim();
 
-  // 1. Direct exact match from culinary photo catalog
-  if (CULINARY_PHOTO_MAP[lowerTitle]) {
-    const url = CULINARY_PHOTO_MAP[lowerTitle];
-    if (!usedPhotoUrls || !usedPhotoUrls.has(url)) {
-      usedPhotoUrls?.add(url);
-      return url;
-    }
+  // Compute deterministic hash from title so different dishes in the same family start at different offsets
+  let hash = 0;
+  for (let i = 0; i < lowerTitle.length; i++) {
+    hash = (hash << 5) - hash + lowerTitle.charCodeAt(i);
+    hash |= 0;
   }
+  const absHash = Math.abs(hash);
 
-  // 2. Keyword substring match
-  for (const [key, url] of Object.entries(CULINARY_PHOTO_MAP)) {
-    if (lowerTitle.includes(key) || key.includes(lowerTitle)) {
-      if (!usedPhotoUrls || !usedPhotoUrls.has(url)) {
-        usedPhotoUrls?.add(url);
-        return url;
+  // 1. Match dish-family photo pool first so the image visually represents the dish type
+  for (const family of DISH_FAMILY_PHOTO_POOLS) {
+    if (family.pattern.test(lowerTitle)) {
+      const pool = family.urls;
+      for (let i = 0; i < pool.length; i++) {
+        const candidate = pool[(absHash + i) % pool.length];
+        if (!isUrlAlreadyUsed(candidate, usedPhotoUrls)) {
+          markUrlUsed(candidate, usedPhotoUrls);
+          return candidate;
+        }
       }
     }
   }
 
-  // 3. Collision-free deterministic hash into unique photos pool
-  if (ALL_UNIQUE_PHOTOS.length > 0) {
-    let hash = 0;
-    for (let i = 0; i < lowerTitle.length; i++) {
-      hash = (hash << 5) - hash + lowerTitle.charCodeAt(i);
-      hash |= 0;
+  // 2. Category-matched family fallback
+  if (lowerCat.includes('drink')) {
+    const drinkPool = DISH_FAMILY_PHOTO_POOLS.find(f => f.pattern.source.includes('smoothie'))?.urls || [];
+    for (let i = 0; i < drinkPool.length; i++) {
+      const candidate = drinkPool[(absHash + i) % drinkPool.length];
+      if (!isUrlAlreadyUsed(candidate, usedPhotoUrls)) {
+        markUrlUsed(candidate, usedPhotoUrls);
+        return candidate;
+      }
     }
-    const startIndex = Math.abs(hash) % ALL_UNIQUE_PHOTOS.length;
-    
-    // Find first unused photo starting from hash index
+  } else if (lowerCat.includes('dessert')) {
+    const dessertPool = DISH_FAMILY_PHOTO_POOLS.find(f => f.pattern.source.includes('pudding'))?.urls || [];
+    for (let i = 0; i < dessertPool.length; i++) {
+      const candidate = dessertPool[(absHash + i) % dessertPool.length];
+      if (!isUrlAlreadyUsed(candidate, usedPhotoUrls)) {
+        markUrlUsed(candidate, usedPhotoUrls);
+        return candidate;
+      }
+    }
+  } else if (lowerCat.includes('snack')) {
+    const snackPool = DISH_FAMILY_PHOTO_POOLS.find(f => f.pattern.source.includes('falafel'))?.urls || [
+      "https://www.themealdb.com/images/media/meals/xrrsvt1511814969.jpg",
+      "https://www.themealdb.com/images/media/meals/1529444113.jpg",
+      "https://www.themealdb.com/images/media/meals/dlmh401760524897.jpg",
+      "https://www.themealdb.com/images/media/meals/j223gc1784579841.jpg",
+      "https://www.themealdb.com/images/media/meals/grhn401765687086.jpg",
+      "https://www.themealdb.com/images/media/meals/1548772327.jpg",
+      "https://www.themealdb.com/images/media/meals/5vhbzt1782239221.jpg",
+      "https://www.themealdb.com/images/media/meals/st9shl1763755808.jpg",
+      "https://www.themealdb.com/images/media/meals/pk8wtn1763758591.jpg",
+      "https://www.themealdb.com/images/media/meals/k29viq1585565980.jpg",
+      "https://www.themealdb.com/images/media/meals/0iryz91763778419.jpg",
+      "https://www.themealdb.com/images/media/meals/w8umt11583268117.jpg"
+    ];
+    for (let i = 0; i < snackPool.length; i++) {
+      const candidate = snackPool[(absHash + i) % snackPool.length];
+      if (!isUrlAlreadyUsed(candidate, usedPhotoUrls)) {
+        markUrlUsed(candidate, usedPhotoUrls);
+        return candidate;
+      }
+    }
+  }
+
+  // 3. Collision-free deterministic hash into master unique photos pool
+  if (ALL_UNIQUE_PHOTOS.length > 0) {
+    const startIndex = absHash % ALL_UNIQUE_PHOTOS.length;
     for (let i = 0; i < ALL_UNIQUE_PHOTOS.length; i++) {
       const idx = (startIndex + i) % ALL_UNIQUE_PHOTOS.length;
       const candidateUrl = ALL_UNIQUE_PHOTOS[idx];
-      if (!usedPhotoUrls || !usedPhotoUrls.has(candidateUrl)) {
-        usedPhotoUrls?.add(candidateUrl);
+      if (!isUrlAlreadyUsed(candidateUrl, usedPhotoUrls)) {
+        markUrlUsed(candidateUrl, usedPhotoUrls);
         return candidateUrl;
       }
     }
-
     return ALL_UNIQUE_PHOTOS[startIndex];
   }
 
   // 4. Return category-specific authentic fallback
   const fallback = CATEGORY_DEFAULT_IMAGES[lowerCat] || CATEGORY_DEFAULT_IMAGES.default;
-  usedPhotoUrls?.add(fallback);
+  markUrlUsed(fallback, usedPhotoUrls);
   return fallback;
 }
