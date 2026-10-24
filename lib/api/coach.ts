@@ -53,27 +53,27 @@ export async function generateDailySummary(userId: string, targetDate?: string) 
     if (usageCount > 10) insights.push("You're very active in the app! Great engagement.");
 
     const summary = `
-🌟 *VICALARY Daily Performance Report*
+🌟 VICALARY Daily Performance Report
 📅 Date: ${date}
 
-*Nutrition Adherence:*
+Nutrition Adherence:
 - Calories: ${progress.calories_consumed || 0} / ${progress.calories_goal || 2000} kcal
 - Macros: P:${progress.protein_consumed || 0}g, C:${progress.carbs_consumed || 0}g, F:${progress.fat_consumed || 0}g
 
-*Activity & Engagement:*
+Activity & Engagement:
 - App Usage: ${usageCount} interactions
 - Goals Met: ${goalsCompleted.length > 0 ? goalsCompleted.join(", ") : "None yet"}
 - Spiritual Reminders: ${spiritualCount} engaged
 
-*Coach Insights:*
+Coach Insights:
 ${insights.length > 0 ? insights.map(i => `• ${i}`).join("\n") : "You're doing great! Keep following your personalized plan."}
 
-*Focus for Tomorrow:*
+Focus for Tomorrow:
 ${progress.calories_consumed > (progress.calories_goal || 2000) ? "• Try to stick closer to your calorie budget." : "• Maintain this great momentum!"}
 • pick a new recipe from the Cookbook.
 
 Keep pushing toward your goals! I'm here to support you.
-    `.trim();
+    `.trim().replace(/[*#]/g, '');
 
     // 4. Send message
     await provisionAndSendMessage(COACH_ID, userId, summary, 'text', {
@@ -86,3 +86,61 @@ Keep pushing toward your goals! I'm here to support you.
     console.error("[Coach] Failed to generate daily summary:", error);
   }
 }
+
+/**
+ * Sends a firm, authoritative Health Coach alert message into the user's
+ * Health Coach chat conversation when they exceed their daily calorie goal.
+ */
+export async function sendCoachCalorieExceededAlert(
+  userId: string,
+  consumedCalories: number,
+  goalCalories: number,
+  mealName?: string
+) {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const excess = Math.max(0, consumedCalories - goalCalories);
+
+    // Call server endpoint for guaranteed service-role delivery into coach conversation
+    const res = await fetch('/api/coach/calorie-alert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId,
+        consumed: consumedCalories,
+        goal: goalCalories,
+        mealName,
+        date: today
+      })
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      console.log(`[Coach] Calorie exceeded alert delivered via server endpoint for user ${userId}:`, data);
+      return data;
+    } else {
+      console.warn(`[Coach] Server calorie-alert returned status ${res.status}, running client fallback...`);
+    }
+
+    // Client fallback if offline or server endpoint unreachable
+    const alertText = `STOP EATING IMMEDIATELY! This is an urgent health alert.
+
+You have consumed ${consumedCalories} kcal today, blowing past your target goal of ${goalCalories} kcal by an extra +${excess} calories! ${mealName ? `Logging "${mealName}" pushed you even deeper into a dangerous surplus.\n\n` : ''}Consuming this excess forces your body into aggressive fat storage, causes intense blood sugar and insulin spikes, strains your cardiovascular system, and completely sabotages your hard-earned progress!
+
+You MUST avoid eating another bite for the remainder of this day. Put down any snacks, drink water, step away from food, and let's make sure this NEVER happens again!`.trim();
+
+    await provisionAndSendMessage(COACH_ID, userId, alertText, 'text', {
+      type: 'calorie_limit_exceeded',
+      date: today,
+      consumed: consumedCalories,
+      goal: goalCalories,
+      excess: excess
+    });
+
+    console.log(`[Coach] Calorie exceeded alert delivered to chat for user ${userId} (${consumedCalories}/${goalCalories} kcal)`);
+  } catch (err) {
+    console.error("[Coach] Failed to send calorie exceeded alert:", err);
+  }
+}
+
+

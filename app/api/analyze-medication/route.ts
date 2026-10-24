@@ -62,28 +62,35 @@ export async function POST(req: NextRequest) {
 
     // 2. Identify Medication details via OpenAI Vision or GPT
     const systemPrompt = `You are an expert clinical pharmacologist and patient medication safety intelligence engine.
-Your primary objective is to analyze the medication package photo or medication query and explain clearly, authoritatively, and comprehensively WHAT THE MEDICATION IS FOR, how it works, and how to use it safely.
+Your primary objective is to analyze the medication package photo or medication query and extract authentic clinical facts:
+WHAT THE MEDICATION IS FOR, how it works, and how to use it safely.
+
+CRITICAL VISION EXTRACTION MANDATE:
+- You MUST read the visible product/brand name, active substances, and dosage strengths directly from the package photo.
+- DO NOT return placeholder generic text such as "Scanned Medication", "Pharmaceutical Product", or "Medication indication".
+- If the box displays "Guaifenesin Sodium citrate Syrup", the brand/trade name is "Guaifenesin Sodium citrate Syrup", active ingredients are ["Guaifenesin", "Sodium citrate"], and the indication is cough expectorant / chest congestion relief.
 
 Analyze the package typography, markings, formulation, and labeling carefully:
 1. Proprietary / Brand name: Identify the exact commercial trade name and manufacturer/lab if visible.
 2. Generic formulation: Identify the scientific International Nonproprietary Name (INN) / generic drug names.
-3. Active ingredients & exact strengths: List all active pharmaceutical substances along with their respective dosage/strengths if readable (e.g., "Promethazine HCl 5mg/5mL", "Dextromethorphan HBr 15mg/5mL", "Guaifenesin 100mg/5mL", "Sodium Citrate 45mg/5mL").
+3. Active ingredients & exact strengths: List all active pharmaceutical substances along with their respective dosage/strengths if readable (e.g., ["Guaifenesin 100mg/5mL", "Sodium citrate 45mg/5mL"]).
 4. Inactive excipients: List all visible inactive ingredients, specifically noting sugars/syrup, alcohol, preservatives, or artificial dyes.
 5. Mechanism & Clinical Purpose: Provide a clear, structured explanation answering:
-   - What condition or symptoms this medication is specifically formulated to treat.
-   - What clinical drug class it belongs to and the therapeutic role of each active component (e.g., antitussive to suppress cough spasms, expectorant/mucolytic to thin phlegm, antihistamine to relieve nasal/throat allergy irritation).
+   - What condition or symptoms this medication is specifically formulated to treat (e.g. productive cough, chest congestion).
+   - What clinical drug class it belongs to and the therapeutic role of each active component (e.g., expectorant/mucolytic to thin phlegm).
    - Expected therapeutic outcome.
-6. Warnings & Precautions: Critical contraindications, safety alerts (e.g., drowsiness, operating machinery, age restrictions, respiratory depression warnings, liver/kidney cautions).
-7. Common side effects: Frequent and notable side effects (sedation, dry mouth, dizziness, GI upset).
-8. Drug & condition interactions: Interactions with other medications (MAOIs, sedatives, SSRIs, alcohol) and chronic health conditions.
+6. Warnings & Precautions: Critical contraindications, safety alerts.
+7. Common side effects: Frequent and notable side effects.
+8. Drug & condition interactions: Interactions with other medications and chronic health conditions.
 
 Return ONLY a valid JSON object matching this schema:
 {
-  "name": "Brand/Trade Name of medication",
-  "generic_name": "Generic active pharmaceutical ingredient name(s)",
-  "active_ingredients": ["Ingredient 1 (strength)", "Ingredient 2 (strength)"],
-  "inactive_ingredients": ["Sugar syrup", "Alcohol", "Sodium benzoate"],
+  "name": "Exact visible trade name on the package (NEVER 'Scanned Medication')",
+  "generic_name": "Scientific INN generic name(s) (NEVER 'Pharmaceutical Product')",
+  "active_ingredients": ["Active substance 1 (strength)", "Active substance 2 (strength)"],
+  "inactive_ingredients": ["Excipient 1", "Excipient 2"],
   "purpose": "Comprehensive clinical mechanism, therapeutic class, and exact medical indication explaining what this medication is for",
+  "manufacturer": "Visible manufacturer or laboratory name, or null",
   "warnings": "Critical warnings, precautions, and contraindications",
   "side_effects": "Common and notable side effects",
   "interactions": "Known drug/food/condition interactions"
@@ -99,7 +106,7 @@ Return ONLY a valid JSON object matching this schema:
             type: 'image_url',
             image_url: {
               url: imageBase64 ? `data:image/jpeg;base64,${imageBase64}` : imageUrl,
-              detail: 'auto'
+              detail: 'high'
             }
           }
         ]
@@ -115,15 +122,75 @@ Return ONLY a valid JSON object matching this schema:
       model: 'gpt-4o',
       messages,
       temperature: 0.1,
-      max_tokens: 500,
+      max_tokens: 1200,
       response_format: { type: 'json_object' }
     });
 
-    const medData = parseJSONSafely(visionResult.choices[0]?.message?.content);
+    let medData = parseJSONSafely(visionResult.choices[0]?.message?.content);
+
+    // Second-pass retry if the vision model failed to parse or returned generic placeholder strings
+    const isPlaceholder = !medData.name || 
+      medData.name.toLowerCase().includes('scanned medication') || 
+      !medData.purpose || 
+      medData.purpose.toLowerCase().includes('medication indication') ||
+      medData.generic_name?.toLowerCase().includes('pharmaceutical product');
+
+    if (isPlaceholder && (imageBase64 || imageUrl)) {
+      console.info('[analyze-medication] Primary pass yielded placeholder; executing second-pass typography OCR...');
+      try {
+        const retryPrompt = `Look closely at the image of the medicine box/bottle.
+Read the literal words and numbers printed on the box.
+1. What is the prominent medicine title on the box? (e.g. "Guaifenesin Sodium citrate Syrup")
+2. What are the active drug ingredients? (e.g. Guaifenesin, Sodium citrate)
+3. What is the generic class and indication? (e.g. Expectorant cough syrup)
+
+Return ONLY valid JSON:
+{
+  "name": "Exact printed trade name",
+  "generic_name": "Generic INN name",
+  "active_ingredients": ["Active ingredient 1", "Active ingredient 2"],
+  "inactive_ingredients": ["Visible excipients"],
+  "purpose": "Specific therapeutic purpose and mechanism",
+  "manufacturer": "Brand/Company name",
+  "warnings": "Contraindications and warnings",
+  "side_effects": "Notable side effects",
+  "interactions": "Known interactions"
+}`;
+
+        const retryResult = await callChatCompletionWithFallback({
+          model: 'gpt-4o',
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'text', text: retryPrompt },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: imageBase64 ? `data:image/jpeg;base64,${imageBase64}` : imageUrl,
+                  detail: 'high'
+                }
+              }
+            ]
+          }],
+          temperature: 0.0,
+          max_tokens: 800,
+          response_format: { type: 'json_object' }
+        });
+
+        const retryParsed = parseJSONSafely(retryResult.choices[0]?.message?.content);
+        if (retryParsed.name && !retryParsed.name.toLowerCase().includes('scanned medication')) {
+          medData = { ...medData, ...retryParsed };
+        }
+      } catch (retryErr) {
+        console.warn('[analyze-medication] Second-pass retry error:', retryErr);
+      }
+    }
 
     const medName = medData.name || inputMedName || 'Scanned Medication';
-    const genericName = medData.generic_name || 'Pharmaceutical Product';
-    const activeIngredients: string[] = Array.isArray(medData.active_ingredients) ? medData.active_ingredients : [genericName];
+    const genericName = medData.generic_name || (medData.active_ingredients?.length ? medData.active_ingredients.join(', ') : 'Pharmaceutical Product');
+    const activeIngredients: string[] = Array.isArray(medData.active_ingredients) && medData.active_ingredients.length > 0 
+      ? medData.active_ingredients 
+      : [genericName];
     const inactiveIngredients: string[] = Array.isArray(medData.inactive_ingredients) ? medData.inactive_ingredients : [];
     const fullTextSearch = `${medName} ${genericName} ${activeIngredients.join(' ')} ${inactiveIngredients.join(' ')} ${medData.warnings || ''} ${medData.purpose || ''}`.toLowerCase();
 
@@ -216,6 +283,8 @@ Return ONLY a JSON object:
       name: medName,
       productName: medName,
       generic_name: genericName,
+      active_ingredients: activeIngredients,
+      inactive_ingredients: inactiveIngredients,
       type: 'MEDICATION',
       category: 'Pharmacy & Health',
       brand: medData.manufacturer || 'Pharmacy',

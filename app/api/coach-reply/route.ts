@@ -517,7 +517,7 @@ USER PROFILE & METRICS:
             const data = JSON.parse(trimmed.slice(6))
             const delta = data.choices[0]?.delta?.content || ''
             if (delta) {
-                const cleanedDelta = delta.replace(/[*#]/g, '');
+                const cleanedDelta = delta.replace(/[*#]/g, '').replace(/[—–]/g, ', ');
                 fullReply += cleanedDelta;
             }
           } catch {}
@@ -526,14 +526,14 @@ USER PROFILE & METRICS:
 
       if (Date.now() - lastUpdateTime > 500 && fullReply.length > 0) {
         lastUpdateTime = Date.now()
-        supabase.from('messages').update({ content: fullReply.trim() }).eq('id', newMsg.id).then()
+        supabase.from('messages').update({ content: fullReply.replace(/\s*[—–]\s*|\s*--\s*/g, ', ').replace(/,\s*,/g, ',').trim() }).eq('id', newMsg.id).then()
       }
     }
 
     if (!fullReply) {
       fullReply = "I apologize, but I encountered a technical glitch while thinking. Could you please try asking that again? I'm ready to help!"
     } else {
-      fullReply = fullReply.trim();
+      fullReply = fullReply.replace(/\s*[—–]\s*|\s*--\s*/g, ', ').replace(/,\s*,/g, ',').trim();
     }
 
     await supabase.from('messages').update({ content: fullReply, delivered_at: new Date().toISOString() }).eq('id', newMsg.id)

@@ -160,8 +160,16 @@ export const getConversationsV2 = async (userId: string) => {
             display_phone = fetchedProfile.phone_number || rpcProfile.phone_number || null;
         }
 
+        const sanitizedContent = (conv.conversation_type === 'ai' || conv.last_message_sender_id === COACH_ID)
+            ? (conv.last_message_content || '')
+                .replace(/[*#]/g, '')
+                .replace(/\s*[—–]\s*|\s*--\s*/g, ', ')
+                .replace(/,\s*,/g, ', ')
+                .trim()
+            : conv.last_message_content;
+
         const lastMsg = conv.last_message_content ? {
-            content: conv.last_message_content,
+            content: sanitizedContent,
             message_type: conv.last_message_type || 'text',
             sender_id: conv.last_message_sender_id,
             created_at: conv.last_message_at

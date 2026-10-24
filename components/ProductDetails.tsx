@@ -73,6 +73,8 @@ export interface ProductDetailsProps {
   type?: string;
   // Medication-specific fields
   generic_name?: string;
+  active_ingredients?: string[];
+  inactive_ingredients?: string[];
   purpose?: string;
   side_effects?: string;
   warnings?: string;
@@ -117,6 +119,8 @@ export function ProductDetails({
   cheaper_alternatives = [],
   type = "FOOD",
   generic_name,
+  active_ingredients = [],
+  inactive_ingredients = [],
   purpose,
   side_effects,
   warnings,
@@ -148,6 +152,8 @@ export function ProductDetails({
   // Split ingredients cleanly into distinct items respecting parentheses
   const ingredientList = React.useMemo(() => {
     if (!ingredients || typeof ingredients !== 'string') return [];
+    const lower = ingredients.toLowerCase();
+    if (lower.includes('not listed') || lower.includes('not declared')) return [];
     const cleaned = ingredients.replace(/^ingredients:\s*/i, '').replace(/\.$/, '');
     const items: string[] = [];
     let current = '';
@@ -364,6 +370,26 @@ export function ProductDetails({
                 </div>
               </div>
 
+              {/* Active & Inactive Ingredients */}
+              {active_ingredients && active_ingredients.length > 0 && (
+                <div className="p-4 bg-purple-50 dark:bg-purple-500/10 border border-purple-200 dark:border-purple-500/20 rounded-2xl space-y-2">
+                  <h3 className="text-xs font-bold text-purple-800 dark:text-purple-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5" /> Active Ingredients & Strengths
+                  </h3>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {active_ingredients.map((act, idx) => (
+                      <span
+                        key={idx}
+                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-purple-100 dark:bg-purple-900/40 border border-purple-200 dark:border-purple-700/50 text-xs font-bold text-purple-900 dark:text-purple-200"
+                      >
+                        <span className="size-1.5 rounded-full bg-purple-500 shrink-0" />
+                        {act}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {purpose && (
                 <div className="p-4 bg-purple-50 dark:bg-purple-500/10 border border-purple-200 dark:border-purple-500/20 rounded-2xl">
                   <h3 className="text-xs font-bold text-purple-800 dark:text-purple-300 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
@@ -378,6 +404,11 @@ export function ProductDetails({
                   {description.split('\n\n').map((p: string, i: number) => <p key={i}>{p}</p>)}
                 </div>
               )}
+
+              {/* Clinical Educational Disclaimer */}
+              <div className="p-3.5 bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-2xl text-[11px] text-slate-500 dark:text-slate-400 font-medium leading-relaxed">
+                <span className="font-bold text-slate-700 dark:text-slate-300">Clinical Disclaimer:</span> This pharmaceutical extraction is for personal informational and logging support only. Always inspect the physical packaging, verify warnings and dosages, and consult a qualified healthcare provider or pharmacist before taking medications.
+              </div>
             </section>
 
             {/* Warnings & Precautions */}
@@ -547,9 +578,11 @@ export function ProductDetails({
                         ))}
                       </div>
                     ) : (
-                      <p className="text-slate-700 dark:text-slate-200 text-xs sm:text-sm leading-relaxed">
-                        {ingredients || "Ingredients not declared on product packaging."}
-                      </p>
+                      <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl">
+                        <p className="text-amber-800 dark:text-amber-300 text-xs font-medium">
+                          {ingredients || "Ingredients not listed in database; photograph the ingredients panel to verify contents."}
+                        </p>
+                      </div>
                     )}
 
                     {/* Original packaging statement if more than 1 item */}
@@ -626,7 +659,7 @@ export function ProductDetails({
                       {calories !== null && calories !== undefined ? (
                         <><span className="text-emerald-600 dark:text-[#21ff64]">~{calories}</span> <span className="text-2xl font-bold text-slate-400">kcal</span></>
                       ) : (
-                        <span className="text-2xl font-bold text-amber-500">Calorie Data Pending</span>
+                        <span className="text-base sm:text-lg font-bold text-amber-600 dark:text-amber-400">Not available — scan nutrition label</span>
                       )}
                     </div>
                     {servingSize && (

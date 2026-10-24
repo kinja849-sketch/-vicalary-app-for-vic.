@@ -1280,6 +1280,33 @@ export default function ChatConversation() {
         }
     }, [user?.id, queryClient]);
 
+    const handleBackToChat = useCallback(() => {
+        const convId = canonicalConvId || (!isVirtual ? localActiveId : null);
+        if (convId && user?.id) {
+            markConversationAsReadLocal(convId, true);
+            queryClient.setQueryData(['conversations', user.id], (old: any) => {
+                if (!Array.isArray(old)) return old;
+                return old.map((c: any) => c.id === convId ? { ...c, unread_count: 0, is_read: true } : c);
+            });
+            queryClient.setQueryData(['unread-messages-global', user.id], 0);
+        }
+        router.back();
+    }, [canonicalConvId, isVirtual, localActiveId, user?.id, markConversationAsReadLocal, queryClient, router]);
+
+    useEffect(() => {
+        return () => {
+            const convId = canonicalConvId || (!isVirtual ? localActiveId : null);
+            if (convId && user?.id) {
+                markConversationAsReadLocal(convId, true);
+                queryClient.setQueryData(['conversations', user.id], (old: any) => {
+                    if (!Array.isArray(old)) return old;
+                    return old.map((c: any) => c.id === convId ? { ...c, unread_count: 0, is_read: true } : c);
+                });
+                queryClient.setQueryData(['unread-messages-global', user.id], 0);
+            }
+        };
+    }, [canonicalConvId, isVirtual, localActiveId, user?.id, markConversationAsReadLocal, queryClient]);
+
     // --- Ground Truth Database Reconciliation ---
     const reconcileMessagesFromDatabase = useCallback(async (convId: string) => {
         if (!convId || !user?.id || convId.startsWith('new-')) return;
@@ -1393,24 +1420,32 @@ export default function ChatConversation() {
                     setIsProcessingVoice(false);
                 }
 
-                // If message from peer, acknowledge delivery immediately
-                if (newMessage.sender_id !== user?.id && !newMessage.is_delivered) {
-                    markMessageDelivered(newMessage.id, convId);
-                    if (activeChannelRef.current) {
-                        activeChannelRef.current.send({
-                            type: 'broadcast',
-                            event: 'delivery_ack',
-                            payload: {
-                                message_id: newMessage.id,
-                                conversation_id: convId,
-                                delivered_at: new Date().toISOString()
-                            }
-                        }).catch(() => {});
-                    }
-                }
-
-                // Peer sent a message: clear peer's typing indicator and play audible inbound chime
+                // If message from peer/coach while user is in active conversation
                 if (newMessage.sender_id !== user?.id) {
+                    if (!newMessage.is_delivered) {
+                        markMessageDelivered(newMessage.id, convId);
+                        if (activeChannelRef.current) {
+                            activeChannelRef.current.send({
+                                type: 'broadcast',
+                                event: 'delivery_ack',
+                                payload: {
+                                    message_id: newMessage.id,
+                                    conversation_id: convId,
+                                    delivered_at: new Date().toISOString()
+                                }
+                            }).catch(() => {});
+                        }
+                    }
+
+                    // User is actively reading this conversation: mark as read immediately
+                    markConversationAsReadLocal(convId, true);
+                    queryClient.setQueryData(['conversations', user?.id], (old: any) => {
+                        if (!Array.isArray(old)) return old;
+                        return old.map((c: any) => c.id === convId ? { ...c, unread_count: 0, is_read: true } : c);
+                    });
+                    queryClient.setQueryData(['unread-messages-global', user?.id], 0);
+
+                    // Clear peer's typing indicator and play audible inbound chime
                     playInboundMessageSound();
                     setOtherUserTyping(false);
                     if (peerTypingClearTimeoutRef.current) {
@@ -1419,13 +1454,23 @@ export default function ChatConversation() {
                     }
                 }
 
-                // Reconcile into local cache strictly by ID (eliminating text/time heuristics)
+                // Reconcile into local cache strictly by ID
                 queryClient.setQueryData(['messages', convId], (old: any) => {
                     const base = Array.isArray(old) ? old : [];
-                    const status = newMessage.is_read ? 'read' : (newMessage.is_delivered ? 'delivered' : (newMessage.sender_id === user?.id ? 'sent' : undefined));
-                    const itemWithStatus = { ...newMessage, status };
+                    const isIncomingInActiveView = newMessage.sender_id !== user?.id;
+                    const status = isIncomingInActiveView ? 'read' : (newMessage.is_read ? 'read' : (newMessage.is_delivered ? 'delivered' : (newMessage.sender_id === user?.id ? 'sent' : undefined)));
+                    const itemWithStatus = { 
+                        ...newMessage, 
+                        status,
+                        is_read: isIncomingInActiveView ? true : newMessage.is_read,
+                        read_at: isIncomingInActiveView ? (newMessage.read_at || new Date().toISOString()) : newMessage.read_at
+                    };
 
-                    const existingIndex = base.findIndex((m: any) => m.id === newMessage.id);
+                    const existingIndex = base.findIndex((m: any) => 
+                        m.id === newMessage.id || 
+                        (m.sender_id === COACH_ID && newMessage.sender_id === COACH_ID && m.content === newMessage.content) ||
+                        (m.id?.startsWith('ai-') && newMessage.sender_id === COACH_ID && m.content === newMessage.content)
+                    );
                     if (existingIndex > -1) {
                         const copy = [...base];
                         copy[existingIndex] = itemWithStatus;
@@ -1981,6 +2026,7 @@ export default function ChatConversation() {
         if (hasSentInitial || isLoadingConv) return;
         
         const initialMsg = sessionStorage.getItem('chatInitialMessage');
+        const lastSentHash = sessionStorage.getItem('last_auto_sent_context_hash');
         let autoSendMessage = initialMsg;
         
         if (initialMsg) {
@@ -1991,29 +2037,39 @@ export default function ChatConversation() {
             autoSendMessage = `I just analyzed my meal: ${ctx.productName} (${ctx.calories} kcal). ${ctx.political_warning ? 'It has an ethical warning.' : ''} Please explain this meal to me in detail, its health impact, and recommendations.`;
         }
 
+        // Clean up store context immediately so it never persists across navigations
+        if (pendingAnalysisContext) {
+            clearPendingAnalysisContext();
+        }
+
         if (autoSendMessage) {
+            // Guard against re-sending identical context message upon navigating back-and-forth
+            const currentHash = `${autoSendMessage.slice(0, 40)}-${activeId}`;
+            if (lastSentHash === currentHash) {
+                console.log("[Chat] Skipping duplicate context auto-send for this conversation");
+                setHasSentInitial(true);
+                return;
+            }
+
+            sessionStorage.setItem('last_auto_sent_context_hash', currentHash);
             setHasSentInitial(true);
             
             const pCtx = pendingAnalysisContext as any;
             const imageUrl = pCtx?.productImage || pCtx?.image || pCtx?.mealImage;
-            const contextMetadata = pendingAnalysisContext ? { 
+            const contextMetadata = pCtx ? { 
                 scannedProductContext: {
-                    ...pendingAnalysisContext,
+                    ...pCtx,
                     productImage: imageUrl
                 },
                 url: imageUrl,
                 image: imageUrl
             } : undefined;
 
-            if (pendingAnalysisContext) {
-                clearPendingAnalysisContext();
-            }
-
             setOtherUserTyping(true);
 
             sendMutation.mutate({ content: autoSendMessage, metadata: contextMetadata });
         }
-    }, [hasSentInitial, isLoadingConv, isAI, pendingAnalysisContext, sendMutation, clearPendingAnalysisContext]);
+    }, [hasSentInitial, isLoadingConv, isAI, pendingAnalysisContext, sendMutation, clearPendingAnalysisContext, activeId]);
 
     const handleLocationShare = async () => {
         if (!navigator.geolocation) {
@@ -2354,7 +2410,14 @@ export default function ChatConversation() {
                     );
                 }
                 
-                return <p className="text-[14.2px] leading-[19px] whitespace-pre-wrap">{msg.content}</p>;
+                const cleanContent = (isAI || msg.sender_id === COACH_ID)
+                    ? (msg.content || '')
+                        .replace(/[*#]/g, '')
+                        .replace(/\s*[—–]\s*|\s*--\s*/g, ', ')
+                        .replace(/,\s*,/g, ', ')
+                        .trim()
+                    : msg.content;
+                return <p className="text-[14.2px] leading-[19px] whitespace-pre-wrap">{cleanContent}</p>;
         }
     };
 
@@ -2397,7 +2460,7 @@ export default function ChatConversation() {
                         This conversation may have been deleted or is unavailable.
                     </p>
                     <button 
-                        onClick={() => router.push('/chat')}
+                        onClick={handleBackToChat}
                         className="w-full py-3 bg-vic-green hover:bg-vic-green/90 text-white font-semibold rounded-xl transition-all"
                     >
                         Return to Chats
@@ -2415,7 +2478,7 @@ export default function ChatConversation() {
             <div className="relative flex flex-col flex-1 h-full overflow-hidden w-full max-w-full">
                 {/* Header */}
                 <header className="shrink-0 h-[64px] bg-[#F0F2F5] dark:bg-[#202C33] border-b border-white/5 flex items-center px-4 gap-3 z-30 shadow-sm">
-                    <button onClick={() => router.back()} className="p-2 -ml-2 text-[#54656F] dark:text-[#8696A0] hover:bg-black/5 dark:hover:bg-white/5 rounded-full">
+                    <button onClick={handleBackToChat} className="p-2 -ml-2 text-[#54656F] dark:text-[#8696A0] hover:bg-black/5 dark:hover:bg-white/5 rounded-full">
                         <ArrowLeft size={20} />
                     </button>
 
@@ -2613,6 +2676,15 @@ export default function ChatConversation() {
                                     });
                                     const hasReactions = Object.keys(reactionsSummary).length > 0;
                                     
+                                    const isCalorieAlert = !isMe && (
+                                        msg.metadata?.type === 'calorie_limit_exceeded' || 
+                                        (msg.sender_id === COACH_ID && (
+                                            msg.content?.includes('STOP EATING IMMEDIATELY') || 
+                                            msg.content?.includes('urgent health alert') ||
+                                            msg.content?.includes('CALORIE LIMIT REACHED')
+                                        ))
+                                    );
+
                                     return (
                                         <div
                                             key={msg.id}
@@ -2639,14 +2711,22 @@ export default function ChatConversation() {
                                             )}
 
                                             <div
-                                                className={`relative max-w-[85%] md:max-w-[65%] min-w-[100px] px-3 py-2 rounded-xl shadow-sm ${isMe
+                                                className={`relative max-w-[85%] md:max-w-[65%] min-w-[100px] px-3.5 py-2.5 rounded-xl shadow-sm ${isMe
                                                     ? 'bg-[#D9FDD3] dark:bg-[#005c4b] rounded-tr-none'
-                                                    : 'bg-white dark:bg-[#202c33] rounded-tl-none'
+                                                    : isCalorieAlert
+                                                        ? 'bg-rose-50/95 dark:bg-rose-950/40 border-2 border-red-500/80 shadow-md shadow-red-500/10 text-rose-950 dark:text-rose-100 rounded-2xl rounded-tl-none ring-1 ring-red-500/30'
+                                                        : 'bg-white dark:bg-[#202c33] rounded-tl-none'
                                                     } ${isDeletedForEveryone ? 'opacity-85' : ''}`}
                                             >
                                                 {/* Content - Wrapper to ensure spacing for timestamp */}
                                                 <div className="flex flex-col">
-                                                    <div className="pb-1 pr-2 break-words">
+                                                    {isCalorieAlert && (
+                                                        <div className="flex items-center gap-1.5 pb-2 mb-2 border-b border-red-200 dark:border-red-900/60 text-red-600 dark:text-red-400 font-black text-[11px] uppercase tracking-wider">
+                                                            <TriangleAlert className="size-4 text-red-600 dark:text-red-400 shrink-0 animate-pulse" />
+                                                            <span>URGENT HEALTH CAUTION</span>
+                                                        </div>
+                                                    )}
+                                                    <div className={`pb-1 pr-2 break-words ${isCalorieAlert ? 'text-rose-950 dark:text-rose-100 font-medium' : ''}`}>
                                                         {renderMessageContent(msg)}
                                                     </div>
 

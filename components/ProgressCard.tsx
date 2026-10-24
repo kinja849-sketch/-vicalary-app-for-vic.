@@ -8,16 +8,18 @@ interface ProgressCardProps {
     dailyProgress: any;
     user: any;
     onAvatarUpload?: (file: File) => void;
+    onCelebrate?: () => void;
 }
 
-export const ProgressCard: React.FC<ProgressCardProps> = ({ profile, dailyProgress, user, onAvatarUpload }) => {
+export const ProgressCard: React.FC<ProgressCardProps> = ({ profile, dailyProgress, user, onAvatarUpload, onCelebrate }) => {
     const { t } = useTranslation();
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    const caloriesGoal = dailyProgress?.calories_goal || profile?.goal_calories || 2000;
-    const caloriesConsumed = dailyProgress?.calories_consumed || 0;
+    const caloriesGoal = Number(dailyProgress?.calories_goal || profile?.goal_calories || 2000);
+    const caloriesConsumed = Number(dailyProgress?.calories_consumed || 0);
+    const isExceeded = caloriesGoal > 0 && caloriesConsumed > caloriesGoal;
     const caloriesLeft = Math.max(0, caloriesGoal - caloriesConsumed);
-    const percentage = Math.min(100, Math.round((caloriesConsumed / caloriesGoal) * 100));
+    const percentage = Math.min(100, caloriesGoal > 0 ? Math.round((caloriesConsumed / caloriesGoal) * 100) : 0);
 
     const avatarUrl = profile?.avatar_url || user?.user_metadata?.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(profile?.full_name || user?.user_metadata?.full_name || 'User')}&background=13ec37&color=fff&size=128`;
 
@@ -26,7 +28,7 @@ export const ProgressCard: React.FC<ProgressCardProps> = ({ profile, dailyProgre
     const strokeWidth = 5;
     const radius = (size - strokeWidth) / 2;
     const circumference = radius * 2 * Math.PI;
-    const offset = circumference - (percentage / 100) * circumference;
+    const offset = circumference - Math.min(1, Math.max(0, percentage / 100)) * circumference;
 
     const handleAvatarClick = () => {
         fileInputRef.current?.click();
@@ -50,15 +52,26 @@ export const ProgressCard: React.FC<ProgressCardProps> = ({ profile, dailyProgre
                 <div className="absolute inset-0 bg-gradient-to-t from-black/5 to-white/20 dark:from-black/40 dark:to-white/5 pointer-events-none" />
 
                 <div className="relative z-10 flex justify-between items-center mb-6 gap-4">
-                    <div className="flex-1">
+                    <div className="flex-1 min-w-0">
                         <p className="text-slate-700 dark:text-slate-300 text-xs uppercase tracking-widest mb-1 font-black drop-shadow-sm">{t('todays_progress')}</p>
-                        <p className="text-6xl font-black text-slate-900 dark:text-white leading-tight drop-shadow-md">
-                            {percentage}%
-                        </p>
+                        <div className="flex items-baseline whitespace-nowrap">
+                            <span className="text-5xl font-black text-slate-900 dark:text-white leading-none tracking-tight drop-shadow-md">
+                                {percentage}
+                            </span>
+                            <span className="text-3xl font-black text-slate-800 dark:text-slate-200 leading-none drop-shadow-sm ml-1">
+                                %
+                            </span>
+                        </div>
                     </div>
 
                     {/* Circular Progress with Profile Image */}
-                    <div className="relative size-[130px] shrink-0">
+                    <div 
+                        onClick={() => {
+                            if (percentage >= 100 && onCelebrate) onCelebrate();
+                        }}
+                        className={`relative size-[130px] shrink-0 ${percentage >= 100 ? 'cursor-pointer' : ''}`}
+                        title={percentage >= 100 ? "Goal achieved! Tap for celebration" : undefined}
+                    >
                         <svg className="size-full transform -rotate-90" viewBox={`0 0 ${size} ${size}`}>
                             {/* Background Circle */}
                             <circle
@@ -80,8 +93,10 @@ export const ProgressCard: React.FC<ProgressCardProps> = ({ profile, dailyProgre
                                 strokeDashoffset={offset}
                                 strokeLinecap="round"
                                 style={{
-                                    stroke: percentage > 100 ? '#ef4444' : percentage > 85 ? '#eab308' : '#13ec37',
-                                    filter: 'drop-shadow(0 0 8px rgba(19, 236, 55, 0.3))'
+                                    stroke: isExceeded ? '#ef4444' : percentage >= 100 ? '#13ec37' : percentage > 85 ? '#eab308' : '#13ec37',
+                                    filter: isExceeded
+                                        ? 'drop-shadow(0 0 10px rgba(239, 68, 68, 0.7))'
+                                        : 'drop-shadow(0 0 8px rgba(19, 236, 55, 0.3))'
                                 }}
                             />
                         </svg>
@@ -115,9 +130,17 @@ export const ProgressCard: React.FC<ProgressCardProps> = ({ profile, dailyProgre
 
                 {/* Stats Grid */}
                 <div className="grid grid-cols-3 gap-2 text-center py-6 border-t border-black/5 dark:border-white/10">
-                    <div className="bg-white/40 dark:bg-black/20 p-2 rounded-xl backdrop-blur-sm border border-white/20 dark:border-white/5">
-                        <p className="text-xl font-black text-slate-900 dark:text-white leading-none mb-1">{caloriesConsumed}</p>
-                        <p className="text-[10px] text-slate-700 dark:text-slate-400 font-bold uppercase tracking-wider">{t('eaten')}</p>
+                    <div className={`p-2 rounded-xl backdrop-blur-sm border transition-all ${
+                        isExceeded 
+                            ? 'bg-red-500/15 dark:bg-red-950/40 border-red-500/40 shadow-sm shadow-red-500/20 ring-1 ring-red-500/30' 
+                            : 'bg-white/40 dark:bg-black/20 border-white/20 dark:border-white/5'
+                    }`}>
+                        <p className={`text-xl font-black leading-none mb-1 ${
+                            isExceeded ? 'text-red-600 dark:text-red-500 font-black' : 'text-slate-900 dark:text-white'
+                        }`}>{caloriesConsumed}</p>
+                        <p className={`text-[10px] font-bold uppercase tracking-wider ${
+                            isExceeded ? 'text-red-600 dark:text-red-400 font-black' : 'text-slate-700 dark:text-slate-400'
+                        }`}>{t('eaten')}</p>
                     </div>
                     <div className="bg-white/40 dark:bg-black/20 p-2 rounded-xl backdrop-blur-sm border border-white/20 dark:border-white/5">
                         <p className="text-xl font-black text-slate-900 dark:text-white leading-none mb-1">{caloriesLeft}</p>

@@ -310,7 +310,8 @@ export const saveFoodAnalysis = async (userId: string, analysis: any, isPurchase
     }
 
     // Update daily_progress ONLY for meals you eat (Camera meals), NOT for scanner product purchases
-    if (!analysis.is_scanner_product) {
+    // Do not log null calories as 0 in daily intake if calories are genuinely missing
+    if (!analysis.is_scanner_product && analysis.calories !== null && analysis.calories !== undefined) {
         await updateDailyProgress(
             userId,
             Number(analysis.calories || 0),
@@ -510,10 +511,17 @@ export const updateDailyProgress = async (userId: string, calories: number, prot
         .maybeSingle();
 
     if (existingProgress) {
+        const existingConsumed = Number(existingProgress.calories_consumed || 0);
+        const goalCalories = Number(existingProgress.calories_goal || 2000);
+
+        const newConsumed = existingConsumed + calories;
+        const justAchieved = goalCalories > 0 && newConsumed >= goalCalories && existingConsumed < goalCalories;
+        const exceededGoal = goalCalories > 0 && newConsumed > goalCalories;
+
         await supabase
             .from('daily_progress')
             .update({
-                calories_consumed: Number(existingProgress.calories_consumed || 0) + calories,
+                calories_consumed: newConsumed,
                 protein_consumed: Number(existingProgress.protein_consumed || 0) + protein,
                 carbs_consumed: Number(existingProgress.carbs_consumed || 0) + carbs,
                 fat_consumed: Number(existingProgress.fat_consumed || 0) + fat,
@@ -523,6 +531,25 @@ export const updateDailyProgress = async (userId: string, calories: number, prot
                 updated_at: new Date().toISOString()
             })
             .eq('id', existingProgress.id);
+
+        if (exceededGoal) {
+            import('./coach').then(({ sendCoachCalorieExceededAlert }) => {
+                sendCoachCalorieExceededAlert(userId, newConsumed, goalCalories);
+            }).catch(err => console.error("[Food] Failed to dispatch coach alert:", err));
+        }
+
+        return {
+            capReached: justAchieved || exceededGoal,
+            justAchieved,
+            exceededGoal,
+            caloriesConsumed: newConsumed,
+            caloriesGoal: goalCalories,
+            message: exceededGoal
+                ? `⚠️ Calorie Target Exceeded: You have consumed ${newConsumed} kcal (target: ${goalCalories} kcal). The Health Coach has sent an alert to your chat. Please stop eating for the rest of the day!`
+                : justAchieved
+                    ? "Congratulations! You've achieved your daily calorie goal today. Be mindful with further intake for the rest of the day."
+                    : undefined
+        };
     } else {
         // Get user calorie goal
         const { data: onboarding } = await supabase
@@ -530,6 +557,9 @@ export const updateDailyProgress = async (userId: string, calories: number, prot
             .select('daily_calorie_goal, protein_goal, carbs_goal, fat_goal')
             .eq('user_id', userId)
             .maybeSingle();
+
+        const goalCalories = Number(onboarding?.daily_calorie_goal || 2000);
+        const justAchieved = goalCalories > 0 && calories >= goalCalories;
 
         await supabase
             .from('daily_progress')

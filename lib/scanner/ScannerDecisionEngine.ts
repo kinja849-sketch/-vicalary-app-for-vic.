@@ -3,10 +3,10 @@ import { BoycottScreeningService } from './BoycottScreeningService';
 import { BarcodeService } from '../products/BarcodeService';
 
 export class ScannerDecisionEngine {
-  static async processScan(barcode: string, userId: string, countryCode: string = 'US', ipAddress?: string) {
+  static async processScan(barcode: string, userId: string, countryCode: string = 'US', ipAddress?: string, packageImage?: string) {
     try {
       // 1. Identify Product Authoritatively
-      const productData = await BarcodeService.processScan(barcode, countryCode, ipAddress);
+      const productData = await BarcodeService.processScan(barcode, countryCode, ipAddress, packageImage);
       const product = productData.product;
       
       if (!product) {

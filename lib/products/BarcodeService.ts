@@ -1,6 +1,133 @@
 import { NormalizedProduct, ProductPrice, ProductProvider, PriceProvider } from './ProductProvider';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { NutritionNormalizer } from '@/lib/nutrition/NutritionNormalizer';
+import { callChatCompletionWithFallback } from '@/lib/ai/ai-fallback';
+
+/**
+ * Helper to OCR Nutrition Facts directly from packaging photo when database nutriments are empty
+ */
+async function extractNutritionFactsFromImage(imageUrl: string): Promise<{
+  calories?: number;
+  protein?: number;
+  carbohydrates?: number;
+  fat?: number;
+  fiber?: number;
+  sugar?: number;
+  sodium_mg?: number;
+  serving_size?: string;
+} | null> {
+  try {
+    const prompt = `You are a clinical OCR engine extracting Nutrition Facts from a food package photo.
+Carefully read the printed Nutrition Facts label on this package.
+Extract ONLY verified numbers printed on the label. DO NOT guess or hallucinate.
+If a value is not printed or unreadable, set it to null.
+
+Return ONLY a valid JSON object matching this schema:
+{
+  "calories": number | null,
+  "protein": number | null,
+  "carbohydrates": number | null,
+  "fat": number | null,
+  "fiber": number | null,
+  "sugar": number | null,
+  "sodium_mg": number | null,
+  "serving_size": string | null
+}`;
+
+    const res = await callChatCompletionWithFallback({
+      model: 'gpt-4o',
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          {
+            type: 'image_url',
+            image_url: {
+              url: imageUrl,
+              detail: 'high'
+            }
+          }
+        ]
+      }],
+      temperature: 0.0,
+      max_tokens: 300,
+      response_format: { type: 'json_object' }
+    });
+
+    const content = res.choices[0]?.message?.content;
+    if (!content) return null;
+    const jsonStart = content.indexOf('{');
+    const jsonEnd = content.lastIndexOf('}');
+    if (jsonStart !== -1 && jsonEnd !== -1) {
+      const parsed = JSON.parse(content.substring(jsonStart, jsonEnd + 1));
+      return {
+        calories: typeof parsed.calories === 'number' && !isNaN(parsed.calories) ? parsed.calories : undefined,
+        protein: typeof parsed.protein === 'number' && !isNaN(parsed.protein) ? parsed.protein : undefined,
+        carbohydrates: typeof parsed.carbohydrates === 'number' && !isNaN(parsed.carbohydrates) ? parsed.carbohydrates : undefined,
+        fat: typeof parsed.fat === 'number' && !isNaN(parsed.fat) ? parsed.fat : undefined,
+        fiber: typeof parsed.fiber === 'number' && !isNaN(parsed.fiber) ? parsed.fiber : undefined,
+        sugar: typeof parsed.sugar === 'number' && !isNaN(parsed.sugar) ? parsed.sugar : undefined,
+        sodium_mg: typeof parsed.sodium_mg === 'number' && !isNaN(parsed.sodium_mg) ? parsed.sodium_mg : undefined,
+        serving_size: typeof parsed.serving_size === 'string' && parsed.serving_size.trim() ? parsed.serving_size.trim() : undefined
+      };
+    }
+  } catch (e) {
+    console.warn('[BarcodeService] OCR Nutrition extraction failed:', e);
+  }
+  return null;
+}
+
+/**
+ * Helper to OCR declared ingredients directly from packaging photo when database text is missing
+ */
+async function extractIngredientsFromImage(imageUrl: string): Promise<string | null> {
+  try {
+    const prompt = `You are an expert OCR engine for food packaging.
+Carefully read the declared ingredients on this package photo. Locate the section starting with 'INGREDIENTS:', 'Ingredients:', or 'KOMPOSISI:'.
+Extract ONLY the exact comma-separated declared ingredients list printed on the packaging.
+DO NOT summarize, do NOT rewrite, do NOT hallucinate ingredients.
+If no ingredients panel is visible or legible in the image, return {"ingredients": null}.
+
+Return ONLY a valid JSON object:
+{
+  "ingredients": "string of comma-separated ingredients, or null"
+}`;
+
+    const res = await callChatCompletionWithFallback({
+      model: 'gpt-4o',
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          {
+            type: 'image_url',
+            image_url: {
+              url: imageUrl,
+              detail: 'high'
+            }
+          }
+        ]
+      }],
+      temperature: 0.0,
+      max_tokens: 450,
+      response_format: { type: 'json_object' }
+    });
+
+    const content = res.choices[0]?.message?.content;
+    if (!content) return null;
+    const jsonStart = content.indexOf('{');
+    const jsonEnd = content.lastIndexOf('}');
+    if (jsonStart !== -1 && jsonEnd !== -1) {
+      const parsed = JSON.parse(content.substring(jsonStart, jsonEnd + 1));
+      if (typeof parsed.ingredients === 'string' && parsed.ingredients.trim()) {
+        return parsed.ingredients.trim();
+      }
+    }
+  } catch (e) {
+    console.warn('[BarcodeService] OCR Ingredients extraction failed:', e);
+  }
+  return null;
+}
 
 /**
  * OpenFoodFacts is a reliable, authoritative database for product identification.
@@ -8,7 +135,7 @@ import { NutritionNormalizer } from '@/lib/nutrition/NutritionNormalizer';
  */
 export class OpenFoodFactsProvider implements ProductProvider {
   private async fetchOFFProduct(code: string): Promise<any | null> {
-    const fields = 'product_name,product_name_en,brands,quantity,serving_size,categories,image_url,image_front_url,ingredients_text,allergens_tags,additives_tags,additives_original_tags,ingredients_analysis_tags,nutriments';
+    const fields = 'product_name,product_name_en,brands,quantity,serving_size,categories,image_url,image_front_url,image_nutrition_url,image_ingredients_url,ingredients_text,ingredients_text_en,ingredients_text_id,ingredients_text_fr,ingredients_text_de,ingredients,ingredients_tags,allergens_tags,additives_tags,additives_original_tags,ingredients_analysis_tags,nutriments';
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 4000);
 
@@ -34,7 +161,7 @@ export class OpenFoodFactsProvider implements ProductProvider {
     return null;
   }
 
-  async identifyProduct(barcode: string): Promise<NormalizedProduct | null> {
+  async identifyProduct(barcode: string, packageImage?: string): Promise<NormalizedProduct | null> {
     try {
       const cleanBarcode = barcode.trim().replace(/\D/g, '');
       if (!cleanBarcode) return null;
@@ -77,8 +204,8 @@ export class OpenFoodFactsProvider implements ProductProvider {
                 name: item.title || 'Scanned Grocery Item',
                 brand: item.brand || item.publisher,
                 category: item.category || 'Packaged Product',
-                image: item.images?.[0],
-                ingredients: item.description,
+                image: item.images?.[0] || packageImage,
+                ingredients: item.description || 'Ingredients not listed in database; photograph the ingredients panel',
                 serving_size: '1 serving',
                 nutrition: {
                   basis: 'serving'
@@ -93,7 +220,7 @@ export class OpenFoodFactsProvider implements ProductProvider {
 
       const n = p.nutriments || {};
       const productName = p.product_name || p.product_name_en || 'Unknown Product';
-      const servingSize = p.serving_size || '1 serving';
+      let servingSize = p.serving_size || '1 serving';
       const quantity = p.quantity || '';
       const category = p.categories?.split(',')?.[0]?.trim();
 
@@ -143,7 +270,19 @@ export class OpenFoodFactsProvider implements ProductProvider {
       if (n['zinc_100g'] || n['zinc_serving'] || n['zinc_prepared']) minerals.push('Zinc');
       if (n['phosphorus_prepared'] || n['phosphorus_100g']) minerals.push('Phosphorus');
 
-      // Fallback: If nutriments are empty or missing in OFF, resolve from authoritative reference normalizer
+      // 1. Water check: Water is genuinely 0 kcal across all macros
+      const lowerName = productName.toLowerCase();
+      if (lowerName.includes('water') || lowerName.includes('mineral water') || lowerName.includes('air mineral')) {
+        rawKcal = 0;
+        rawProtein = 0;
+        rawCarbs = 0;
+        rawFat = 0;
+        rawFiber = 0;
+        rawSugar = 0;
+        rawSodium = rawSodium ?? 5;
+      }
+
+      // 2. Reference normalizer lookup
       if (rawKcal === undefined || rawKcal === null) {
         const refNutrition = NutritionNormalizer.resolvePackagedProductNutrition(productName, category, servingSize, quantity);
         if (refNutrition) {
@@ -159,20 +298,50 @@ export class OpenFoodFactsProvider implements ProductProvider {
         }
       }
 
+      // 3. Second-pass OCR on packaging image if nutriments are still missing
+      if (rawKcal === undefined || rawKcal === null) {
+        const nutritionImgCandidate = packageImage || p.image_nutrition_url || p.image_front_url || p.image_url;
+        if (nutritionImgCandidate) {
+          const ocrNutrition = await extractNutritionFactsFromImage(nutritionImgCandidate);
+          if (ocrNutrition && typeof ocrNutrition.calories === 'number' && !isNaN(ocrNutrition.calories)) {
+            rawKcal = ocrNutrition.calories;
+            if (typeof ocrNutrition.protein === 'number') rawProtein = ocrNutrition.protein;
+            if (typeof ocrNutrition.carbohydrates === 'number') rawCarbs = ocrNutrition.carbohydrates;
+            if (typeof ocrNutrition.fat === 'number') rawFat = ocrNutrition.fat;
+            if (typeof ocrNutrition.fiber === 'number') rawFiber = ocrNutrition.fiber;
+            if (typeof ocrNutrition.sugar === 'number') rawSugar = ocrNutrition.sugar;
+            if (typeof ocrNutrition.sodium_mg === 'number') rawSodium = ocrNutrition.sodium_mg;
+            if (ocrNutrition.serving_size) servingSize = ocrNutrition.serving_size;
+          }
+        }
+      }
+
       // Extract raw additives tags for coloring and ingredient analysis
       const additives = p.additives_tags
         ? p.additives_tags.map((a: string) => a.replace(/^[a-z]+:/, '').toLowerCase().trim())
         : (p.additives_original_tags || []);
 
       // Resolve authentic declared ingredients:
+      // Priority:
       // 1. Open Food Facts ingredients_text / language variations / ingredient list
       // 2. NutritionNormalizer declared packaging ingredients
-      let resolvedIngredients = p.ingredients_text || p.ingredients_text_id || p.ingredients_text_en;
+      // 3. Dedicated package image OCR extraction
+      // 4. Explicit missing state (never blank, never "pending")
+      let resolvedIngredients = p.ingredients_text || p.ingredients_text_en || p.ingredients_text_id || p.ingredients_text_fr || p.ingredients_text_de;
       if (!resolvedIngredients && Array.isArray(p.ingredients) && p.ingredients.length > 0) {
         resolvedIngredients = p.ingredients.map((i: any) => i.text).filter(Boolean).join(', ');
       }
       if (!resolvedIngredients) {
         resolvedIngredients = NutritionNormalizer.resolvePackagedProductIngredients(productName, category, p.brands);
+      }
+      if (!resolvedIngredients) {
+        const ingredientsImgCandidate = packageImage || p.image_ingredients_url || p.image_front_url || p.image_url;
+        if (ingredientsImgCandidate) {
+          resolvedIngredients = await extractIngredientsFromImage(ingredientsImgCandidate);
+        }
+      }
+      if (!resolvedIngredients) {
+        resolvedIngredients = 'Ingredients not listed in database; photograph the ingredients panel';
       }
 
       return {
@@ -182,8 +351,8 @@ export class OpenFoodFactsProvider implements ProductProvider {
         size: quantity || servingSize,
         serving_size: servingSize,
         category,
-        image: p.image_url || p.image_front_url,
-        ingredients: resolvedIngredients || undefined,
+        image: p.image_url || p.image_front_url || packageImage,
+        ingredients: resolvedIngredients,
         allergens: p.allergens_tags ? p.allergens_tags.map((a: string) => a.replace(/^[a-z]+:/, '')) : undefined,
         additives,
         nutrition: {
@@ -267,100 +436,105 @@ export class RetailPriceProvider implements PriceProvider {
       // 1. Indonesian Dairy / Milk / Susu
       if (name.includes('milk') || name.includes('susu') || cat.includes('dairy') || cat.includes('milk') || name.includes('yogurt')) {
         if (volumeMl >= 800) {
-          return { price: 21000, currency: 'IDR', source: 'Estimated Local Market Price', confidence: 0.90 }; // 1 Liter (Ultra Milk, Indomilk)
+          return { price: 21000, currency: 'IDR', source: 'Estimated Local Market Price (Unconfirmed)', confidence: 0.35 }; // 1 Liter (Ultra Milk, Indomilk)
         } else if (volumeMl >= 180 && volumeMl <= 300) {
-          return { price: 7000, currency: 'IDR', source: 'Estimated Local Market Price', confidence: 0.92 }; // 200ml - 250ml
+          return { price: 7000, currency: 'IDR', source: 'Estimated Local Market Price (Unconfirmed)', confidence: 0.35 }; // 200ml - 250ml
         } else if (volumeMl > 0 && volumeMl < 180) {
-          return { price: 4200, currency: 'IDR', source: 'Estimated Local Market Price', confidence: 0.90 }; // 125ml
+          return { price: 4200, currency: 'IDR', source: 'Estimated Local Market Price (Unconfirmed)', confidence: 0.35 }; // 125ml
         }
-        return { price: 7500, currency: 'IDR', source: 'Estimated Local Market Price', confidence: 0.85 };
+        return { price: 7500, currency: 'IDR', source: 'Estimated Local Market Price (Unconfirmed)', confidence: 0.35 };
       }
 
       // 2. Bottled Water / Mineral Water
       if (name.includes('water') || name.includes('aqua') || name.includes('minerale') || name.includes('air mineral')) {
         if (volumeMl >= 1000) {
-          return { price: 6500, currency: 'IDR', source: 'Estimated Local Market Price', confidence: 0.92 };
+          return { price: 6500, currency: 'IDR', source: 'Estimated Local Market Price (Unconfirmed)', confidence: 0.35 };
         } else if (volumeMl >= 500) {
-          return { price: 3800, currency: 'IDR', source: 'Estimated Local Market Price', confidence: 0.92 };
+          return { price: 3800, currency: 'IDR', source: 'Estimated Local Market Price (Unconfirmed)', confidence: 0.35 };
         }
-        return { price: 3000, currency: 'IDR', source: 'Estimated Local Market Price', confidence: 0.90 };
+        return { price: 3000, currency: 'IDR', source: 'Estimated Local Market Price (Unconfirmed)', confidence: 0.35 };
       }
 
       // 3. Instant Noodles / Snacks
       if (name.includes('mie') || name.includes('noodle') || name.includes('indomie') || name.includes('sedap')) {
-        return { price: 3500, currency: 'IDR', source: 'Estimated Local Market Price', confidence: 0.92 };
+        return { price: 3500, currency: 'IDR', source: 'Estimated Local Market Price (Unconfirmed)', confidence: 0.35 };
       }
       if (name.includes('snack') || name.includes('chips') || name.includes('chitato') || name.includes('biskuit') || name.includes('wafer')) {
-        return { price: 8500, currency: 'IDR', source: 'Estimated Local Market Price', confidence: 0.85 };
+        return { price: 8500, currency: 'IDR', source: 'Estimated Local Market Price (Unconfirmed)', confidence: 0.35 };
       }
 
       // 4. Ready-to-drink tea & coffee & juice
       if (name.includes('teh') || name.includes('tea') || name.includes('kopi') || name.includes('coffee') || name.includes('jus') || name.includes('juice')) {
-        return { price: 4500, currency: 'IDR', source: 'Estimated Local Market Price', confidence: 0.88 };
+        return { price: 4500, currency: 'IDR', source: 'Estimated Local Market Price (Unconfirmed)', confidence: 0.35 };
       }
 
       // General Indonesian packaged food baseline
-      return { price: 12500, currency: 'IDR', source: 'Estimated Local Market Price', confidence: 0.82 };
+      return { price: 12500, currency: 'IDR', source: 'Estimated Local Market Price (Unconfirmed)', confidence: 0.35 };
     }
 
     // US Market Pricing (USD)
     if (normCountry === 'US') {
       if (name.includes('milk') || cat.includes('dairy') || cat.includes('milk')) {
         if (volumeMl >= 800) {
-          return { price: 3.49, currency: 'USD', source: 'Estimated Local Market Price', confidence: 0.90 };
+          return { price: 3.49, currency: 'USD', source: 'Estimated Local Market Price (Unconfirmed)', confidence: 0.35 };
         } else {
-          return { price: 1.85, currency: 'USD', source: 'Estimated Local Market Price', confidence: 0.90 };
+          return { price: 1.85, currency: 'USD', source: 'Estimated Local Market Price (Unconfirmed)', confidence: 0.35 };
         }
       }
       if (name.includes('water') || cat.includes('water')) {
-        return { price: 1.49, currency: 'USD', source: 'Estimated Local Market Price', confidence: 0.90 };
+        return { price: 1.49, currency: 'USD', source: 'Estimated Local Market Price (Unconfirmed)', confidence: 0.35 };
       }
       if (name.includes('snack') || name.includes('chips') || name.includes('cookie')) {
-        return { price: 2.99, currency: 'USD', source: 'Estimated Local Market Price', confidence: 0.88 };
+        return { price: 2.99, currency: 'USD', source: 'Estimated Local Market Price (Unconfirmed)', confidence: 0.35 };
       }
       if (name.includes('soda') || name.includes('drink') || name.includes('beverage')) {
-        return { price: 2.29, currency: 'USD', source: 'Estimated Local Market Price', confidence: 0.88 };
+        return { price: 2.29, currency: 'USD', source: 'Estimated Local Market Price (Unconfirmed)', confidence: 0.35 };
       }
-      return { price: 3.99, currency: 'USD', source: 'Estimated Local Market Price', confidence: 0.82 };
+      return { price: 3.99, currency: 'USD', source: 'Estimated Local Market Price (Unconfirmed)', confidence: 0.35 };
     }
 
     // Default other countries (EUR, GBP, etc.)
-    return { price: 2.50, currency, source: 'Estimated Local Market Price', confidence: 0.82 };
+    return { price: 2.50, currency, source: 'Estimated Local Market Price (Unconfirmed)', confidence: 0.35 };
   }
 
   async getPrice(barcode: string, countryCode: string, productCategory?: string, productName?: string, ipAddress?: string, sizeStr?: string): Promise<ProductPrice | null> {
     try {
-      const supabase = createServerSupabaseClient();
       const isIndoBarcode = barcode.startsWith('899');
       const normCountry = (countryCode === 'ID' || isIndoBarcode) ? 'ID' : (countryCode || 'US').toUpperCase();
       const { currency } = this.getCurrencyForCountry(normCountry);
 
       // Priority 2: Check product_price_cache for verified records
-      const { data: cached } = await supabase
-        .from('product_price_cache')
-        .select('*')
-        .eq('product_id', barcode)
-        .eq('country', normCountry)
-        .order('retrieved_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      try {
+        const supabase = createServerSupabaseClient();
+        const { data: cached } = await supabase
+          .from('product_price_cache')
+          .select('*')
+          .eq('product_id', barcode)
+          .eq('country', normCountry)
+          .order('retrieved_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
 
-      if (cached && Number(cached.price) > 0) {
-        const ageMs = Date.now() - new Date(cached.retrieved_at).getTime();
-        // Valid for 30 days
-        if (ageMs < 30 * 24 * 60 * 60 * 1000) {
-          return {
-            productId: barcode,
-            retailer: cached.retailer || 'Local Market Registry',
-            country: cached.country,
-            currency: cached.currency || currency,
-            price: Number(cached.price),
-            source: cached.source || 'Local Market Cache',
-            retrievedAt: cached.retrieved_at,
-            confidence: Number(cached.confidence || 0.9),
-            needs_user_price: false
-          };
+        if (cached && Number(cached.price) > 0) {
+          const ageMs = Date.now() - new Date(cached.retrieved_at).getTime();
+          // Valid for 30 days
+          if (ageMs < 30 * 24 * 60 * 60 * 1000) {
+            const isUserConfirmed = (cached.source || '').toLowerCase().includes('user');
+            return {
+              productId: barcode,
+              retailer: cached.retailer || 'Local Market Registry',
+              country: cached.country,
+              currency: cached.currency || currency,
+              price: Number(cached.price),
+              source: cached.source || 'Local Market Cache',
+              retrievedAt: cached.retrieved_at,
+              confidence: Number(cached.confidence || (isUserConfirmed ? 1.0 : 0.8)),
+              needs_user_price: cached.needs_user_price ?? !isUserConfirmed
+            };
+          }
         }
+      } catch (cacheErr) {
+        // Continue to online search / local estimate if cache or Supabase client is unavailable
       }
 
       // Priority 3: Optional paid search retail estimate if API key configured (e.g. SerpAPI)
@@ -394,20 +568,6 @@ export class RetailPriceProvider implements PriceProvider {
       // Priority 4: Realistic local market estimation based on country, currency, volume & category
       const est = this.estimateLocalPrice(barcode, normCountry, productName, productCategory, sizeStr);
 
-      // Asynchronously cache this estimate for future instant hits
-      try {
-        supabase.from('product_price_cache').upsert({
-          product_id: barcode,
-          country: normCountry,
-          currency: est.currency,
-          price: est.price,
-          retailer: 'Local Market',
-          source: est.source,
-          confidence: est.confidence,
-          retrieved_at: new Date().toISOString()
-        }, { onConflict: 'product_id,country' }).then(() => {});
-      } catch (cacheErr) {}
-
       return {
         productId: barcode,
         retailer: 'Local Market',
@@ -417,7 +577,7 @@ export class RetailPriceProvider implements PriceProvider {
         source: est.source,
         retrievedAt: new Date().toISOString(),
         confidence: est.confidence,
-        needs_user_price: false
+        needs_user_price: true
       };
     } catch (e) {
       console.warn("[RetailPriceProvider] Price lookup error:", e);
@@ -433,8 +593,8 @@ export class BarcodeService {
   /**
    * Complete authoritative flow for a scanned barcode.
    */
-  static async processScan(barcode: string, countryCode: string = 'US', ipAddress?: string) {
-    const product = await this.productProvider.identifyProduct(barcode);
+  static async processScan(barcode: string, countryCode: string = 'US', ipAddress?: string, packageImage?: string) {
+    const product = await this.productProvider.identifyProduct(barcode, packageImage);
 
     if (!product) {
       throw new Error("Product could not be authoritatively identified.");

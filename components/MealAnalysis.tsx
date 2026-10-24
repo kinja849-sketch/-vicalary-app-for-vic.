@@ -6,9 +6,11 @@ import { useAnalysisStore } from "@/store/analysisStore";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/AuthContext";
 import { toast } from "sonner";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { useTranslation } from "@/lib/api/translation";
 import { getOrCreateCoachConversation } from "@/lib/api/chat";
+import { getDailyProgress } from "@/lib/api/progress";
+import { getUserProfile } from "@/lib/api/auth";
 
 export interface MealAnalysisProps {
   mealImage: string;
@@ -18,7 +20,7 @@ export interface MealAnalysisProps {
   foodItems?: any[];
   analysis?: any;
   onClose: () => void;
-  onLog: () => void;
+  onLog: () => any;
   onRetry?: () => void;
 }
 
@@ -48,6 +50,24 @@ export function MealAnalysis({
     return () => setNavbarHidden(false);
   }, [setNavbarHidden]);
 
+  const today = new Date().toISOString().split('T')[0];
+  const { data: dailyProgress } = useQuery({
+    queryKey: ['daily-progress', user?.id, today],
+    queryFn: () => getDailyProgress(user?.id || '', today),
+    enabled: !!user?.id,
+    staleTime: 1000 * 30
+  });
+
+  const { data: profile } = useQuery({
+    queryKey: ['profile', user?.id],
+    queryFn: () => getUserProfile(user!.id),
+    enabled: !!user?.id
+  });
+
+  const effectiveGoal = Number(dailyProgress?.calories_goal || profile?.goal_calories || dailyCalorieGoal || 2000);
+  const currentConsumed = Number(dailyProgress?.calories_consumed || 0);
+  const isGoalAchieved = effectiveGoal > 0 && currentConsumed >= effectiveGoal;
+
   // Extract fields from analysis or fallback
   const data = analysis || {};
   const name = data.name || (foodItems[0]?.name) || "Meal Analysis";
@@ -75,13 +95,15 @@ export function MealAnalysis({
   const handleLogMeal = async () => {
     try {
       setIsLogging(true);
-      await onLog();
+      const res: any = await onLog();
       queryClient.invalidateQueries({ queryKey: ['daily-progress'] });
       queryClient.invalidateQueries({ queryKey: ['progress'] });
       queryClient.invalidateQueries({ queryKey: ['food-history'] });
       queryClient.invalidateQueries({ queryKey: ['daily-plan'] });
       queryClient.invalidateQueries({ queryKey: ['daily-summary'] });
-      toast.success("Meal logged! Viewing Today's Progress.");
+      if (!res?.alreadyAchieved && !res?.justAchieved) {
+        toast.success("Meal logged! Viewing Today's Progress.");
+      }
       router.push('/dashboard');
     } catch (e: any) {
       console.error("Log error:", e);
@@ -340,18 +362,29 @@ export function MealAnalysis({
 
       {/* Sticky Bottom Action Dock: ALWAYS VISIBLE AND HORIZONTALLY PROPORTIONED */}
       <footer className="shrink-0 z-30 bg-white/95 dark:bg-[#0b141a]/95 backdrop-blur-xl border-t border-slate-200 dark:border-slate-800 px-5 py-3.5 shadow-lg max-w-2xl mx-auto w-full">
+        {isGoalAchieved && (
+          <div className="w-full mb-3 py-2 px-3 bg-red-500/10 border border-red-500/20 rounded-xl text-center text-xs font-bold text-red-600 dark:text-red-400 flex items-center justify-center gap-1.5">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>Daily calorie target reached. Logging is inactive until progress resets.</span>
+          </div>
+        )}
         <div className="flex flex-row items-center gap-3 w-full">
           <button
             onClick={handleLogMeal}
-            disabled={isLogging}
-            className="flex-1 h-14 px-4 bg-vic-green hover:bg-vic-green/90 active:scale-[0.98] text-slate-900 rounded-2xl font-black text-sm shadow-md flex items-center justify-center gap-2.5 transition-all disabled:opacity-50 whitespace-nowrap cursor-pointer"
+            disabled={isLogging || isGoalAchieved}
+            title={isGoalAchieved ? "Daily calorie goal reached. Reset progress to log more meals." : undefined}
+            className={`flex-1 h-14 px-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2.5 transition-all whitespace-nowrap ${
+              isGoalAchieved
+                ? "bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 opacity-40 cursor-not-allowed pointer-events-none shadow-none"
+                : "bg-vic-green hover:bg-vic-green/90 active:scale-[0.98] text-slate-900 shadow-md cursor-pointer disabled:opacity-50"
+            }`}
           >
             {isLogging ? (
               <div className="w-5 h-5 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
             ) : (
               <Check className="w-5 h-5 text-slate-900" strokeWidth={3} />
             )}
-            <span>{t('log_meal_btn')}</span>
+            <span>{isGoalAchieved ? "Goal Achieved (Locked)" : t('log_meal_btn')}</span>
           </button>
 
           <button

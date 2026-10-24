@@ -40,7 +40,7 @@ export interface ProductPrice {
 }
 
 export interface ProductProvider {
-  identifyProduct(barcode: string): Promise<NormalizedProduct | null>;
+  identifyProduct(barcode: string, packageImage?: string): Promise<NormalizedProduct | null>;
 }
 
 export interface PriceProvider {

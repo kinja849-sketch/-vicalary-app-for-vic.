@@ -5,6 +5,7 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { Activity, SwitchCamera, ArrowLeft, RefreshCw, Camera as CameraIcon, Images } from "lucide-react";
 import { analyzeFoodImage, scanProduct, saveFoodAnalysis, analyzeMedication } from "@/lib/api/food";
+import { logMeal } from "@/lib/api/progress";
 import { useAnalysisStore } from "@/store/analysisStore";
 import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
@@ -480,7 +481,32 @@ export default function Camera({ initialMode }: CameraProps = {}) {
     if (!activeUserId || !analysisResult) return;
     try {
       await saveFoodAnalysis(activeUserId, analysisResult);
-      addNotification('success', "Logged to your diary successfully!");
+      
+      const mealToLog = {
+        mealImage: capturedImage || analysisResult.image_url,
+        totalCalories: analysisResult.calories,
+        foodItems: [{
+          name: analysisResult.name,
+          calories: analysisResult.calories,
+          image: capturedImage || analysisResult.image_url,
+          protein: analysisResult.protein,
+          carbs: analysisResult.carbs,
+          fat: analysisResult.fat,
+          fiber: analysisResult.fiber,
+          sugar: analysisResult.sugar
+        }],
+        alreadySaved: true
+      };
+
+      const logResult = await logMeal(activeUserId, mealToLog);
+      if (logResult?.exceededGoal) {
+        toast.warning(logResult.message, { duration: 7000 });
+      } else if (logResult?.justAchieved) {
+        toast.success(logResult.message, { duration: 6000 });
+      } else {
+        addNotification('success', "Logged to your diary successfully!");
+      }
+
       router.push("/dashboard");
     } catch (err) {
       console.error("Save failed:", err);

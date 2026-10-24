@@ -53,8 +53,34 @@ export const getDailyProgress = async (userId: string, date: string) => {
         .limit(1)
 
     if (error) throw error
-    return data && data.length > 0 ? data[0] : null
+    const prog = data && data.length > 0 ? data[0] : null;
+
+    if (prog && typeof window !== 'undefined') {
+        const today = new Date().toISOString().split('T')[0];
+        if (date === today) {
+            const consumed = Number(prog.calories_consumed || 0);
+            let goal = Number(prog.calories_goal || 0);
+            (async () => {
+                try {
+                    let effectiveGoal = goal;
+                    if (!effectiveGoal && consumed > 0) {
+                        const { data: prof } = await supabase.from('user_profiles').select('goal_calories').eq('id', userId).maybeSingle();
+                        effectiveGoal = Number(prof?.goal_calories || 2000);
+                    }
+                    if (effectiveGoal > 0 && consumed > effectiveGoal) {
+                        const { sendCoachCalorieExceededAlert } = await import('./coach');
+                        await sendCoachCalorieExceededAlert(userId, consumed, effectiveGoal);
+                    }
+                } catch {
+                    // Non-fatal background check
+                }
+            })();
+        }
+    }
+
+    return prog;
 }
+
 
 export const getProgressByDateRange = async (userId: string, startDate: string, endDate: string) => {
     const { data, error } = await supabase
@@ -236,19 +262,60 @@ export const logMeal = async (userId: string, mealData: any) => {
     const totalMealCalories = Number(mealData.totalCalories || 0);
 
     if (currentProgress) {
+        const existingConsumed = Number(currentProgress.calories_consumed || 0);
+        let goalCalories = Number(currentProgress.calories_goal || 0);
+        if (!goalCalories) {
+            const { data: prof } = await supabase.from('user_profiles').select('goal_calories').eq('id', userId).maybeSingle();
+            goalCalories = Number(prof?.goal_calories || 2000);
+        }
+
+        const newConsumed = existingConsumed + totalMealCalories;
+        const justAchieved = goalCalories > 0 && newConsumed >= goalCalories && existingConsumed < goalCalories;
+        const exceededGoal = goalCalories > 0 && newConsumed > goalCalories;
+
         await supabase
             .from('daily_progress')
             .update({
-                calories_consumed: (currentProgress.calories_consumed || 0) + totalMealCalories,
-                protein_consumed: (Number(currentProgress.protein_consumed) || 0) + mealMacros.protein,
-                carbs_consumed: (Number(currentProgress.carbs_consumed) || 0) + mealMacros.carbs,
-                fat_consumed: (Number(currentProgress.fat_consumed) || 0) + mealMacros.fat,
-                fiber_consumed: (Number(currentProgress.fiber_consumed) || 0) + mealMacros.fiber,
-                sugar_consumed: (Number(currentProgress.sugar_consumed) || 0) + mealMacros.sugar,
+                calories_consumed: newConsumed,
+                protein_consumed: Number(currentProgress.protein_consumed || 0) + mealMacros.protein,
+                carbs_consumed: Number(currentProgress.carbs_consumed || 0) + mealMacros.carbs,
+                fat_consumed: Number(currentProgress.fat_consumed || 0) + mealMacros.fat,
+                fiber_consumed: Number(currentProgress.fiber_consumed || 0) + mealMacros.fiber,
+                sugar_consumed: Number(currentProgress.sugar_consumed || 0) + mealMacros.sugar,
+                meals_logged: (currentProgress.meals_logged || 0) + 1,
+                updated_at: new Date().toISOString()
             })
             .eq('id', currentProgress.id);
+
+        logInfo(userId, 'meal_logged', { calories: totalMealCalories, macros: mealMacros, newConsumed, justAchieved, exceededGoal });
+
+        // Trigger Health Coach Alert into chat if target is exceeded
+        if (exceededGoal) {
+            import('./coach').then(({ sendCoachCalorieExceededAlert }) => {
+                sendCoachCalorieExceededAlert(
+                    userId,
+                    newConsumed,
+                    goalCalories,
+                    mealData.foodItems?.[0]?.name || mealData.name
+                );
+            }).catch(err => console.error("[Progress] Failed to dispatch coach alert:", err));
+        }
+
+        return {
+            analysis,
+            capReached: justAchieved || exceededGoal,
+            justAchieved,
+            exceededGoal,
+            caloriesConsumed: newConsumed,
+            caloriesGoal: goalCalories,
+            message: exceededGoal
+                ? `⚠️ Calorie Target Exceeded: You have consumed ${newConsumed} kcal (target: ${goalCalories} kcal). The Health Coach has sent an alert to your chat. Please stop eating for the rest of the day!`
+                : justAchieved
+                    ? "Congratulations! You've achieved your daily calorie goal today. Be mindful with further intake for the rest of the day."
+                    : undefined
+        };
     } else {
-        // Get goals from onboarding responses (new location) or profile
+        // First meal of the day: create progress row
         const { data: onboardingRows } = await supabase
             .from('onboarding_responses')
             .select('*')
@@ -263,6 +330,8 @@ export const logMeal = async (userId: string, mealData: any) => {
 
         const onboarding = onboardingRows?.[0];
         const profile = profileRows?.[0];
+        const goalCalories = Number(onboarding?.daily_calorie_goal || profile?.goal_calories || 2000);
+        const justAchieved = goalCalories > 0 && totalMealCalories >= goalCalories;
 
         await supabase
             .from('daily_progress')
@@ -270,7 +339,7 @@ export const logMeal = async (userId: string, mealData: any) => {
                 user_id: userId,
                 progress_date: today,
                 calories_consumed: totalMealCalories,
-                calories_goal: onboarding?.daily_calorie_goal || profile?.goal_calories || 2000,
+                calories_goal: goalCalories,
                 protein_consumed: mealMacros.protein,
                 protein_goal: onboarding?.protein_goal || 50,
                 carbs_consumed: mealMacros.carbs,
@@ -280,13 +349,39 @@ export const logMeal = async (userId: string, mealData: any) => {
                 fiber_consumed: mealMacros.fiber,
                 fiber_goal: onboarding?.fiber_goal || 30,
                 sugar_consumed: mealMacros.sugar,
-                sugar_goal: onboarding?.sugar_goal || 50
+                sugar_goal: onboarding?.sugar_goal || 50,
+                meals_logged: 1
             });
+
+        const exceededGoal = goalCalories > 0 && totalMealCalories > goalCalories;
+
+        logInfo(userId, 'meal_logged', { calories: totalMealCalories, macros: mealMacros, justAchieved, exceededGoal });
+
+        if (exceededGoal) {
+            import('./coach').then(({ sendCoachCalorieExceededAlert }) => {
+                sendCoachCalorieExceededAlert(
+                    userId,
+                    totalMealCalories,
+                    goalCalories,
+                    mealData.foodItems?.[0]?.name || mealData.name
+                );
+            }).catch(err => console.error("[Progress] Failed to dispatch coach alert:", err));
+        }
+
+        return {
+            analysis,
+            capReached: justAchieved || exceededGoal,
+            justAchieved,
+            exceededGoal,
+            caloriesConsumed: totalMealCalories,
+            caloriesGoal: goalCalories,
+            message: exceededGoal
+                ? `⚠️ Calorie Target Exceeded: You have consumed ${totalMealCalories} kcal (target: ${goalCalories} kcal). The Health Coach has sent an alert to your chat. Please stop eating for the rest of the day!`
+                : justAchieved
+                    ? "Congratulations! You've achieved your daily calorie goal today. Be mindful with further intake for the rest of the day."
+                    : undefined
+        };
     }
-
-    logInfo(userId, 'meal_logged', { calories: totalMealCalories, macros: mealMacros });
-
-    return analysis;
 };
 
 // ============================================================================

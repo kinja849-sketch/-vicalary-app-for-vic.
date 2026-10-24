@@ -9,7 +9,7 @@ import { resolveUserLanguage } from '@/lib/api/serverLanguage';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { barcode, userId, locationContext, language } = body;
+    const { barcode, userId, locationContext, language, imageUrl, imageBase64 } = body;
 
     if (!barcode || typeof barcode !== 'string') {
       return NextResponse.json({ error: 'Valid barcode string required' }, { status: 400 });
@@ -45,7 +45,8 @@ export async function POST(req: NextRequest) {
     };
 
     // 2. Strict Gateway Decision - No AI hallucination of unknown barcodes
-    const decision = await ScannerDecisionEngine.processScan(barcode, userId, country, clientIp);
+    const packageImage = imageBase64 ? `data:image/jpeg;base64,${imageBase64}` : imageUrl;
+    const decision = await ScannerDecisionEngine.processScan(barcode, userId, country, clientIp, packageImage);
 
     if (decision.status === 'PRODUCT_NOT_FOUND') {
       const notFoundMsgs: Record<string, string> = {
@@ -181,17 +182,20 @@ export async function POST(req: NextRequest) {
       calcCalories = 0; calcProtein = 0; calcCarbs = 0; calcFat = 0;
     }
 
+    const hasMissingIngredients = !p.ingredients || p.ingredients.includes('not listed') || p.ingredients.includes('not declared');
+    const finalIngredients = p.ingredients || 'Ingredients not listed in database; photograph the ingredients panel';
+
     return NextResponse.json({
       found: true,
       barcode,
       type: 'food',
-      is_verified: n.calories !== undefined,
+      is_verified: calcCalories !== null && !hasMissingIngredients,
       name: p.name,
       brand: p.brand,
       category: p.category,
       serving_size: p.serving_size,
       image_url: p.image,
-      ingredients: p.ingredients || 'Ingredients not declared on packaging.',
+      ingredients: finalIngredients,
       allergens: p.allergens,
       coloring,
       is_compliant: finalIsCompliant,
@@ -211,8 +215,8 @@ export async function POST(req: NextRequest) {
       serving_basis: n.basis || 'serving',
       
       // AI Narrative Advice
-      description: advice?.description || `${p.name} from ${p.brand || 'verified brand'}.`,
-      vitamins_and_nutrition: advice?.vitamins_and_nutrition || "Nutrition details based on product packaging.",
+      description: advice?.description || `${p.name} from ${p.brand || 'verified brand'}. A packaged food item in the ${p.category || 'grocery'} category, analyzed against your health profile.`,
+      vitamins_and_nutrition: advice?.vitamins_and_nutrition || (calcCalories !== null ? "Nutrition details based on product packaging." : "Detailed nutrition facts are not documented on this product's database record."),
       recommendation: finalRecommendation,
       healthStatus: finalHealthStatus,
       user_alignment_boolean: finalHealthStatus !== 'POOR',
@@ -223,7 +227,7 @@ export async function POST(req: NextRequest) {
       estimated_price: formattedPrice,
       price_metadata: priceMetadata,
       
-      needs_crowdsourcing: false
+      needs_crowdsourcing: calcCalories === null || hasMissingIngredients
     });
 
   } catch (error: any) {

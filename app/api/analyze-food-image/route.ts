@@ -106,20 +106,30 @@ export async function POST(req: NextRequest) {
 
     // ─── 2. STEP 1: VISION IDENTIFICATION OF INDIVIDUAL FOODS & PORTIONS ───
     const visionSystemPrompt = `You are a professional clinical dietitian and food vision analyst.
-Analyze the entire visible meal in the image with precision.
-Identify each individual food item present on the plate or in the photo.
-Estimate realistic portion weights in grams (g) for each food.
-Note any visual ambiguities or uncertainties (e.g. preparation method, type of oil, seasoning, meat blend).
+Analyze the visible meal in this photo with high clinical accuracy and culinary precision.
+
+1. ACCURATE MEAL DISTINCTION:
+   - Carefully examine and separate each distinct food item on the plate (e.g., specific protein cut like Grilled Chicken Breast or Salmon Fillet; specific grain like Steamed White Jasmine Rice or Quinoa; cooked/raw vegetables like Roasted Carrots, Steamed Broccoli; sauces/gravies like Hollandaise or Sambal).
+   - DO NOT clump disparate culinary items into a generic single item unless it is an indivisible stew or casserole.
+
+2. ACCURATE CALORIE CALCULATION & CONSERVATIVE SCALE:
+   - Ground portion estimates in realistic plate geometry (~25-28cm dinner plate).
+   - Estimate portion weight in grams (g) conservatively based on visual surface area, height/depth, and physical food density (e.g. cooked rice: 1 cup ~160g; chicken breast: palm size ~150g; leafy salad: 50-80g; oils/dressings: 1-2 tbsp ~15-30g).
+   - DO NOT systematically exaggerate or inflate portion grams without clear scale cues.
+
+3. INFORMATIVE MEAL DESCRIPTION:
+   - Formulate a rich, articulate explanation detailing the culinary components, observable cooking technique (roasted, pan-fried, poached, raw), visible garnishes, and portion proportionality.
 
 Return ONLY a valid JSON object matching this schema:
 {
-  "meal_title": "Primary name for this meal combination",
-  "visual_uncertainties": "Specific notes on what cannot be verified visually (e.g., hidden oils, seasoning, meat blend)",
+  "meal_title": "Descriptive, accurate culinary name for this meal combination",
+  "visual_uncertainties": "Specific notes on what cannot be verified visually (e.g., hidden cooking fats, sodium, inside meat doneness)",
+  "meal_description": "An informative paragraph describing the observed dish, cooking methods, textures, and component proportions.",
   "foods": [
     {
-      "name": "Food item name (e.g. French Fries, Chicken Sausage)",
+      "name": "Specific food item name",
       "estimated_portion_g": 150,
-      "portion_description": "Approximate human-readable portion (e.g. 1 medium bowl, 2 links)"
+      "portion_description": "Precise human-readable portion (e.g. 1 medium breast ~150g, 1 cup ~160g)"
     }
   ]
 }`;
@@ -134,22 +144,23 @@ Return ONLY a valid JSON object matching this schema:
             type: 'image_url',
             image_url: {
               url: imageBase64 ? `data:image/jpeg;base64,${imageBase64}` : imageUrl,
-              detail: 'auto'
+              detail: 'high'
             }
           }
         ]
       }],
       temperature: 0.1,
-      max_tokens: 280,
+      max_tokens: 650,
       response_format: { type: 'json_object' }
     });
 
     const visionParsed = parseJSONSafely(visionResult.choices[0]?.message?.content);
     const mealTitle = visionParsed.meal_title || 'Meal Analysis';
     const visualUncertainties = visionParsed.visual_uncertainties || 'Portion sizes and preparation fats estimated from visual appearance.';
+    const rawMealDescription = visionParsed.meal_description || '';
     const identifiedFoods: IdentifiedFoodItem[] = Array.isArray(visionParsed.foods) && visionParsed.foods.length > 0
       ? visionParsed.foods
-      : [{ name: mealTitle, estimated_portion_g: 250, portion_description: '1 standard serving (~250g)' }];
+      : [{ name: mealTitle, estimated_portion_g: 220, portion_description: '1 standard serving (~220g)' }];
 
     // ─── 3. STEP 2: AUTHORITATIVE NUTRITION NORMALIZATION ───
     const nutritionCalculation = await NutritionNormalizer.calculateMealNutrition(identifiedFoods, supabase);
@@ -207,15 +218,16 @@ AUTHENTICATED NUTRITIONAL FACTS (DO NOT INVENT NUMBERS, USE THESE EXACT TOTALS):
 - Total Sodium: ${nutritionCalculation.total_sodium_mg}mg
 - Key Vitamins & Minerals present: ${[...nutritionCalculation.prominent_vitamins, ...nutritionCalculation.prominent_minerals].join(', ')}
 - Visual Uncertainties: ${visualUncertainties}
+- Visual Observation Details: ${rawMealDescription}
 
 CRITICAL LANGUAGE REQUIREMENT:
 You MUST write all output fields (meal_title, meal_description, vitamins_and_nutrition, recommendation) EXCLUSIVELY in fluent ${targetLangName} (code '${userLanguage}').
 Under no circumstances should you output in English if another language is specified.
 
-TASK: Write three concise, clinical, readable PARAGRAPHS in fluent ${targetLangName}. Keep each paragraph focused (2 to 4 sentences).
+TASK: Write three substantive, highly informative clinical PARAGRAPHS in fluent ${targetLangName}. Keep each paragraph focused (2 to 4 sentences).
 
 1. "meal_description":
-   A thorough, articulate paragraph explaining what you observe in the image. Describe each distinct component, their estimated portion volumes or piece counts, and acknowledge visual uncertainties.
+   A rich, substantive, and informative paragraph explaining what is observed in the image: distinct culinary ingredients, visible preparation methods (e.g. grilled, steamed, roasted, sautéed), food textures, and component proportions.
 
 2. "vitamins_and_nutrition":
    A focused nutritional narrative paragraph. Explain what the macronutrient balance means for sustained energy, satiety, and blood sugar. Discuss specific micronutrients identified (e.g. Potassium, Vitamin C, Iron) and relevant considerations like sodium or saturated fat.
@@ -230,7 +242,7 @@ TASK: Write three concise, clinical, readable PARAGRAPHS in fluent ${targetLangN
 Return ONLY a JSON object:
 {
   "meal_title": "Translated dish name in ${targetLangName}",
-  "meal_description": "Thorough paragraph in ${targetLangName}...",
+  "meal_description": "Substantive, informative paragraph in ${targetLangName}...",
   "vitamins_and_nutrition": "Focused paragraph in ${targetLangName}...",
   "recommendation": "Clear recommendation in ${targetLangName}...",
   "verdict": "GOOD" | "MODERATE" | "POOR",
@@ -242,7 +254,7 @@ Return ONLY a JSON object:
       model: 'gpt-4o-mini',
       messages: [{ role: 'user', content: synthesisPrompt }],
       temperature: 0.2,
-      max_tokens: 420,
+      max_tokens: 520,
       response_format: { type: 'json_object' }
     });
 

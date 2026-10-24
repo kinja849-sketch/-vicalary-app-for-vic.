@@ -15,13 +15,13 @@ export class ProductAdvisor {
     const allergies = userProfile?.allergies ? (Array.isArray(userProfile.allergies) ? userProfile.allergies.join(', ') : userProfile.allergies) : 'None reported';
 
     const nutritionSummary = nutrition ? `
-- Calories: ${nutrition.calories !== undefined ? `${nutrition.calories} kcal` : 'Not specified'}
-- Protein: ${nutrition.protein !== undefined ? `${nutrition.protein}g` : '0g'}
-- Carbohydrates: ${nutrition.carbohydrates !== undefined ? `${nutrition.carbohydrates}g` : '0g'}
-- Total Fat: ${nutrition.fat !== undefined ? `${nutrition.fat}g` : '0g'}
-- Dietary Fiber: ${nutrition.fiber !== undefined ? `${nutrition.fiber}g` : '0g'}
-- Sugars: ${nutrition.sugar !== undefined ? `${nutrition.sugar}g` : '0g'}
-- Sodium: ${nutrition.sodium_mg !== undefined ? `${nutrition.sodium_mg}mg` : '0mg'}
+- Calories: ${nutrition.calories !== undefined && nutrition.calories !== null ? `${nutrition.calories} kcal` : 'Not documented / unlisted'}
+- Protein: ${nutrition.protein !== undefined && nutrition.protein !== null ? `${nutrition.protein}g` : 'Not documented / unlisted'}
+- Carbohydrates: ${nutrition.carbohydrates !== undefined && nutrition.carbohydrates !== null ? `${nutrition.carbohydrates}g` : 'Not documented / unlisted'}
+- Total Fat: ${nutrition.fat !== undefined && nutrition.fat !== null ? `${nutrition.fat}g` : 'Not documented / unlisted'}
+- Dietary Fiber: ${nutrition.fiber !== undefined && nutrition.fiber !== null ? `${nutrition.fiber}g` : 'Not documented / unlisted'}
+- Sugars: ${nutrition.sugar !== undefined && nutrition.sugar !== null ? `${nutrition.sugar}g` : 'Not documented / unlisted'}
+- Sodium: ${nutrition.sodium_mg !== undefined && nutrition.sodium_mg !== null ? `${nutrition.sodium_mg}mg` : 'Not documented / unlisted'}
 - Basis: ${nutrition.basis === 'serving' ? 'Per Serving' : 'Per 100g'}
 - Identified Vitamins: ${nutrition.vitamins?.length ? nutrition.vitamins.join(', ') : 'None listed'}
 - Identified Minerals: ${nutrition.minerals?.length ? nutrition.minerals.join(', ') : 'None listed'}
@@ -53,7 +53,7 @@ export class ProductAdvisor {
     const langName = languageNames[language.toLowerCase()] || language;
 
     const prompt = `You are a clinical nutritionist and packaged-food advisor for VicCalary.
-Write three clear, articulate, clinical paragraphs ENTIRELY in fluent ${langName} (language code: '${language}') based strictly on verified product data.
+Write three clear, articulate, highly informative clinical paragraphs ENTIRELY in fluent ${langName} (language code: '${language}') based strictly on verified product data.
 Do NOT write in English unless English is requested. All JSON string values must be in ${langName}.
 
 PRODUCT DETAILS:
@@ -75,15 +75,16 @@ USER HEALTH PROFILE:
 - Health Context: ${healthConcerns}
 
 RULES:
-1. Ground your text in the facts above. DO NOT invent fictional numbers.
-2. If nutrition shows 0g or minimal calories for water or black coffee, explain that factually.
-3. Keep each paragraph focused, concise, and informative (2 to 4 sentences each). Avoid long rambling filler.
-4. Output language MUST be ${langName}.
+1. Ground your text strictly in the facts above. DO NOT invent fictional numbers.
+2. If nutrition states 'Not documented / unlisted', explicitly state that nutritional facts are not documented on file; NEVER state, claim, or assume 0g or 0mg for missing macros! Only mention 0g if verified zero-energy (like plain water) or verified 0 on label.
+3. INFORMATIVE DESCRIPTIONS: Provide a substantive, well-grounded description (2 to 4 rich sentences) covering product identity, brand origin, culinary/nutritional role, and key packaging attributes. Avoid empty generic one-liners.
+4. Keep each paragraph focused, concise, and informative (2 to 4 sentences each). Avoid rambling filler.
+5. Output language MUST be ${langName}.
 
 Return ONLY a JSON object:
 {
-  "description": "A concise paragraph describing what this product is, its brand, category, serving size, and key manufacturing or ingredient characteristics.",
-  "vitamins_and_nutrition": "A focused paragraph discussing the nutritional composition based on the product's serving basis. Explain the calories, macronutrient balance (protein, carbs, fats, sugars, fiber, sodium), and any notable vitamins and minerals present.",
+  "description": "A substantive, informative paragraph describing what this product is, its brand, category, serving size, culinary role, and key manufacturing or ingredient characteristics.",
+  "vitamins_and_nutrition": "A focused paragraph discussing the nutritional composition based on the product's serving basis. If nutrition is unlisted, clearly state that nutrition facts are unavailable on packaging. If nutrition is available, explain the calories, macronutrient balance (protein, carbs, fats, sugars, fiber, sodium), and any notable vitamins and minerals present.",
   "recommendation": "A clear clinical paragraph analyzing whether this packaged food fits the user's specific health objective (${userGoal}, ${calorieGoal} kcal/day), dietary restrictions, and allergies. State why it is suitable or unsuitable, and advise on appropriate serving frequency.",
   "healthStatus": "GOOD" | "MODERATE" | "POOR"
 }`;
@@ -93,7 +94,7 @@ Return ONLY a JSON object:
         model: 'gpt-4o-mini',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.2,
-        max_tokens: 380,
+        max_tokens: 480,
         response_format: { type: 'json_object' }
       });
 

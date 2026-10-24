@@ -14,8 +14,9 @@ import { getDailyProgress, logMeal, getDailySummary } from "@/lib/api/progress";
 import { generateDailySummary } from "@/lib/api/coach";
 import { getDailyMealSuggestions } from "@/lib/api/recipes";
 import { analyzeFoodImage as apiAnalyzeFoodImage } from "@/lib/api/food";
-import { toast } from "sonner";
 import { ProgressCard } from "@/components/ProgressCard";
+import { CelebrationConfetti } from "@/components/CelebrationConfetti";
+import { toast } from "sonner";
 import { uploadAvatar } from "@/lib/api/auth";
 import { CustomAnimatedIcon } from "@/components/CustomAnimatedIcon";
 import { CheckpointCalendar } from "@/components/CheckpointCalendar";
@@ -59,6 +60,7 @@ export default function Dashboard() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const { countryCode, currencySymbol: globalCurrencySymbol } = useCurrency();
   const [showProgressInput, setShowProgressInput] = useState(false);
+  const [showCelebration, setShowCelebration] = useState(false);
   const addNotification = useNotificationStore(state => state.addNotification);
   const setLatestAnalysis = useCoachInjectionStore(state => state.setLatestAnalysis);
 
@@ -95,8 +97,8 @@ export default function Dashboard() {
     queryKey: ['daily-progress', user?.id, today],
     queryFn: () => getDailyProgress(user?.id || '', today),
     enabled: !!user?.id,
-    staleTime: 1000 * 60 * 5, // 5 minutes
-    refetchOnWindowFocus: false,
+    staleTime: 1000 * 30, // 30 seconds
+    refetchOnWindowFocus: true,
     retry: 1
   });
 
@@ -152,6 +154,25 @@ export default function Dashboard() {
       document.documentElement.classList.add("dark");
     }
   }, [user, profile, authLoading]);
+
+  // Trigger celebration confetti when daily calorie goal is reached
+  const hasCelebratedRef = useRef(false);
+  useEffect(() => {
+    const goal = Number(
+      dailyProgress?.calories_goal ||
+      profile?.goal_calories ||
+      onboarding?.daily_calorie_goal ||
+      2000
+    );
+    const consumed = Number(dailyProgress?.calories_consumed || 0);
+
+    if (goal > 0 && consumed >= goal) {
+      if (!hasCelebratedRef.current) {
+        hasCelebratedRef.current = true;
+        setShowCelebration(true);
+      }
+    }
+  }, [dailyProgress, profile, onboarding]);
 
   // Route Guard: Redirect to onboarding if profile is incomplete or missing
   useEffect(() => {
@@ -427,12 +448,23 @@ export default function Dashboard() {
   const handleLogMeal = async () => {
     if (!user || !analysisData) return;
     try {
-      await logMeal(user.id, analysisData);
-      addNotification('success', `Meal ${analysisData.name || ''} logged successfully!`);
+      const res = await logMeal(user.id, analysisData);
+      
+      if (res?.exceededGoal) {
+        toast.warning(res.message, { duration: 7000 });
+      } else if (res?.justAchieved) {
+        setShowCelebration(true);
+        toast.success(res.message, { duration: 6000 });
+      } else {
+        addNotification('success', `Meal ${analysisData.name || ''} logged successfully!`);
+      }
+
       setShowMealAnalysis(false);
-      queryClient.invalidateQueries({ queryKey: ['daily-progress', user.id, today] });
-      queryClient.invalidateQueries({ queryKey: ['daily-summary', user.id, today] });
-      queryClient.invalidateQueries({ queryKey: ['onboarding', user.id] });
+      await queryClient.invalidateQueries({ queryKey: ['daily-progress'] });
+      await queryClient.refetchQueries({ queryKey: ['daily-progress', user.id, today] });
+      await queryClient.invalidateQueries({ queryKey: ['daily-summary'] });
+      await queryClient.invalidateQueries({ queryKey: ['food-history'] });
+      return res;
     } catch (err: any) {
       toast.error(`Failed to log meal: ${err.message}`);
     }
@@ -455,6 +487,8 @@ export default function Dashboard() {
         productName: analysis.name || analysis.productName || "Unknown Product",
         servingSize: analysis.serving_size || "1 serving",
         description: analysis.description,
+        ingredients: analysis.ingredients,
+        coloring: analysis.coloring,
         vitamins_and_nutrition: analysis.vitamins_and_nutrition,
         recommendation: analysis.recommendation,
         recommended_pairings: analysis.recommended_pairings,
@@ -465,10 +499,14 @@ export default function Dashboard() {
         fat: analysis.fat,
         sugar: analysis.sugar,
         fiber: analysis.fiber,
+        sodium_mg: analysis.sodium_mg,
+        serving_basis: analysis.serving_basis,
         origin_country: analysis.country_of_origin || analysis.origin_country,
         brand: analysis.brand,
         manufacturer: analysis.manufacturer,
+        price: analysis.price,
         estimated_price: analysis.estimated_price,
+        price_metadata: analysis.price_metadata,
         cheaper_alternatives: analysis.cheaper_alternatives,
         is_compliant: analysis.is_compliant,
         user_alignment_boolean: analysis.user_alignment_boolean,
@@ -479,6 +517,8 @@ export default function Dashboard() {
         country_origin_details: analysis.country_origin_details,
         type: analysis.type === 'medication' ? 'MEDICATION' : 'FOOD',
         generic_name: analysis.generic_name,
+        active_ingredients: analysis.active_ingredients,
+        inactive_ingredients: analysis.inactive_ingredients,
         purpose: analysis.purpose,
         side_effects: analysis.side_effects,
         interactions: analysis.interactions,
@@ -515,6 +555,8 @@ export default function Dashboard() {
         productName: data.name || data.productName,
         servingSize: data.serving_size || "1 serving",
         description: data.description,
+        ingredients: data.ingredients,
+        coloring: data.coloring,
         vitamins_and_nutrition: data.vitamins_and_nutrition,
         recommendation: data.recommendation,
         recommended_pairings: data.recommended_pairings,
@@ -525,10 +567,14 @@ export default function Dashboard() {
         fat: data.fat,
         sugar: data.sugar,
         fiber: data.fiber,
+        sodium_mg: data.sodium_mg,
+        serving_basis: data.serving_basis,
         origin_country: data.country_of_origin || data.origin_country,
         brand: data.brand,
         manufacturer: data.manufacturer,
+        price: data.price,
         estimated_price: data.estimated_price,
+        price_metadata: data.price_metadata,
         cheaper_alternatives: data.cheaper_alternatives,
         is_compliant: data.is_compliant,
         user_alignment_boolean: data.user_alignment_boolean,
@@ -539,6 +585,8 @@ export default function Dashboard() {
         country_origin_details: data.country_origin_details,
         type: data.type === 'medication' ? 'MEDICATION' : 'FOOD',
         generic_name: data.generic_name,
+        active_ingredients: data.active_ingredients,
+        inactive_ingredients: data.inactive_ingredients,
         purpose: data.purpose,
         side_effects: data.side_effects,
         interactions: data.interactions,
@@ -562,7 +610,7 @@ export default function Dashboard() {
   const handleLogProduct = async () => {
     if (!user || !productData) return;
     try {
-      await saveFoodAnalysis(user.id, productData, true);
+      await saveFoodAnalysis(user.id, { ...productData, is_scanner_product: true }, true);
       const mealToLog = {
         mealImage: productData.productImage,
         totalCalories: productData.calories,
@@ -572,17 +620,31 @@ export default function Dashboard() {
           image: productData.productImage,
           protein: productData.protein,
           carbs: productData.carbs,
-          fat: productData.fat
+          fat: productData.fat,
+          fiber: productData.fiber,
+          sugar: productData.sugar
         }],
         alreadySaved: true
       };
-      await logMeal(user.id, mealToLog);
-      addNotification('success', `${productData.productName} logged to your diary!`);
-      // toast.success("Product logged!"); // Removing separate toast
+      const res = await logMeal(user.id, mealToLog);
+      
+      if (res?.exceededGoal) {
+        toast.warning(res.message, { duration: 7000 });
+      } else if (res?.justAchieved) {
+        setShowCelebration(true);
+        toast.success(res.message, { duration: 6000 });
+      } else {
+        addNotification('success', `${productData.productName} logged to your diary!`);
+      }
+
       setShowProductDetails(false);
-      queryClient.invalidateQueries({ queryKey: ['daily-progress', user.id, today] });
-      queryClient.invalidateQueries({ queryKey: ['daily-summary', user.id, today] });
-      queryClient.invalidateQueries({ queryKey: ['onboarding', user.id] });
+      await queryClient.invalidateQueries({ queryKey: ['daily-progress'] });
+      await queryClient.refetchQueries({ queryKey: ['daily-progress', user.id, today] });
+      await queryClient.invalidateQueries({ queryKey: ['daily-summary'] });
+      await queryClient.invalidateQueries({ queryKey: ['food-history'] });
+      await queryClient.invalidateQueries({ queryKey: ['active-budget'] });
+      await queryClient.invalidateQueries({ queryKey: ['budget'] });
+      return res;
     } catch (err: any) {
       toast.error(`Failed to log product: ${err.message}`);
     }
@@ -624,6 +686,7 @@ export default function Dashboard() {
 
   return (
     <div className="relative mx-auto flex h-auto min-h-screen w-full max-w-md flex-col bg-background-light dark:bg-[#0d1418] [overflow-x:clip] font-display">
+      <CelebrationConfetti active={showCelebration} onComplete={() => setShowCelebration(false)} />
       {/* Modals */}
       <div className={`modal-overlay !bg-black ${showCameraModal ? "active" : ""}`}>
         <div className="modal-content !p-0 bg-black w-screen h-[100dvh] flex flex-col overflow-hidden">
@@ -767,6 +830,7 @@ export default function Dashboard() {
         dailyProgress={dailyProgress}
         user={user}
         onAvatarUpload={handleAvatarUpload}
+        onCelebrate={() => setShowCelebration(true)}
       />
 
       <div className="grid grid-cols-4 gap-3 px-4 py-6">
