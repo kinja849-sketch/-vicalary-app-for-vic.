@@ -11,6 +11,7 @@ import { useTranslation } from "@/lib/api/translation";
 import { getOrCreateCoachConversation } from "@/lib/api/chat";
 import { getDailyProgress } from "@/lib/api/progress";
 import { getUserProfile } from "@/lib/api/auth";
+import { FoodItemImageResolver } from "@/lib/services/FoodItemImageResolver";
 
 export interface MealAnalysisProps {
   mealImage: string;
@@ -70,6 +71,9 @@ export function MealAnalysis({
 
   // Extract fields from analysis or fallback
   const data = analysis || {};
+  const items: any[] = Array.isArray(data.items) && data.items.length > 0
+    ? data.items
+    : (Array.isArray(foodItems) && foodItems.length > 0 ? foodItems : []);
   const name = data.name || (foodItems[0]?.name) || "Meal Analysis";
   const mealDescription = data.description || (foodItems[0]?.description) || "";
   const vitaminsAndNutrition = data.vitamins_and_nutrition || (foodItems[0]?.vitamins_and_nutrition) || "";
@@ -193,6 +197,69 @@ export function MealAnalysis({
             </p>
           </div>
         </div>
+
+        {/* IDENTIFIED MEAL COMPONENTS & TOTALS (Exact Visual Style Matching Reference Images) */}
+        {items && items.length > 0 && (
+          <section className="space-y-4">
+            {/* Horizontal Scrollable Row of Food Item Tiles (Matching Reference media_1793309730201.png) */}
+            <div className="flex items-stretch gap-3 overflow-x-auto pb-2 pt-1 no-scrollbar [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] -mx-5 px-5 sm:mx-0 sm:px-0">
+              {items.map((item: any, idx: number) => {
+                const displayName = item.count ? `${item.name} (${item.count})` : item.name;
+                const displayKcal = Number(item.calories ?? 0);
+                const displayImg = item.image_url || item.image || FoodItemImageResolver.resolveImageUrl(item.name, item.variant_or_method);
+
+                return (
+                  <div
+                    key={idx}
+                    className="flex-shrink-0 w-28 sm:w-32 bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-2xl p-3 flex flex-col items-center justify-between text-center shadow-sm hover:shadow-md transition-shadow"
+                  >
+                    {/* Clean isolated food thumbnail tile */}
+                    <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl bg-white dark:bg-black/30 border border-slate-100 dark:border-white/5 flex items-center justify-center p-2 mb-2 shrink-0">
+                      <img
+                        src={displayImg}
+                        alt={item.name}
+                        className="w-full h-full object-contain drop-shadow-sm pointer-events-none"
+                        onError={(e: any) => {
+                          e.target.src = 'https://images.unsplash.com/photo-1516684732162-798a0062be99?auto=format&fit=crop&w=300&q=80';
+                        }}
+                      />
+                    </div>
+                    {/* Food Name & Count */}
+                    <div className="w-full min-w-0">
+                      <h4 className="text-xs sm:text-[13px] font-bold text-slate-900 dark:text-white truncate">
+                        {displayName}
+                      </h4>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                        {item.portion_description || (item.portion_g ? `~${item.portion_g}g` : '')}
+                      </p>
+                    </div>
+                    {/* Calorie indicator badge */}
+                    <div className="mt-2 pt-2 border-t border-slate-200/60 dark:border-white/10 w-full flex items-center justify-center">
+                      <span className="text-xs sm:text-sm font-black text-slate-900 dark:text-white">
+                        {displayKcal} <span className="text-[10px] font-semibold text-slate-400">kcal</span>
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Sleek Total Bar (Matching Reference media_1793309660577.png) */}
+            <div className="flex items-center justify-between px-5 py-3.5 bg-slate-900 text-white dark:bg-white/10 dark:text-white rounded-2xl shadow-md border border-slate-800 dark:border-white/10">
+              <span className="text-xs font-black tracking-widest uppercase text-slate-400 dark:text-slate-300">
+                TOTAL
+              </span>
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-xl sm:text-2xl font-black text-white">
+                  {calories}
+                </span>
+                <span className="text-xs font-bold text-emerald-400">
+                  kcal
+                </span>
+              </div>
+            </div>
+          </section>
+        )}
 
         {/* SECTION 1: MEAL DESCRIPTION */}
         <section className="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-[2rem] p-6 sm:p-7 shadow-sm">
@@ -358,56 +425,56 @@ export function MealAnalysis({
             </div>
           )}
         </section>
-      </main>
 
-      {/* Sticky Bottom Action Dock: ALWAYS VISIBLE AND HORIZONTALLY PROPORTIONED */}
-      <footer className="shrink-0 z-30 bg-white/95 dark:bg-[#0b141a]/95 backdrop-blur-xl border-t border-slate-200 dark:border-slate-800 px-5 py-3.5 shadow-lg max-w-2xl mx-auto w-full">
-        {isGoalAchieved && (
-          <div className="w-full mb-3 py-2 px-3 bg-red-500/10 border border-red-500/20 rounded-xl text-center text-xs font-bold text-red-600 dark:text-red-400 flex items-center justify-center gap-1.5">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>Daily calorie target reached. Logging is inactive until progress resets.</span>
+        {/* BOTTOM ACTION BUTTONS: Placed at the end of the section so they are visible only after scrolling through the section, NEVER following/floating over content */}
+        <section className="pt-2 pb-12 space-y-3 w-full">
+          {isGoalAchieved && (
+            <div className="w-full py-2 px-3 bg-red-500/10 border border-red-500/20 rounded-xl text-center text-xs font-bold text-red-600 dark:text-red-400 flex items-center justify-center gap-1.5">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>Daily calorie target reached. Logging is inactive until progress resets.</span>
+            </div>
+          )}
+          <div className="flex flex-row items-center gap-3 w-full">
+            <button
+              onClick={handleLogMeal}
+              disabled={isLogging || isGoalAchieved}
+              title={isGoalAchieved ? "Daily calorie goal reached. Reset progress to log more meals." : undefined}
+              className={`flex-1 h-14 px-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2.5 transition-all whitespace-nowrap ${
+                isGoalAchieved
+                  ? "bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 opacity-40 cursor-not-allowed pointer-events-none shadow-none"
+                  : "bg-vic-green hover:bg-vic-green/90 active:scale-[0.98] text-slate-900 shadow-md cursor-pointer disabled:opacity-50"
+              }`}
+            >
+              {isLogging ? (
+                <div className="w-5 h-5 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Check className="w-5 h-5 text-slate-900" strokeWidth={3} />
+              )}
+              <span>{isGoalAchieved ? "Goal Achieved (Locked)" : t('log_meal_btn')}</span>
+            </button>
+
+            <button
+              onClick={handleConsultCoach}
+              disabled={isNavigatingCoach}
+              className="flex-1 h-14 px-4 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 active:scale-[0.98] text-white rounded-2xl font-black text-sm shadow-lg shadow-blue-500/25 flex items-center justify-center gap-2.5 transition-all disabled:opacity-50 whitespace-nowrap cursor-pointer border border-blue-400/30"
+            >
+              {isNavigatingCoach ? (
+                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <img
+                  src="/app-logo.png"
+                  alt="Application Logo"
+                  className="w-8 h-8 rounded-full object-cover shrink-0 ring-2 ring-white/80 shadow-md"
+                  onError={(e) => {
+                    (e.target as HTMLElement).setAttribute('src', '/icon.png');
+                  }}
+                />
+              )}
+              <span className="tracking-wide">Health Coach</span>
+            </button>
           </div>
-        )}
-        <div className="flex flex-row items-center gap-3 w-full">
-          <button
-            onClick={handleLogMeal}
-            disabled={isLogging || isGoalAchieved}
-            title={isGoalAchieved ? "Daily calorie goal reached. Reset progress to log more meals." : undefined}
-            className={`flex-1 h-14 px-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2.5 transition-all whitespace-nowrap ${
-              isGoalAchieved
-                ? "bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 opacity-40 cursor-not-allowed pointer-events-none shadow-none"
-                : "bg-vic-green hover:bg-vic-green/90 active:scale-[0.98] text-slate-900 shadow-md cursor-pointer disabled:opacity-50"
-            }`}
-          >
-            {isLogging ? (
-              <div className="w-5 h-5 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <Check className="w-5 h-5 text-slate-900" strokeWidth={3} />
-            )}
-            <span>{isGoalAchieved ? "Goal Achieved (Locked)" : t('log_meal_btn')}</span>
-          </button>
-
-          <button
-            onClick={handleConsultCoach}
-            disabled={isNavigatingCoach}
-            className="flex-1 h-14 px-4 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 active:scale-[0.98] text-white rounded-2xl font-black text-sm shadow-lg shadow-blue-500/25 flex items-center justify-center gap-2.5 transition-all disabled:opacity-50 whitespace-nowrap cursor-pointer border border-blue-400/30"
-          >
-            {isNavigatingCoach ? (
-              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <img
-                src="/app-logo.png"
-                alt="Application Logo"
-                className="w-8 h-8 rounded-full object-cover shrink-0 ring-2 ring-white/80 shadow-md"
-                onError={(e) => {
-                  (e.target as HTMLElement).setAttribute('src', '/icon.png');
-                }}
-              />
-            )}
-            <span className="tracking-wide">Health Coach</span>
-          </button>
-        </div>
-      </footer>
+        </section>
+      </main>
     </div>
   );
 }

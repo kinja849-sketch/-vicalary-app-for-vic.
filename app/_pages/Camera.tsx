@@ -548,16 +548,27 @@ export default function Camera({ initialMode }: CameraProps = {}) {
       const mealToLog = {
         mealImage: capturedImage || analysisResult.image_url,
         totalCalories: analysisResult.calories,
-        foodItems: [{
-          name: analysisResult.name,
-          calories: analysisResult.calories,
-          image: capturedImage || analysisResult.image_url,
-          protein: analysisResult.protein,
-          carbs: analysisResult.carbs,
-          fat: analysisResult.fat,
-          fiber: analysisResult.fiber,
-          sugar: analysisResult.sugar
-        }],
+        foodItems: (analysisResult.items && analysisResult.items.length > 0)
+          ? analysisResult.items.map((i: any) => ({
+              name: i.count ? `${i.name} (${i.count})` : i.name,
+              calories: i.calories,
+              image: i.image_url || capturedImage || analysisResult.image_url,
+              protein: i.protein,
+              carbs: i.carbs,
+              fat: i.fat,
+              fiber: i.fiber,
+              sugar: i.sugar
+            }))
+          : [{
+              name: analysisResult.name,
+              calories: analysisResult.calories,
+              image: capturedImage || analysisResult.image_url,
+              protein: analysisResult.protein,
+              carbs: analysisResult.carbs,
+              fat: analysisResult.fat,
+              fiber: analysisResult.fiber,
+              sugar: analysisResult.sugar
+            }],
         alreadySaved: true
       };
 

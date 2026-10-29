@@ -9,22 +9,72 @@ export default function PerceptionPreviewPage() {
   const mockMeal = {
     mealImage: "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&q=80&w=800",
     analysis: {
-      name: "Grilled Herb Chicken Bowl with Quinoa & Steamed Greens",
-      description: "A balanced, nutrient-dense Mediterranean-style bowl featuring approximately 160g of seasoned chargrilled chicken breast resting on a bed of fluffy tri-color quinoa, accompanied by steamed florets of broccoli, tender baby spinach, and sliced cherry tomatoes.\n\nThe ingredients appear freshly prepared with minimal visible heavy oil, seasoned primarily with dried oregano, cracked black pepper, and a light olive oil glaze.",
-      vitamins_and_nutrition: "This meal provides high-biological-value complete proteins supporting muscle synthesis and recovery, paired with low-glycemic complex carbohydrates from quinoa that offer steady glucose release.\n\nBroccoli and spinach contribute significant dietary fiber alongside rich concentrations of Vitamin C, Folate, and Vitamin K, while the chicken supplies essential B-complex vitamins (especially B6 and B3) and bioavailable zinc.",
-      recommendation: "Highly recommended for your active Lean Bulk & Caloric Control objective. The lean chicken breast and fiber-dense grains seamlessly align with your 2,150 kcal daily target without exceeding your 65g daily saturated fat threshold.",
+      name: "Potato & Tomato Stew with White Rice",
+      description: "This dish presents a comforting home-style plate featuring a hearty simmered potato and tomato stew served alongside a generous portion of steamed fluffy white rice. The stew is prepared with tender, bite-sized potato chunks simmered in a rich tomato reduction, integrated with translucent sautéed onions that provide a natural aromatic sweetness throughout the savory sauce. Steamed white rice occupies half of the plate, providing a clean neutral grain foundation that absorbs the savory sauce.",
+      vitamins_and_nutrition: "This meal provides easily digestible complex carbohydrates from both the steamed white rice and potatoes, offering sustained energy release and muscle glycogen replenishment. The simmered tomatoes are rich in lycopene—a potent antioxidant whose cellular bioavailability is enhanced through thermal cooking—along with Vitamin C and potassium from the potatoes to support fluid balance.",
+      recommendation: "Recommended as a wholesome, low-fat carbohydrate-rich meal. The combination of root vegetables and steamed rice keeps total dietary fat exceptionally minimal (under 2g) while delivering 368 kcal. To optimize macronutrient distribution for muscle synthesis, consider pairing this dish with a lean protein source such as grilled chicken or boiled eggs.",
       verdict: "GOOD",
       is_recommended: true,
-      calories: 540,
-      calorie_range: { min: 475, max: 605 },
-      protein: 48,
-      carbs: 52,
-      fat: 14,
-      fiber: 9,
-      sugar: 4,
-      sodium_mg: 380,
-      vitamins: ["Vitamin C (85% DV)", "Vitamin K (120% DV)", "Vitamin B6", "Folate"],
-      minerals: ["Potassium (620mg)", "Iron (3.8mg)", "Zinc", "Magnesium"]
+      calories: 368,
+      calorie_range: { min: 330, max: 410 },
+      protein: 8,
+      carbs: 81,
+      fat: 1,
+      fiber: 4,
+      sugar: 5,
+      sodium_mg: 220,
+      vitamins: ["Vitamin C", "Vitamin B6", "Vitamin A"],
+      minerals: ["Potassium", "Iron", "Magnesium"],
+      items: [
+        {
+          name: "Potatoes",
+          count: "1x",
+          variant_or_method: "stewed",
+          portion_g: 150,
+          portion_description: "1 medium potato (~150g)",
+          calories: 131,
+          protein: 2.9,
+          carbs: 30.0,
+          fat: 0.2,
+          image_url: "https://www.themealdb.com/images/ingredients/Potatoes.png"
+        },
+        {
+          name: "Tomatoes",
+          count: "1x",
+          variant_or_method: "stewed",
+          portion_g: 70,
+          portion_description: "in stew base (~70g)",
+          calories: 13,
+          protein: 0.6,
+          carbs: 2.7,
+          fat: 0.1,
+          image_url: "https://www.themealdb.com/images/ingredients/Tomato.png"
+        },
+        {
+          name: "Onions",
+          count: "1x",
+          variant_or_method: "cooked",
+          portion_g: 40,
+          portion_description: "sautéed aromatics (~40g)",
+          calories: 16,
+          protein: 0.5,
+          carbs: 3.0,
+          fat: 0.1,
+          image_url: "https://www.themealdb.com/images/ingredients/Onion.png"
+        },
+        {
+          name: "White Rice",
+          count: "1x",
+          variant_or_method: "steamed",
+          portion_g: 160,
+          portion_description: "1 cup cooked (~160g)",
+          calories: 208,
+          protein: 4.3,
+          carbs: 45.1,
+          fat: 0.5,
+          image_url: "https://images.unsplash.com/photo-1516684732162-798a0062be99?auto=format&fit=crop&w=300&q=80"
+        }
+      ]
     }
   };
 

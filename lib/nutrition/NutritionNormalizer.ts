@@ -1,9 +1,13 @@
 import { SupabaseClient } from '@supabase/supabase-js';
+import { FoodItemImageResolver } from '@/lib/services/FoodItemImageResolver';
 
 export interface IdentifiedFoodItem {
   name: string;
+  count?: string | number;
+  variant_or_method?: string;
   estimated_portion_g?: number;
   portion_description?: string;
+  confidence?: number;
   notes?: string;
 }
 
@@ -35,6 +39,8 @@ export interface MealNutritionCalculation {
   prominent_minerals: string[];
   normalized_items: Array<{
     name: string;
+    count?: string | number;
+    variant_or_method?: string;
     portion_g: number;
     portion_description: string;
     calories: number;
@@ -46,6 +52,7 @@ export interface MealNutritionCalculation {
     sodium_mg: number;
     vitamins: string[];
     minerals: string[];
+    image_url: string;
     is_exact_match: boolean;
   }>;
 }
@@ -139,6 +146,39 @@ const COMMON_FOOD_NUTRITION: Record<string, {
     vitamins: ['Vitamin B6', 'Vitamin B12', 'Niacin'],
     minerals: ['Phosphorus', 'Selenium', 'Potassium']
   },
+  'grilled chicken breast': {
+    calories: 165,
+    protein: 31.0,
+    carbs: 0.0,
+    fat: 3.6,
+    fiber: 0.0,
+    sugar: 0.0,
+    sodium_mg: 74,
+    vitamins: ['Vitamin B6', 'Vitamin B12', 'Niacin'],
+    minerals: ['Phosphorus', 'Selenium', 'Potassium']
+  },
+  'grilled chicken': {
+    calories: 185,
+    protein: 28.0,
+    carbs: 0.0,
+    fat: 7.5,
+    fiber: 0.0,
+    sugar: 0.0,
+    sodium_mg: 85,
+    vitamins: ['Vitamin B6', 'Vitamin B12', 'Niacin'],
+    minerals: ['Phosphorus', 'Selenium', 'Potassium']
+  },
+  'roasted chicken': {
+    calories: 190,
+    protein: 27.0,
+    carbs: 0.0,
+    fat: 8.5,
+    fiber: 0.0,
+    sugar: 0.0,
+    sodium_mg: 82,
+    vitamins: ['Niacin', 'Vitamin B6'],
+    minerals: ['Phosphorus', 'Selenium']
+  },
   'fried chicken': {
     calories: 260,
     protein: 24.0,
@@ -160,6 +200,215 @@ const COMMON_FOOD_NUTRITION: Record<string, {
     sodium_mg: 142,
     vitamins: ['Vitamin A', 'Vitamin D', 'Vitamin B12', 'Riboflavin'],
     minerals: ['Iron', 'Phosphorus', 'Selenium', 'Choline']
+  },
+  'eggs': {
+    calories: 143,
+    protein: 12.6,
+    carbs: 0.7,
+    fat: 9.5,
+    fiber: 0.0,
+    sugar: 0.4,
+    sodium_mg: 142,
+    vitamins: ['Vitamin A', 'Vitamin D', 'Vitamin B12', 'Riboflavin'],
+    minerals: ['Iron', 'Phosphorus', 'Selenium', 'Choline']
+  },
+  'boiled egg': {
+    calories: 143,
+    protein: 12.6,
+    carbs: 0.7,
+    fat: 9.5,
+    fiber: 0.0,
+    sugar: 0.4,
+    sodium_mg: 142,
+    vitamins: ['Vitamin A', 'Vitamin D', 'Vitamin B12'],
+    minerals: ['Iron', 'Phosphorus', 'Selenium']
+  },
+  'poached egg': {
+    calories: 143,
+    protein: 12.6,
+    carbs: 0.7,
+    fat: 9.5,
+    fiber: 0.0,
+    sugar: 0.4,
+    sodium_mg: 142,
+    vitamins: ['Vitamin A', 'Vitamin D', 'Vitamin B12'],
+    minerals: ['Iron', 'Phosphorus', 'Selenium']
+  },
+  'fried egg': {
+    calories: 196,
+    protein: 13.6,
+    carbs: 0.8,
+    fat: 15.0,
+    fiber: 0.0,
+    sugar: 0.4,
+    sodium_mg: 180,
+    vitamins: ['Vitamin A', 'Vitamin D', 'Vitamin B12'],
+    minerals: ['Iron', 'Phosphorus', 'Choline']
+  },
+  'tomato': {
+    calories: 18,
+    protein: 0.9,
+    carbs: 3.9,
+    fat: 0.2,
+    fiber: 1.2,
+    sugar: 2.6,
+    sodium_mg: 5,
+    vitamins: ['Vitamin C', 'Vitamin K', 'Folate', 'Vitamin A'],
+    minerals: ['Potassium', 'Manganese']
+  },
+  'tomatoes': {
+    calories: 18,
+    protein: 0.9,
+    carbs: 3.9,
+    fat: 0.2,
+    fiber: 1.2,
+    sugar: 2.6,
+    sodium_mg: 5,
+    vitamins: ['Vitamin C', 'Vitamin K', 'Folate', 'Vitamin A'],
+    minerals: ['Potassium', 'Manganese']
+  },
+  'cucumber': {
+    calories: 15,
+    protein: 0.7,
+    carbs: 3.6,
+    fat: 0.1,
+    fiber: 0.5,
+    sugar: 1.7,
+    sodium_mg: 2,
+    vitamins: ['Vitamin K', 'Vitamin C'],
+    minerals: ['Potassium', 'Magnesium']
+  },
+  'cucumbers': {
+    calories: 15,
+    protein: 0.7,
+    carbs: 3.6,
+    fat: 0.1,
+    fiber: 0.5,
+    sugar: 1.7,
+    sodium_mg: 2,
+    vitamins: ['Vitamin K', 'Vitamin C'],
+    minerals: ['Potassium', 'Magnesium']
+  },
+  'onion': {
+    calories: 40,
+    protein: 1.1,
+    carbs: 9.3,
+    fat: 0.1,
+    fiber: 1.7,
+    sugar: 4.2,
+    sodium_mg: 4,
+    vitamins: ['Vitamin C', 'Vitamin B6', 'Folate'],
+    minerals: ['Potassium', 'Manganese']
+  },
+  'onions': {
+    calories: 40,
+    protein: 1.1,
+    carbs: 9.3,
+    fat: 0.1,
+    fiber: 1.7,
+    sugar: 4.2,
+    sodium_mg: 4,
+    vitamins: ['Vitamin C', 'Vitamin B6', 'Folate'],
+    minerals: ['Potassium', 'Manganese']
+  },
+  'cooked onions': {
+    calories: 44,
+    protein: 1.4,
+    carbs: 10.2,
+    fat: 0.2,
+    fiber: 1.9,
+    sugar: 4.7,
+    sodium_mg: 6,
+    vitamins: ['Vitamin C', 'B Vitamins'],
+    minerals: ['Potassium']
+  },
+  'stewed onions': {
+    calories: 44,
+    protein: 1.4,
+    carbs: 10.2,
+    fat: 0.2,
+    fiber: 1.9,
+    sugar: 4.7,
+    sodium_mg: 6,
+    vitamins: ['Vitamin C', 'B Vitamins'],
+    minerals: ['Potassium']
+  },
+  'stewed tomatoes': {
+    calories: 25,
+    protein: 1.2,
+    carbs: 5.5,
+    fat: 0.2,
+    fiber: 1.6,
+    sugar: 3.5,
+    sodium_mg: 12,
+    vitamins: ['Vitamin C', 'Vitamin A', 'Folate'],
+    minerals: ['Potassium', 'Manganese']
+  },
+  'stewed potatoes': {
+    calories: 87,
+    protein: 1.9,
+    carbs: 20.1,
+    fat: 0.1,
+    fiber: 1.8,
+    sugar: 0.9,
+    sodium_mg: 6,
+    vitamins: ['Vitamin C', 'Vitamin B6'],
+    minerals: ['Potassium', 'Manganese']
+  },
+  'plain bao bun': {
+    calories: 235,
+    protein: 7.0,
+    carbs: 48.0,
+    fat: 1.5,
+    fiber: 1.5,
+    sugar: 6.0,
+    sodium_mg: 220,
+    vitamins: ['Thiamin', 'Niacin'],
+    minerals: ['Iron', 'Calcium']
+  },
+  'bao bun': {
+    calories: 235,
+    protein: 7.0,
+    carbs: 48.0,
+    fat: 1.5,
+    fiber: 1.5,
+    sugar: 6.0,
+    sodium_mg: 220,
+    vitamins: ['Thiamin', 'Niacin'],
+    minerals: ['Iron', 'Calcium']
+  },
+  'soup / broth': {
+    calories: 20,
+    protein: 3.0,
+    carbs: 1.0,
+    fat: 0.5,
+    fiber: 0.0,
+    sugar: 0.5,
+    sodium_mg: 380,
+    vitamins: ['B Vitamins'],
+    minerals: ['Sodium', 'Potassium']
+  },
+  'broth': {
+    calories: 20,
+    protein: 3.0,
+    carbs: 1.0,
+    fat: 0.5,
+    fiber: 0.0,
+    sugar: 0.5,
+    sodium_mg: 380,
+    vitamins: ['B Vitamins'],
+    minerals: ['Sodium', 'Potassium']
+  },
+  'soup': {
+    calories: 30,
+    protein: 2.0,
+    carbs: 3.5,
+    fat: 0.8,
+    fiber: 0.5,
+    sugar: 1.0,
+    sodium_mg: 350,
+    vitamins: ['Vitamin A', 'Vitamin C'],
+    minerals: ['Sodium', 'Potassium']
   },
   'salad greens': {
     calories: 20,
@@ -260,6 +509,28 @@ const COMMON_FOOD_NUTRITION: Record<string, {
     vitamins: ['Thiamin', 'Folate', 'Niacin'],
     minerals: ['Iron', 'Calcium', 'Sodium']
   },
+  'sourdough bread': {
+    calories: 250,
+    protein: 8.5,
+    carbs: 50.0,
+    fat: 1.2,
+    fiber: 2.5,
+    sugar: 1.5,
+    sodium_mg: 450,
+    vitamins: ['Thiamin', 'Folate'],
+    minerals: ['Iron', 'Manganese']
+  },
+  'toast': {
+    calories: 265,
+    protein: 9.0,
+    carbs: 49.0,
+    fat: 3.2,
+    fiber: 2.7,
+    sugar: 5.0,
+    sodium_mg: 490,
+    vitamins: ['Thiamin', 'Folate', 'Niacin'],
+    minerals: ['Iron', 'Calcium', 'Sodium']
+  },
   'potato': {
     calories: 87,
     protein: 1.9,
@@ -270,6 +541,83 @@ const COMMON_FOOD_NUTRITION: Record<string, {
     sodium_mg: 6,
     vitamins: ['Vitamin C', 'Vitamin B6'],
     minerals: ['Potassium', 'Manganese', 'Phosphorus']
+  },
+  'potatoes': {
+    calories: 87,
+    protein: 1.9,
+    carbs: 20.1,
+    fat: 0.1,
+    fiber: 1.8,
+    sugar: 0.9,
+    sodium_mg: 6,
+    vitamins: ['Vitamin C', 'Vitamin B6'],
+    minerals: ['Potassium', 'Manganese', 'Phosphorus']
+  },
+  'boiled potato': {
+    calories: 87,
+    protein: 1.9,
+    carbs: 20.1,
+    fat: 0.1,
+    fiber: 1.8,
+    sugar: 0.9,
+    sodium_mg: 6,
+    vitamins: ['Vitamin C', 'Vitamin B6'],
+    minerals: ['Potassium', 'Manganese', 'Phosphorus']
+  },
+  'boiled potatoes': {
+    calories: 87,
+    protein: 1.9,
+    carbs: 20.1,
+    fat: 0.1,
+    fiber: 1.8,
+    sugar: 0.9,
+    sodium_mg: 6,
+    vitamins: ['Vitamin C', 'Vitamin B6'],
+    minerals: ['Potassium', 'Manganese', 'Phosphorus']
+  },
+  'roasted potatoes': {
+    calories: 140,
+    protein: 2.3,
+    carbs: 23.5,
+    fat: 4.5,
+    fiber: 2.5,
+    sugar: 1.2,
+    sodium_mg: 180,
+    vitamins: ['Vitamin C', 'Vitamin B6'],
+    minerals: ['Potassium', 'Magnesium']
+  },
+  'baked potato': {
+    calories: 93,
+    protein: 2.5,
+    carbs: 21.0,
+    fat: 0.2,
+    fiber: 2.2,
+    sugar: 1.0,
+    sodium_mg: 10,
+    vitamins: ['Vitamin C', 'Vitamin B6'],
+    minerals: ['Potassium', 'Iron']
+  },
+  'mashed potatoes': {
+    calories: 113,
+    protein: 2.0,
+    carbs: 17.0,
+    fat: 4.2,
+    fiber: 1.5,
+    sugar: 1.5,
+    sodium_mg: 280,
+    vitamins: ['Vitamin C', 'Vitamin B6'],
+    minerals: ['Potassium', 'Phosphorus']
+  },
+  'potato wedges': {
+    calories: 140,
+    protein: 2.3,
+    carbs: 23.5,
+    fat: 4.5,
+    fiber: 2.5,
+    sugar: 1.2,
+    sodium_mg: 180,
+    vitamins: ['Vitamin C', 'Vitamin B6'],
+    minerals: ['Potassium', 'Magnesium']
   },
   'beef steak': {
     calories: 271,
@@ -667,17 +1015,110 @@ export class NutritionNormalizer {
     const allMinerals = new Set<string>();
 
     for (const item of items) {
-      const rawPortion = item.estimated_portion_g && item.estimated_portion_g > 0 ? item.estimated_portion_g : 150;
-      // Clamp individual food portion to realistic bounds (15g to 500g) to prevent distorted calorie totals
-      const portionG = Math.max(15, Math.min(500, rawPortion));
-      const scale = portionG / 100;
       const lowerName = item.name.toLowerCase().trim();
+      const lowerMethod = (item.variant_or_method || '').toLowerCase().trim();
+      const compositeKey = `${lowerMethod} ${lowerName}`.trim();
 
-      // 1. Try Supabase food_items lookup if client available
+      // Parse item count (e.g. "4x", "(4x)", or explicit count field)
+      let parsedCount: number | null = null;
+      if (item.count !== undefined && item.count !== null && item.count !== '') {
+        const num = parseInt(String(item.count).replace(/[^0-9]/g, ''), 10);
+        if (!isNaN(num) && num > 0) parsedCount = num;
+      } else {
+        const countMatch = lowerName.match(/\((\d+)x\)/i) || lowerName.match(/(\d+)x/i);
+        if (countMatch && countMatch[1]) {
+          parsedCount = parseInt(countMatch[1], 10);
+        }
+      }
+
+      // Ground realistic portion grams considering unit counts
+      let portionG = item.estimated_portion_g && item.estimated_portion_g > 0 ? item.estimated_portion_g : 150;
+      if (parsedCount && parsedCount > 0) {
+        if (lowerName.includes('egg')) {
+          portionG = parsedCount * 49; // ~49g per egg -> ~70 kcal/egg (4 eggs = 280 kcal)
+        } else if (lowerName.includes('bun') || lowerName.includes('bao')) {
+          portionG = parsedCount * 45; // ~45g per bao bun -> ~105 kcal
+        } else if (lowerName.includes('tomato') && parsedCount === 1 && portionG > 50) {
+          portionG = 30; // small slice / half tomato -> ~5 kcal
+        }
+      } else if (lowerName === 'tomato' || lowerName === 'fresh tomato' || lowerName === 'sliced tomato') {
+        if (!item.estimated_portion_g || item.estimated_portion_g > 60) {
+          portionG = 30; // standard plate garnish/slice ~5-8 kcal
+        }
+      } else if (lowerName.includes('potato')) {
+        if (!item.estimated_portion_g || item.estimated_portion_g < 80) {
+          portionG = 150; // standard potato portion ~130 kcal
+        }
+      } else if (lowerName.includes('onion')) {
+        if (!item.estimated_portion_g || item.estimated_portion_g > 80) {
+          portionG = 40; // standard sautéed/cooked onion portion ~16 kcal
+        }
+      } else if (lowerName.includes('cucumber') && (!item.estimated_portion_g || item.estimated_portion_g > 100)) {
+        portionG = 65; // ~10 kcal for cucumber sticks
+      } else if ((lowerName.includes('soup') || lowerName.includes('broth')) && (!item.estimated_portion_g || item.estimated_portion_g > 150)) {
+        portionG = 100; // small broth cup ~20 kcal
+      }
+
+      // Clamp portion to realistic bounds (15g to 600g)
+      portionG = Math.max(15, Math.min(600, portionG));
+      const scale = portionG / 100;
+
+      // 1. Authoritative reference catalog lookup (prefer method-specific key)
       let matchedData: typeof COMMON_FOOD_NUTRITION[string] | null = null;
       let isExact = false;
 
-      if (supabase) {
+      // Priority 1: Check composite key first (e.g. "grilled chicken breast", "roasted potatoes", "boiled egg")
+      if (compositeKey && COMMON_FOOD_NUTRITION[compositeKey]) {
+        matchedData = COMMON_FOOD_NUTRITION[compositeKey];
+        isExact = true;
+      }
+
+      // Priority 2: Check direct name match in COMMON_FOOD_NUTRITION
+      if (!matchedData && COMMON_FOOD_NUTRITION[lowerName]) {
+        matchedData = COMMON_FOOD_NUTRITION[lowerName];
+        isExact = true;
+      }
+
+      // Priority 3: Check primary food noun directly (prevents "potato and tomato" matching "tomato")
+      if (!matchedData) {
+        if (lowerName.includes('potato')) {
+          matchedData = lowerMethod.includes('roast') ? COMMON_FOOD_NUTRITION['roasted potatoes']
+                      : lowerMethod.includes('frie') ? COMMON_FOOD_NUTRITION['french fries']
+                      : COMMON_FOOD_NUTRITION['potatoes'];
+          isExact = true;
+        } else if (lowerName.includes('onion')) {
+          matchedData = COMMON_FOOD_NUTRITION['cooked onions'] || COMMON_FOOD_NUTRITION['onions'];
+          isExact = true;
+        } else if (lowerName.includes('rice')) {
+          matchedData = lowerMethod.includes('brown') ? COMMON_FOOD_NUTRITION['brown rice']
+                      : lowerMethod.includes('frie') ? COMMON_FOOD_NUTRITION['fried rice']
+                      : COMMON_FOOD_NUTRITION['white rice'];
+          isExact = true;
+        } else if (lowerName.includes('tomato')) {
+          matchedData = lowerMethod.includes('stew') ? COMMON_FOOD_NUTRITION['stewed tomatoes']
+                      : COMMON_FOOD_NUTRITION['tomatoes'];
+          isExact = true;
+        }
+      }
+
+      // Priority 4: Check substring match in COMMON_FOOD_NUTRITION
+      if (!matchedData) {
+        for (const [key, ref] of Object.entries(COMMON_FOOD_NUTRITION)) {
+          if (compositeKey && (compositeKey.includes(key) || key.includes(compositeKey))) {
+            matchedData = ref;
+            isExact = true;
+            break;
+          }
+          if (lowerName.includes(key) || key.includes(lowerName)) {
+            matchedData = ref;
+            isExact = lowerName === key;
+            break;
+          }
+        }
+      }
+
+      // 2. Try Supabase food_items lookup if client available and not matched
+      if (!matchedData && supabase) {
         try {
           const { data: dbItem } = await supabase
             .from('food_items')
@@ -694,7 +1135,7 @@ export class NutritionNormalizer {
               fat: Number(dbItem.fat || 0),
               fiber: Number(dbItem.fiber || 0),
               sugar: Number(dbItem.sugar || 0),
-              sodium_mg: 200, // typical baseline
+              sodium_mg: 200,
               vitamins: Array.isArray(dbItem.vitamins) ? dbItem.vitamins : ['B Vitamins'],
               minerals: Array.isArray(dbItem.minerals) ? dbItem.minerals : ['Potassium', 'Iron']
             };
@@ -705,42 +1146,16 @@ export class NutritionNormalizer {
         }
       }
 
-      // 2. Fall back to authoritative reference catalog
-      if (!matchedData) {
-        // Find best match in COMMON_FOOD_NUTRITION
-        for (const [key, ref] of Object.entries(COMMON_FOOD_NUTRITION)) {
-          if (lowerName.includes(key) || key.includes(lowerName)) {
-            matchedData = ref;
-            isExact = lowerName === key;
-            break;
-          }
-        }
-
-        // Fuzzy sub-word search if still null
-        if (!matchedData) {
-          const words = lowerName.split(/\s+/);
-          for (const w of words) {
-            if (w.length > 3) {
-              const foundKey = Object.keys(COMMON_FOOD_NUTRITION).find(k => k.includes(w));
-              if (foundKey) {
-                matchedData = COMMON_FOOD_NUTRITION[foundKey];
-                break;
-              }
-            }
-          }
-        }
-      }
-
-      // 3. Fallback generic profile if completely unknown (never 0 kcal!)
+      // 3. Fallback generic profile if completely unknown
       if (!matchedData) {
         matchedData = {
-          calories: 180, // average cooked food per 100g
-          protein: 8.0,
+          calories: 160,
+          protein: 7.0,
           carbs: 18.0,
-          fat: 8.0,
+          fat: 6.0,
           fiber: 2.0,
           sugar: 1.5,
-          sodium_mg: 300,
+          sodium_mg: 250,
           vitamins: ['Vitamin C', 'B Vitamins'],
           minerals: ['Potassium', 'Iron']
         };
@@ -765,10 +1180,18 @@ export class NutritionNormalizer {
       sumSugar += itemSugar;
       sumSodium += itemSodium;
 
+      // Deterministically resolve authentic clean food image
+      const itemImage = FoodItemImageResolver.resolveImageUrl(item.name, item.variant_or_method);
+
+      // Clean display name if count is present
+      const displayCount = parsedCount && parsedCount > 1 ? `${parsedCount}x` : (item.count ? String(item.count) : undefined);
+
       normalizedItems.push({
         name: item.name,
+        count: displayCount,
+        variant_or_method: item.variant_or_method,
         portion_g: portionG,
-        portion_description: item.portion_description || `~${portionG}g`,
+        portion_description: item.portion_description || (parsedCount ? `${parsedCount} items (~${portionG}g)` : `~${portionG}g`),
         calories: itemCalories,
         protein: itemProtein,
         carbs: itemCarbs,
@@ -778,6 +1201,7 @@ export class NutritionNormalizer {
         sodium_mg: itemSodium,
         vitamins: matchedData.vitamins,
         minerals: matchedData.minerals,
+        image_url: itemImage,
         is_exact_match: isExact
       });
     }

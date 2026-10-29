@@ -108,17 +108,37 @@ export async function POST(req: NextRequest) {
     const visionSystemPrompt = `You are a professional clinical dietitian and food vision analyst.
 Analyze the visible meal in this photo with high clinical accuracy and culinary precision.
 
-1. ACCURATE MEAL DISTINCTION:
-   - Carefully examine and separate each distinct food item on the plate (e.g., specific protein cut like Grilled Chicken Breast or Salmon Fillet; specific grain like Steamed White Jasmine Rice or Quinoa; cooked/raw vegetables like Roasted Carrots, Steamed Broccoli; sauces/gravies like Hollandaise or Sambal).
-   - DO NOT clump disparate culinary items into a generic single item unless it is an indivisible stew or casserole.
+1. STRICT ACCURATE MEAL DECOMPOSITION (DECOMPOSE STEWS & MIXED DISHES):
+   - Carefully examine and separate each distinct food component on the plate.
+   - NEVER lump mixed dishes, stews, curries, or sautés into a single generic item name (e.g. NEVER return "Potato and tomato stew" or "Chicken vegetable curry").
+   - ALWAYS break down and identify the actual constituent culinary ingredients visible in the dish:
+     * For example, in a potato and tomato stew with rice:
+       - "Potatoes" (stewed/boiled potato chunks, ~140-160g)
+       - "Tomatoes" (simmered tomato chunks/reduction, ~60-80g)
+       - "Onions" (cooked/sautéed sliced onions, ~30-50g)
+       - "White Rice" (steamed long-grain rice, ~150-160g)
+   - Every significant ingredient used to cook that meal must be reflected in foods[] as it is seen according to the image.
 
-2. ACCURATE CALORIE CALCULATION & CONSERVATIVE SCALE:
-   - Ground portion estimates in realistic plate geometry (~25-28cm dinner plate).
-   - Estimate portion weight in grams (g) conservatively based on visual surface area, height/depth, and physical food density (e.g. cooked rice: 1 cup ~160g; chicken breast: palm size ~150g; leafy salad: 50-80g; oils/dressings: 1-2 tbsp ~15-30g).
-   - DO NOT systematically exaggerate or inflate portion grams without clear scale cues.
+2. METHOD & VARIANT RECOGNITION:
+   - For every item, specify the observable culinary preparation method or variant in "variant_or_method":
+     * Grains/Starches: 'white_rice', 'brown_rice', 'fried_rice', 'quinoa', 'sourdough', 'toast', 'bun'.
+     * Vegetables/Produce: 'stewed', 'boiled', 'sautéed', 'roasted', 'steamed', 'raw', 'sliced'.
+     * Potatoes/Tubers: 'stewed', 'boiled', 'roasted', 'mashed', 'french_fries', 'baked'.
+     * Proteins: 'grilled', 'fried', 'roasted', 'boiled', 'poached', 'pan_seared', 'steamed', 'raw' (and specify cut if visible, e.g. breast vs thigh).
+   - If countable items exist (e.g. eggs, buns, bread slices, dumplings), provide the exact count in "count" (e.g. "4x", "1x", "2 slices").
 
-3. INFORMATIVE MEAL DESCRIPTION:
-   - Formulate a rich, articulate explanation detailing the culinary components, observable cooking technique (roasted, pan-fried, poached, raw), visible garnishes, and portion proportionality.
+3. ACCURATE PORTION GROUNDING & ANTI-DISTORTION:
+   - Ground portion estimates in realistic dinner plate geometry (~25-28cm diameter).
+   - Estimate portion weight in grams (g) conservatively based on physical food density:
+     * Cooked potatoes/chunks: ~130-160g (~110-140 kcal).
+     * Sautéed/cooked onions: ~30-50g (~12-20 kcal).
+     * Stewed/sliced tomatoes: ~60-90g (~12-18 kcal).
+     * 1 cup cooked rice: ~150-160g (~195-210 kcal).
+     * 1 medium egg: ~48-52g (~70 kcal). If 4 eggs are visible, portion is ~200g (~280 kcal).
+     * Cucumber sticks/slices: ~50-80g (~8-12 kcal).
+     * 1 steamed bao bun: ~40-50g (~100-115 kcal).
+     * Palm chicken breast: ~140-160g (~230-265 kcal grilled).
+   - DO NOT systematically inflate or exaggerate portion grams. State unobserved elements (cooking oils, sodium) in "visual_uncertainties" rather than manufacturing phantom calories.
 
 Return ONLY a valid JSON object matching this schema:
 {
@@ -127,9 +147,12 @@ Return ONLY a valid JSON object matching this schema:
   "meal_description": "An informative paragraph describing the observed dish, cooking methods, textures, and component proportions.",
   "foods": [
     {
-      "name": "Specific food item name",
+      "name": "Food item name (e.g. Potatoes, Tomatoes, Onions, White Rice, Eggs, Chicken Breast)",
+      "count": "1x",
+      "variant_or_method": "stewed",
       "estimated_portion_g": 150,
-      "portion_description": "Precise human-readable portion (e.g. 1 medium breast ~150g, 1 cup ~160g)"
+      "portion_description": "chunky stewed potato pieces (~150g)",
+      "confidence": 0.95
     }
   ]
 }`;
@@ -150,7 +173,7 @@ Return ONLY a valid JSON object matching this schema:
         ]
       }],
       temperature: 0.1,
-      max_tokens: 650,
+      max_tokens: 800,
       response_format: { type: 'json_object' }
     });
 
@@ -224,10 +247,10 @@ CRITICAL LANGUAGE REQUIREMENT:
 You MUST write all output fields (meal_title, meal_description, vitamins_and_nutrition, recommendation) EXCLUSIVELY in fluent ${targetLangName} (code '${userLanguage}').
 Under no circumstances should you output in English if another language is specified.
 
-TASK: Write three substantive, highly informative clinical PARAGRAPHS in fluent ${targetLangName}. Keep each paragraph focused (2 to 4 sentences).
+TASK: Write three substantive, highly informative clinical PARAGRAPHS in fluent ${targetLangName}.
 
 1. "meal_description":
-   A rich, substantive, and informative paragraph explaining what is observed in the image: distinct culinary ingredients, visible preparation methods (e.g. grilled, steamed, roasted, sautéed), food textures, and component proportions.
+   A rich, comprehensive, and culinary-grounded paragraph (4 to 6 detailed sentences) describing what is observed on the plate. Explicitly detail each constituent ingredient used to cook the meal (e.g. potatoes, tomatoes, onions, rice), noting how each was prepared (e.g. simmered in a rich tomato-onion reduction, tender-boiled, steamed fluffy grains), its visible culinary texture, and its proportion on the plate. Strictly avoid vague or generic one-liners.
 
 2. "vitamins_and_nutrition":
    A focused nutritional narrative paragraph. Explain what the macronutrient balance means for sustained energy, satiety, and blood sugar. Discuss specific micronutrients identified (e.g. Potassium, Vitamin C, Iron) and relevant considerations like sodium or saturated fat.
@@ -254,7 +277,7 @@ Return ONLY a JSON object:
       model: 'gpt-4o-mini',
       messages: [{ role: 'user', content: synthesisPrompt }],
       temperature: 0.2,
-      max_tokens: 520,
+      max_tokens: 1000,
       response_format: { type: 'json_object' }
     });
 
