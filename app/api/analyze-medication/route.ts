@@ -139,8 +139,8 @@ Return ONLY a valid JSON object matching this schema:
       const detectedItem = medData.non_medication_detected || 'non-medicinal product';
       console.warn(`[analyze-medication] Non-medication rejected: ${detectedItem}`);
       return NextResponse.json({
-        error: 'Be serious, this is not a medicine at all.',
-        message: 'Be serious, this is not a medicine at all.',
+        error: 'Be serious. This is not a medicine at all.',
+        message: 'Be serious. This is not a medicine at all.',
         is_medication: false,
         detected_item: detectedItem
       }, { status: 422 });

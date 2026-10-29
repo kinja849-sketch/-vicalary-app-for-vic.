@@ -167,7 +167,7 @@ export default function Camera({ initialMode }: CameraProps = {}) {
     } catch (err: any) {
       console.error("Gallery analysis failed:", err);
       if (err?.not_medication || err?.message?.toLowerCase().includes('not a medicine')) {
-        const msg = err.message || "Be serious, this is not a medicine at all.";
+        const msg = err.message || "Be serious. This is not a medicine at all.";
         setMedicationWarningAlert(msg);
         toast.error(`⚠️ ${msg}`, { duration: 7000 });
       } else {
@@ -192,6 +192,56 @@ export default function Camera({ initialMode }: CameraProps = {}) {
       if (barcodeIntervalRef.current) clearInterval(barcodeIntervalRef.current);
     };
   }, []);
+
+  // Camera stream watchdog: ensure video element is always bound to live stream & playing when active
+  useEffect(() => {
+    if (analysisResult) return;
+
+    const ensureCameraActive = async () => {
+      const video = videoRef.current;
+      const currentStream = streamRef.current;
+      const hasLiveTracks = currentStream && currentStream.getVideoTracks().some(track => track.readyState === 'live');
+
+      if (hasLiveTracks && currentStream) {
+        if (video) {
+          if (video.srcObject !== currentStream) {
+            video.srcObject = currentStream;
+          }
+          if (video.paused) {
+            try {
+              await video.play();
+            } catch (e) {
+              console.warn("Camera play resumed:", e);
+            }
+          }
+        }
+      } else {
+        await startCamera(facingMode);
+      }
+    };
+
+    ensureCameraActive();
+  }, [analysisResult, isAnalyzing, facingMode]);
+
+  // Handle mobile / desktop tab backgrounding & return
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && !analysisResult) {
+        const video = videoRef.current;
+        const currentStream = streamRef.current;
+        const hasLiveTracks = currentStream && currentStream.getVideoTracks().some(track => track.readyState === 'live');
+        if (hasLiveTracks && currentStream && video) {
+          if (video.srcObject !== currentStream) video.srcObject = currentStream;
+          video.play().catch(e => console.warn("Visibility resume error:", e));
+        } else {
+          startCamera(facingMode);
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [analysisResult, facingMode]);
 
   const startCamera = async (facing: 'environment' | 'user' = 'environment') => {
     try {
@@ -477,7 +527,7 @@ export default function Camera({ initialMode }: CameraProps = {}) {
     } catch (err: any) {
       console.error("Analysis failed:", err);
       if (err?.not_medication || err?.message?.toLowerCase().includes('not a medicine')) {
-        const msg = err.message || "Be serious, this is not a medicine at all.";
+        const msg = err.message || "Be serious. This is not a medicine at all.";
         setMedicationWarningAlert(msg);
         toast.error(`⚠️ ${msg}`, { duration: 7000 });
       } else {
@@ -527,212 +577,243 @@ export default function Camera({ initialMode }: CameraProps = {}) {
     }
   };
 
+  const dismissMedicationAlert = () => {
+    setMedicationWarningAlert(null);
+    setCapturedImage(null);
+    setIsAnalyzing(false);
+
+    const video = videoRef.current;
+    const currentStream = streamRef.current;
+    const hasLiveTracks = currentStream && currentStream.getVideoTracks().some(track => track.readyState === 'live');
+    if (hasLiveTracks && currentStream && video) {
+      if (video.srcObject !== currentStream) {
+        video.srcObject = currentStream;
+      }
+      video.play().catch(e => console.warn("Alert dismiss play error:", e));
+    } else {
+      startCamera(facingMode);
+    }
+  };
+
   const handleRetry = () => {
     setAnalysisResult(null);
     setCapturedImage(null);
     setIsAnalyzing(false);
     setIsScanningBarcode(false);
-    startCamera(facingMode);
+
+    const video = videoRef.current;
+    const currentStream = streamRef.current;
+    const hasLiveTracks = currentStream && currentStream.getVideoTracks().some(track => track.readyState === 'live');
+    if (hasLiveTracks && currentStream && video) {
+      if (video.srcObject !== currentStream) {
+        video.srcObject = currentStream;
+      }
+      video.play().catch(e => console.warn("Retry play error:", e));
+    } else {
+      startCamera(facingMode);
+    }
   };
 
   return (
     <div className="h-full flex-1 w-full bg-[#0a0f14] text-white flex flex-col relative overflow-hidden">
-      <AnimatePresence mode="wait">
-        {!analysisResult && !isAnalyzing ? (
-          <motion.div
-            key="camera"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="relative w-full h-full overflow-hidden bg-black flex-1"
+      {/* ─── CONTINUOUS PERSISTENT CAMERA VIEWFINDER ─── */}
+      <div className={`relative w-full h-full overflow-hidden bg-black flex-1 ${analysisResult ? 'hidden' : 'flex'}`}>
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className={`w-full h-full object-cover transition-transform duration-300 ${
+            facingMode === 'user' ? '-scale-x-100' : 'scale-x-100'
+          }`}
+        />
+
+        {/* Top Left Close */}
+        {!isAnalyzing && (
+          <Link
+            href="/dashboard"
+            className="absolute top-8 left-6 p-3 bg-black/40 backdrop-blur-xl rounded-full border border-white/20 hover:bg-black/60 transition-all z-20"
           >
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className={`w-full h-full object-cover transition-transform duration-300 ${
-                facingMode === 'user' ? '-scale-x-100' : 'scale-x-100'
-              }`}
-            />
+            <ArrowLeft className="w-6 h-6" />
+          </Link>
+        )}
 
-            {/* Top Left Close */}
-            <Link
-              href="/dashboard"
-              className="absolute top-8 left-6 p-3 bg-black/40 backdrop-blur-xl rounded-full border border-white/20 hover:bg-black/60 transition-all z-20"
-            >
-              <ArrowLeft className="w-6 h-6" />
-            </Link>
+        {/* Top Right Switch Camera - Hidden in Scanner Mode */}
+        {!isScanner && scanMode !== "BARCODE" && !isAnalyzing && (
+          <button
+            onClick={switchCamera}
+            disabled={isSwitching}
+            aria-label={facingMode === 'environment' ? 'Switch to front camera' : 'Switch to back camera'}
+            className="absolute top-8 right-6 p-3 bg-black/40 backdrop-blur-xl rounded-full border border-white/20 hover:bg-black/60 transition-all active:scale-90 z-20 disabled:opacity-50"
+          >
+            <SwitchCamera className={`w-6 h-6 transition-transform duration-300 ${isSwitching ? 'animate-spin' : ''}`} />
+          </button>
+        )}
 
-            {/* Top Right Switch Camera - Hidden in Scanner Mode */}
-            {!isScanner && scanMode !== "BARCODE" && (
+        {/* Scanning Frame for Barcode */}
+        {scanMode === "BARCODE" && !isAnalyzing && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-10">
+            <div className="w-64 h-48 border-2 border-vic-green/40 rounded-2xl relative shadow-[0_0_30px_rgba(33,255,100,0.15)]">
+              <div className="absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 border-vic-green rounded-tl-lg" />
+              <div className="absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 border-vic-green rounded-tr-lg" />
+              <div className="absolute bottom-0 left-0 w-6 h-6 border-b-2 border-l-2 border-vic-green rounded-bl-lg" />
+              <div className="absolute bottom-0 right-0 w-6 h-6 border-b-2 border-r-2 border-vic-green rounded-br-lg" />
+              <motion.div
+                animate={{ top: ['0%', '100%', '0%'] }}
+                transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                className="absolute left-0 right-0 h-0.5 bg-vic-green shadow-[0_0_12px_2px_rgba(33,255,100,0.6)]"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Bottom Controls */}
+        {!isAnalyzing && (
+          <div className="absolute bottom-12 left-1/2 -translate-x-1/2 flex items-center justify-center gap-6 z-20 w-full px-6 max-w-md">
+            {!isScanner && scanMode !== "BARCODE" ? (
               <button
-                onClick={switchCamera}
-                disabled={isSwitching}
-                aria-label={facingMode === 'environment' ? 'Switch to front camera' : 'Switch to back camera'}
-                className="absolute top-8 right-6 p-3 bg-black/40 backdrop-blur-xl rounded-full border border-white/20 hover:bg-black/60 transition-all active:scale-90 z-20 disabled:opacity-50"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isAnalyzing}
+                className="size-14 rounded-full bg-black/40 backdrop-blur-xl border border-white/20 text-white flex items-center justify-center hover:bg-black/60 transition-all active:scale-90 shadow-2xl shrink-0 cursor-pointer"
+                title="Upload image from gallery"
+                aria-label="Upload image from gallery"
               >
-                <SwitchCamera className={`w-6 h-6 transition-transform duration-300 ${isSwitching ? 'animate-spin' : ''}`} />
+                <Images className="w-6 h-6 text-white pointer-events-none" />
               </button>
-            )}
+            ) : null}
 
-            {/* Scanning Frame for Barcode */}
-            {scanMode === "BARCODE" && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-10">
-                <div className="w-64 h-48 border-2 border-vic-green/40 rounded-2xl relative shadow-[0_0_30px_rgba(33,255,100,0.15)]">
-                  <div className="absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 border-vic-green rounded-tl-lg" />
-                  <div className="absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 border-vic-green rounded-tr-lg" />
-                  <div className="absolute bottom-0 left-0 w-6 h-6 border-b-2 border-l-2 border-vic-green rounded-bl-lg" />
-                  <div className="absolute bottom-0 right-0 w-6 h-6 border-b-2 border-r-2 border-vic-green rounded-br-lg" />
-                  <motion.div
-                    animate={{ top: ['0%', '100%', '0%'] }}
-                    transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                    className="absolute left-0 right-0 h-0.5 bg-vic-green shadow-[0_0_12px_2px_rgba(33,255,100,0.6)]"
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* Bottom Controls */}
-            <div className="absolute bottom-12 left-1/2 -translate-x-1/2 flex items-center justify-center gap-6 z-20 w-full px-6 max-w-md">
-              {/* Upload option available only in Food mode, removed from scanner */}
-              {!isScanner && scanMode !== "BARCODE" ? (
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isAnalyzing}
-                  className="size-14 rounded-full bg-black/40 backdrop-blur-xl border border-white/20 text-white flex items-center justify-center hover:bg-black/60 transition-all active:scale-90 shadow-2xl shrink-0 cursor-pointer"
-                  title="Upload image from gallery"
-                  aria-label="Upload image from gallery"
-                >
-                  <Images className="w-6 h-6 text-white pointer-events-none" />
-                </button>
-              ) : null}
-
-              {scanMode === "FOOD" ? (
+            {scanMode === "FOOD" ? (
+              <button
+                onClick={takePhoto}
+                className="w-20 h-20 bg-vic-blue rounded-full flex items-center justify-center border-4 border-white/30 shadow-lg shadow-vic-blue/50 hover:scale-105 active:scale-95 transition-all shrink-0 cursor-pointer"
+                aria-label="Take photo"
+              >
+                <div className="w-16 h-16 rounded-full border-2 border-white/50 pointer-events-none" />
+              </button>
+            ) : (
+              <div className="flex flex-col items-center gap-1.5">
                 <button
                   onClick={takePhoto}
-                  className="w-20 h-20 bg-vic-blue rounded-full flex items-center justify-center border-4 border-white/30 shadow-lg shadow-vic-blue/50 hover:scale-105 active:scale-95 transition-all shrink-0 cursor-pointer"
-                  aria-label="Take photo"
+                  className="w-20 h-20 bg-emerald-600 rounded-full flex items-center justify-center border-4 border-white/30 shadow-lg shadow-emerald-500/40 hover:scale-105 active:scale-95 transition-all shrink-0 cursor-pointer"
+                  aria-label="Capture medicine packaging"
+                  title="Capture medicine packaging"
                 >
-                  <div className="w-16 h-16 rounded-full border-2 border-white/50 pointer-events-none" />
-                </button>
-              ) : (
-                <div className="flex flex-col items-center gap-1.5">
-                  <button
-                    onClick={takePhoto}
-                    className="w-20 h-20 bg-emerald-600 rounded-full flex items-center justify-center border-4 border-white/30 shadow-lg shadow-emerald-500/40 hover:scale-105 active:scale-95 transition-all shrink-0 cursor-pointer"
-                    aria-label="Capture medicine packaging"
-                    title="Capture medicine packaging"
-                  >
-                    <div className="w-16 h-16 rounded-full border-2 border-slate-900/60 flex items-center justify-center pointer-events-none">
-                      <CameraIcon className="w-6 h-6 text-white" />
-                    </div>
-                  </button>
-                  <span className="text-[10px] font-bold tracking-wider text-slate-300 uppercase bg-black/60 px-2 py-0.5 rounded-full border border-white/10">
-                    Medicine Photo
-                  </span>
-                </div>
-              )}
-
-              {!isScanner && scanMode !== "BARCODE" && (
-                <div className="size-14 invisible shrink-0" />
-              )}
-            </div>
-
-            {/* Non-Medication Rejection Alert Modal */}
-            <AnimatePresence>
-              {medicationWarningAlert && (
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.9 }}
-                  className="absolute inset-0 z-50 flex items-center justify-center p-6 bg-black/85 backdrop-blur-md"
-                >
-                  <div className="max-w-xs sm:max-w-sm w-full bg-slate-900 border-2 border-rose-500/60 rounded-3xl p-6 text-center space-y-4 shadow-2xl">
-                    <div className="size-16 mx-auto rounded-full bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-500">
-                      <AlertCircle className="w-9 h-9 text-rose-500" />
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-black text-white tracking-wide">Not a Medicine</h3>
-                      <p className="text-sm font-black text-rose-400 mt-2 leading-relaxed">
-                        {medicationWarningAlert}
-                      </p>
-                      <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-                        This scanner is configured for medicines only. Please scan an authentic medication package, blister pack, or prescription bottle, or switch to Food mode.
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => setMedicationWarningAlert(null)}
-                      className="w-full py-3.5 bg-rose-600 hover:bg-rose-500 active:scale-95 text-white font-black rounded-xl text-sm transition-all shadow-lg shadow-rose-600/30 cursor-pointer"
-                    >
-                      Understood
-                    </button>
+                  <div className="w-16 h-16 rounded-full border-2 border-slate-900/60 flex items-center justify-center pointer-events-none">
+                    <CameraIcon className="w-6 h-6 text-white" />
                   </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            <input
-              type="file"
-              ref={fileInputRef}
-              accept="image/*"
-              onChange={handleGalleryUpload}
-              className="hidden"
-            />
-          </motion.div>
-        ) : isAnalyzing ? (
-          <motion.div
-            key="analyzing"
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="flex-1 flex flex-col items-center justify-center p-6 text-center"
-          >
-            <div className="relative w-48 h-48 mx-auto mb-8">
-              {capturedImage && (
-                <img
-                  src={capturedImage}
-                  className="w-full h-full object-cover rounded-full grayscale opacity-40 border border-white/10"
-                />
-              )}
-              <motion.div
-                className={`absolute inset-0 border-4 rounded-full ${scanMode === 'BARCODE' ? 'border-vic-green' : 'border-vic-blue'}`}
-                animate={{ scale: [1, 1.08, 1], opacity: [1, 0.4, 1] }}
-                transition={{ repeat: Infinity, duration: 2 }}
-              />
-              <div className="absolute inset-0 flex items-center justify-center">
-                <Activity className={`w-12 h-12 animate-pulse ${scanMode === 'BARCODE' ? 'text-vic-green' : 'text-vic-blue'}`} />
+                </button>
+                <span className="text-[10px] font-bold tracking-wider text-slate-300 uppercase bg-black/60 px-2 py-0.5 rounded-full border border-white/10">
+                  Medicine Photo
+                </span>
               </div>
-            </div>
-            <h2 className={`text-2xl sm:text-3xl font-bold mb-3 ${scanMode === 'BARCODE' ? 'text-vic-green' : 'text-vic-blue'}`}>
-              {scanMode === 'BARCODE' ? 'Resolving Product Intelligence' : 'Clinical Meal Analysis in Progress'}
-            </h2>
-            <p className="text-slate-400 max-w-md mx-auto text-sm leading-relaxed">
-              {scanMode === 'BARCODE'
-                ? 'Retrieving exact manufacturer data, evaluating corporate affiliation gates, and local pricing...'
-                : 'Identifying visible foods, normalizing against authoritative nutrition records, and comparing against your daily plan...'}
-            </p>
-          </motion.div>
-        ) : (
-          /* ─── DEDICATED FULL SCREEN RESULTS ─── */
-          scanMode === "FOOD" ? (
-            <MealAnalysis
-              mealImage={capturedImage || analysisResult.image_url || ''}
-              analysis={analysisResult}
-              onClose={handleRetry}
-              onLog={handleSave}
-              onRetry={handleRetry}
-            />
-          ) : (
-            <ProductDetails
-              {...analysisResult}
-              productName={analysisResult.name}
-              productImage={capturedImage || analysisResult.image_url}
-              onClose={handleRetry}
-              onAddToDiary={() => router.push("/dashboard")}
-            />
-          )
+            )}
+
+            {!isScanner && scanMode !== "BARCODE" && (
+              <div className="size-14 invisible shrink-0" />
+            )}
+          </div>
         )}
-      </AnimatePresence>
+
+        {/* Analyzing Overlay (Over active live camera view) */}
+        <AnimatePresence>
+          {isAnalyzing && (
+            <motion.div
+              key="analyzing-overlay"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 z-30 flex flex-col items-center justify-center p-6 text-center bg-black/85 backdrop-blur-md"
+            >
+              <div className="relative w-48 h-48 mx-auto mb-8">
+                {capturedImage && (
+                  <img
+                    src={capturedImage}
+                    className="w-full h-full object-cover rounded-full grayscale opacity-40 border border-white/10"
+                  />
+                )}
+                <motion.div
+                  className={`absolute inset-0 border-4 rounded-full ${scanMode === 'BARCODE' ? 'border-vic-green' : 'border-vic-blue'}`}
+                  animate={{ scale: [1, 1.08, 1], opacity: [1, 0.4, 1] }}
+                  transition={{ repeat: Infinity, duration: 2 }}
+                />
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <Activity className={`w-12 h-12 animate-pulse ${scanMode === 'BARCODE' ? 'text-vic-green' : 'text-vic-blue'}`} />
+                </div>
+              </div>
+              <h2 className={`text-2xl sm:text-3xl font-bold mb-3 ${scanMode === 'BARCODE' ? 'text-vic-green' : 'text-vic-blue'}`}>
+                {scanMode === 'BARCODE' ? 'Resolving Product Intelligence' : 'Clinical Meal Analysis in Progress'}
+              </h2>
+              <p className="text-slate-400 max-w-md mx-auto text-sm leading-relaxed">
+                {scanMode === 'BARCODE'
+                  ? 'Retrieving exact manufacturer data, evaluating corporate affiliation gates, and local pricing...'
+                  : 'Identifying visible foods, normalizing against authoritative nutrition records, and comparing against your daily plan...'}
+              </p>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Non-Medication Rejection Alert Modal */}
+        <AnimatePresence>
+          {medicationWarningAlert && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="absolute inset-0 z-50 flex items-center justify-center p-6 bg-black/60 dark:bg-black/80 backdrop-blur-md"
+            >
+              <div className="max-w-xs sm:max-w-sm w-full bg-white dark:bg-[#111c24] text-slate-900 dark:text-white border border-rose-200 dark:border-rose-900/50 rounded-[2rem] p-6 sm:p-7 text-center space-y-4 shadow-2xl">
+                <div className="size-16 mx-auto rounded-2xl bg-rose-500/10 dark:bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/20 flex items-center justify-center">
+                  <AlertCircle className="w-9 h-9 text-rose-600 dark:text-rose-400" />
+                </div>
+                <div className="space-y-2">
+                  <h3 className="text-lg sm:text-xl font-black text-rose-600 dark:text-rose-400 tracking-tight leading-snug">
+                    Be serious. This is not a medicine at all.
+                  </h3>
+                  <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed font-normal">
+                    This scanner is configured for medicines only. Please scan an authentic medication package, blister pack, or prescription bottle, or switch to Food mode.
+                  </p>
+                </div>
+                <button
+                  onClick={dismissMedicationAlert}
+                  className="w-full py-3.5 bg-rose-600 hover:bg-rose-500 active:scale-95 text-white font-bold rounded-2xl text-sm transition-all shadow-md shadow-rose-600/20 cursor-pointer"
+                >
+                  Understood
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <input
+          type="file"
+          ref={fileInputRef}
+          accept="image/*"
+          onChange={handleGalleryUpload}
+          className="hidden"
+        />
+      </div>
+
+      {/* ─── DEDICATED FULL SCREEN RESULTS ─── */}
+      {analysisResult && (
+        scanMode === "FOOD" ? (
+          <MealAnalysis
+            mealImage={capturedImage || analysisResult.image_url || ''}
+            analysis={analysisResult}
+            onClose={handleRetry}
+            onLog={handleSave}
+            onRetry={handleRetry}
+          />
+        ) : (
+          <ProductDetails
+            {...analysisResult}
+            productName={analysisResult.name}
+            productImage={capturedImage || analysisResult.image_url}
+            onClose={handleRetry}
+            onAddToDiary={() => router.push("/dashboard")}
+          />
+        )
+      )}
+
 
       <canvas ref={canvasRef} className="hidden" />
     </div>

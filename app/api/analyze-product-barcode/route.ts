@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { ScannerDecisionEngine } from '@/lib/scanner/ScannerDecisionEngine';
 import { ProductAdvisor } from '@/lib/ai/ProductAdvisor';
-import { SafetyEngine } from '@/lib/services/SafetyEngine';
+import { SafetyEngine, isValidUUID } from '@/lib/services/SafetyEngine';
 import { FoodColoringService } from '@/lib/products/FoodColoringService';
 import { resolveUserLanguage } from '@/lib/api/serverLanguage';
 
@@ -26,12 +26,15 @@ export async function POST(req: NextRequest) {
       req.headers.get('cf-connecting-ip') ||
       '';
 
-    // 1. Fetch User settings & onboarding context
-    const [{ data: userSettings }, { data: onboarding }, { data: profile }] = await Promise.all([
-      supabase.from('user_settings').select('language, country_code, currency, is_language_auto').eq('user_id', userId).maybeSingle(),
-      supabase.from('onboarding_responses').select('*').eq('user_id', userId).maybeSingle(),
-      supabase.from('user_profiles').select('*').eq('id', userId).maybeSingle()
-    ]);
+    // 1. Fetch User settings & onboarding context (guarded for valid UUIDs to prevent Postgres 22P02 error on 'anon')
+    const hasValidUser = isValidUUID(userId);
+    const [{ data: userSettings }, { data: onboarding }, { data: profile }] = hasValidUser
+      ? await Promise.all([
+          supabase.from('user_settings').select('language, country_code, currency, is_language_auto').eq('user_id', userId).maybeSingle(),
+          supabase.from('onboarding_responses').select('*').eq('user_id', userId).maybeSingle(),
+          supabase.from('user_profiles').select('*').eq('id', userId).maybeSingle()
+        ])
+      : [{ data: null }, { data: null }, { data: null }];
 
     const lang = await resolveUserLanguage({
       userId,
@@ -172,15 +175,22 @@ export async function POST(req: NextRequest) {
 
     const safetyEval = SafetyEngine.evaluateProductSafety(p, n, userSafetyProfile);
 
-    // 7. GROUNDED ADVISOR NARRATIVE (Receives verified product, nutrition, coloring, and safetyEval)
-    const advice = await ProductAdvisor.analyze(
-      p,
-      n,
-      decision.pricing,
-      mergedProfile,
-      lang,
-      safetyEval
-    );
+    // 7. GROUNDED ADVISOR NARRATIVE (Fast bounded LLM call with instant deterministic fallback)
+    let advice: any = null;
+    try {
+      const advisorPromise = ProductAdvisor.analyze(
+        p,
+        n,
+        decision.pricing,
+        mergedProfile,
+        lang,
+        safetyEval
+      );
+      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000));
+      advice = await Promise.race([advisorPromise, timeoutPromise]);
+    } catch (advisorErr) {
+      console.warn('[analyze-product-barcode] Advisor call error; falling back to deterministic facts:', advisorErr);
+    }
 
     let finalHealthStatus: 'GOOD' | 'MODERATE' | 'POOR' = safetyEval.verdict || advice?.healthStatus || 'GOOD';
     let finalRecommendation = advice?.recommendation || ProductAdvisor.buildDeterministicRecommendation(p, n, mergedProfile, safetyEval);

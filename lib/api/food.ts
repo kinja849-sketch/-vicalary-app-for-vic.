@@ -186,7 +186,7 @@ export const analyzeMedication = async (userId: string, file: File, options?: an
 
         const data = await res.json();
         if (!res.ok || (data && data.error) || data?.is_medication === false) {
-            const err: any = new Error(data?.message || data?.error || 'Medication analysis failed');
+            const err: any = new Error(data?.message || data?.error || 'Be serious. This is not a medicine at all.');
             if (data?.is_medication === false || res.status === 422) {
                 err.not_medication = true;
                 err.detected_item = data?.detected_item;
@@ -233,14 +233,21 @@ export const scanProduct = async (userId: string, barcode: string, options?: any
         })
     });
 
-    if (!res.ok) throw new Error('analyze-product-barcode failed')
-    const data = await res.json()
+    if (!res.ok) {
+        let errMessage = 'Failed to identify product. Please try again.';
+        try {
+            const errData = await res.json();
+            errMessage = errData.message || errData.error || errData.description || errMessage;
+        } catch (_) {}
+        throw new Error(errMessage);
+    }
+    const data = await res.json();
     logInfo(userId, 'barcode_scan_success', { barcode, productName: data.name });
 
     // Save to cache
     productCache.set(cacheKey, { data, timestamp: Date.now() });
 
-    return data
+    return data;
 }
 
 export const saveFoodAnalysis = async (userId: string, analysis: any, isPurchaseConfirmed: boolean = false) => {

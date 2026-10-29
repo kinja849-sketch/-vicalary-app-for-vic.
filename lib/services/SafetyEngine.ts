@@ -237,11 +237,30 @@ const ALLERGEN_SYNONYM_GROUPS: Array<{
   }
 ];
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function isValidUUID(id?: string | null): boolean {
+  return typeof id === 'string' && UUID_REGEX.test(id.trim());
+}
+
 export class SafetyEngine {
   /**
    * Loads and normalizes user health profile from Supabase onboarding & profile tables.
    */
   static async getUserSafetyProfile(userId: string, supabase: SupabaseClient, fallbackLang: string = 'en'): Promise<UserSafetyProfile> {
+    if (!isValidUUID(userId)) {
+      return {
+        userId: 'anonymous',
+        userGoal: 'maintain a healthy lifestyle',
+        dailyCalorieGoal: 2000,
+        allergies: [],
+        medicalConditions: [],
+        dietaryLifestyle: [],
+        isDiabetic: false,
+        hasHypertension: false,
+        language: fallbackLang
+      };
+    }
+
     const [
       { data: onboarding },
       { data: userSettings },

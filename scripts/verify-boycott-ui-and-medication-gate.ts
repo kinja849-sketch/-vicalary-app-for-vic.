@@ -24,11 +24,12 @@ async function runTests() {
 
   assert.strictEqual(coffeeRes.status, 422, 'Non-medication must return HTTP 422');
   assert.strictEqual(coffeeData.is_medication, false, 'is_medication must be false for coffee');
-  assert(
-    coffeeData.error && coffeeData.error.toLowerCase().includes('not a medicine'),
-    'Expected error to state "Be serious, this is not a medicine at all."'
+  assert.strictEqual(
+    coffeeData.error,
+    'Be serious. This is not a medicine at all.',
+    'Expected error to state exactly "Be serious. This is not a medicine at all."'
   );
-  console.log('  [PASS] Non-medication rejection gate correctly returned 422 and warning.');
+  console.log('  [PASS] Non-medication rejection gate correctly returned 422 and exact warning.');
 
   // 1B. Testing authentic medication (Guaifenesin Cough Syrup)
   console.log('\n=== 2. Authentic Medication Verification (/api/analyze-medication) ===');
@@ -80,6 +81,33 @@ async function runTests() {
   assert(boycottData.boycott?.parentCompany?.includes('Mondelēz'), 'Must identify parent company Mondelēz International');
   assert(!boycottData.cheaper_alternatives, 'Alternatives must not be generated or returned on boycott gate');
   console.log('  [PASS] Boycott gate payload verified.');
+
+  // 1D. Testing anonymous user barcode scan (Barilla 8076800195057) for speed and zero UUID errors
+  console.log('\n=== 4. Anonymous Barcode Scan (Fast Bounded Netlify Safe) ===');
+  const startMs = Date.now();
+  const barillaRes = await fetch(`${baseUrl}/api/analyze-product-barcode`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      barcode: '8076800195057',
+      userId: 'anon',
+      language: 'en'
+    })
+  });
+  const durationMs = Date.now() - startMs;
+  const barillaData = await barillaRes.json();
+  console.log('  [Barilla Anon Scan]:', {
+    status: barillaRes.status,
+    name: barillaData.name,
+    brand: barillaData.brand,
+    durationMs,
+    found: barillaData.found
+  });
+
+  assert.strictEqual(barillaRes.status, 200, 'Barilla anon scan must return HTTP 200 without Postgres UUID syntax error');
+  assert.strictEqual(barillaData.status, 'APPROVED', 'Barilla must be APPROVED');
+  assert(durationMs < 6000, `Scan duration must be < 6000ms to stay safely under Netlify timeout, took: ${durationMs}ms`);
+  console.log(`  [PASS] Anonymous barcode scan succeeded in ${durationMs}ms without Postgres errors.`);
 
   console.log('\n✅ ALL MEDICATION VALIDATION & BOYCOTT PROCEDURAL CHECKS PASSED!');
 }
