@@ -20,6 +20,8 @@ export class PermissionError extends Error {
 
 class PermissionManager {
   private localCache: Map<PermissionType, boolean> = new Map();
+  private syncedDbCache: Set<string> = new Set();
+  private inFlightSyncs: Map<string, Promise<void>> = new Map();
 
   /**
    * Queries real-time browser/OS permission status where supported.
@@ -72,17 +74,20 @@ class PermissionManager {
 
         if (currentUserId) {
           const client = supabase as any;
-          const { data } = await client
+          const { data, error } = await client
             .from('user_permissions')
             .select('*')
             .eq('user_id', currentUserId)
             .maybeSingle();
 
-          if (data) {
+          if (!error && data) {
             const field = type === 'camera' ? 'camera_permission_onboarded' : 'microphone_permission_onboarded';
             if (data[field]) {
               appOnboarded = true;
               localStorage.setItem(storageKey, 'true');
+              const dbSyncKey = `vic_permission_${type}_db_synced_${currentUserId}`;
+              localStorage.setItem(dbSyncKey, 'true');
+              this.syncedDbCache.add(`${currentUserId}:${type}`);
             }
           }
         }
@@ -128,17 +133,52 @@ class PermissionManager {
         currentUserId = data?.session?.user?.id;
       }
 
-      if (currentUserId) {
-        const field = type === 'camera' ? 'camera_permission_onboarded' : 'microphone_permission_onboarded';
-        const client = supabase as any;
-        await client
-          .from('user_permissions')
-          .upsert({
-            user_id: currentUserId,
-            [field]: true,
-            updated_at: new Date().toISOString()
-          }, { onConflict: 'user_id' });
+      if (!currentUserId) return;
+
+      const cacheKey = `${currentUserId}:${type}`;
+      const dbSyncKey = `vic_permission_${type}_db_synced_${currentUserId}`;
+      if (this.syncedDbCache.has(cacheKey)) {
+        return;
       }
+      if (typeof window !== 'undefined' && localStorage.getItem(dbSyncKey) === 'true') {
+        this.syncedDbCache.add(cacheKey);
+        return;
+      }
+
+      const existingInFlight = this.inFlightSyncs.get(cacheKey);
+      if (existingInFlight) {
+        await existingInFlight;
+        return;
+      }
+
+      const syncPromise = (async () => {
+        try {
+          const field = type === 'camera' ? 'camera_permission_onboarded' : 'microphone_permission_onboarded';
+          const client = supabase as any;
+          const { error } = await client
+            .from('user_permissions')
+            .upsert(
+              {
+                user_id: currentUserId,
+                [field]: true,
+                updated_at: new Date().toISOString()
+              },
+              { onConflict: 'user_id' }
+            );
+
+          if (!error) {
+            this.syncedDbCache.add(cacheKey);
+            if (typeof window !== 'undefined') {
+              localStorage.setItem(dbSyncKey, 'true');
+            }
+          }
+        } finally {
+          this.inFlightSyncs.delete(cacheKey);
+        }
+      })();
+
+      this.inFlightSyncs.set(cacheKey, syncPromise);
+      await syncPromise;
     } catch (err) {
       console.warn(`[PermissionManager] Error updating user_permissions for ${type}:`, err);
     }

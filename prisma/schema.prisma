@@ -890,3 +890,13 @@ model product_boycott_matches {
   source_url  String?
   verified_at DateTime? @default(now()) @db.Timestamptz(6)
 }
+
+/// Durable application-level camera and microphone permission onboarding state
+model user_permissions {
+  user_id                         String    @id @db.Uuid
+  camera_permission_onboarded     Boolean?  @default(false)
+  microphone_permission_onboarded Boolean?  @default(false)
+  created_at                      DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at                      DateTime? @default(now()) @db.Timestamptz(6)
+}
+

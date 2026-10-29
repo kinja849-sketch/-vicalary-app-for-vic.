@@ -13,9 +13,13 @@ export class ScannerDecisionEngine {
         return { status: "PRODUCT_NOT_FOUND", barcode };
       }
 
-      // 2. Boycott Screening
-      if (product.brand) {
-        const boycottStatus = await BoycottScreeningService.screenBrand(product.brand, userId);
+      // 2. Parent-First Boycott Screening (resolves brand -> parent chain, or careful name-token -> brand -> parent when brand is missing)
+      if (product.brand || product.name) {
+        const boycottStatus = await BoycottScreeningService.screenBrand(
+          product.brand || '',
+          userId,
+          product.name
+        );
         
         if (boycottStatus.flagged) {
           return {

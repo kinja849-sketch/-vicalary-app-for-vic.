@@ -1,6 +1,6 @@
 "use client"
 import { useState, useCallback, useEffect, useRef } from 'react';
-import DailyIframe, { DailyCall } from '@daily-co/daily-js';
+import type { DailyCall } from '@daily-co/daily-js';
 
 export type DailyConnectionState = 'idle' | 'joining' | 'waiting_peer' | 'connected' | 'leaving' | 'error';
 
@@ -208,9 +208,9 @@ export function useDailyCall() {
     useEffect(() => {
         return () => {
             try {
-                const instance = DailyIframe.getCallInstance();
-                if (instance) {
-                    instance.destroy().catch(() => {});
+                if (callObjectRef.current) {
+                    callObjectRef.current.destroy().catch(() => {});
+                    callObjectRef.current = null;
                 }
             } catch (_) {}
         };
@@ -219,6 +219,9 @@ export function useDailyCall() {
     const joinCall = useCallback(async (url: string, isVideo: boolean = false, userName?: string) => {
         if (typeof window === 'undefined') return;
         callTypeRef.current = isVideo ? 'video' : 'voice';
+
+        const DailyModule = await import('@daily-co/daily-js');
+        const DailyIframe = DailyModule.default || (DailyModule as any);
 
         try {
             const existing = DailyIframe.getCallInstance();
@@ -247,6 +250,8 @@ export function useDailyCall() {
             setConnectionState('error');
             return;
         }
+
+        if (!co) return;
 
         callObjectRef.current = co;
         setCallObject(co);
@@ -278,6 +283,8 @@ export function useDailyCall() {
         const co = callObjectRef.current || callObject;
         if (!co) {
             try {
+                const DailyModule = await import('@daily-co/daily-js');
+                const DailyIframe = DailyModule.default || (DailyModule as any);
                 const ex = DailyIframe.getCallInstance();
                 if (ex) {
                     try { await ex.leave(); } catch (_) {}

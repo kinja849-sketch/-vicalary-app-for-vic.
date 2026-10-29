@@ -82,16 +82,19 @@ export async function POST(req: NextRequest) {
     // 3. BOYCOTT GATE: If product falls under boycott criteria, STOP IMMEDIATELY
     if (decision.status === 'FLAGGED') {
       const b = decision.boycottDetails;
+      const resolvedParent = b.parentCompany || b.companyName || decision.product.brand || 'Flagged Parent Entity';
+      const resolvedBrand = decision.product.brand || b.companyName || decision.product.name;
       const relationshipLabel = b.parentCompany 
         ? `Parent company (${b.parentCompany}) has documented ties.`
-        : `Direct campaign target.`;
+        : `Direct campaign target (${resolvedParent}).`;
 
       return NextResponse.json({
         found: true,
         barcode,
         type: 'food',
         name: decision.product.name,
-        brand: decision.product.brand,
+        brand: resolvedBrand,
+        manufacturer: resolvedParent,
         image_url: decision.product.image,
         category: decision.product.category,
         serving_size: decision.product.serving_size,
@@ -100,15 +103,15 @@ export async function POST(req: NextRequest) {
         boycott: {
           flagged: true,
           campaignName: b.campaignName || 'Ethical Responsibility Campaign',
-          companyName: b.companyName || decision.product.brand,
-          parentCompany: b.parentCompany,
-          relationshipType: b.relationshipType,
-          reason: b.reason || 'Documented commercial or political ties under active campaign review.',
+          companyName: b.companyName || decision.product.brand || decision.product.name,
+          parentCompany: resolvedParent,
+          relationshipType: b.relationshipType || 'parent',
+          reason: b.reason || `Parent company (${resolvedParent}) has documented commercial or political ties under active campaign review.`,
           sourceUrl: b.sourceUrl || 'https://bdsmovement.net',
           verifiedAt: b.verifiedAt
         },
-        political_warning: `⚠️ ETHICAL RESPONSIBILITY ALERT: ${b.reason || 'Flagged under active boycott campaign.'}`,
-        description: `${decision.product.name} (Brand: ${decision.product.brand || 'Unknown'}) has been flagged by active corporate responsibility campaigns. ${relationshipLabel} Normal purchase analysis is suspended at this safety gate.`,
+        political_warning: `⚠️ ETHICAL RESPONSIBILITY ALERT — Parent Company: ${resolvedParent}. ${b.reason || 'Flagged under active boycott campaign.'}`,
+        description: `${decision.product.name} (Brand: ${resolvedBrand} → Parent: ${resolvedParent}) has been flagged by active corporate responsibility campaigns. ${relationshipLabel} Normal purchase analysis is suspended at this safety gate.`,
         needs_crowdsourcing: false
       });
     }

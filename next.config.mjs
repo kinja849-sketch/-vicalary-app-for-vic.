@@ -7,6 +7,11 @@ const nextConfig = {
       { protocol: "https", hostname: "edamam-product-images.s3.amazonaws.com" },
     ],
   },
+  experimental: {
+    optimizePackageImports: ["lucide-react", "framer-motion", "date-fns"],
+  },
 };
 
 export default nextConfig;
+
+

@@ -467,10 +467,19 @@ export function ProductDetails({
                     <span className="text-rose-600 dark:text-rose-300 font-black">{boycott?.campaignName || 'Corporate Responsibility Watch'}</span>
                   </div>
 
-                  {boycott?.parentCompany && (
+                  {(boycott?.companyName || brand) && (
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-500 dark:text-slate-400 uppercase font-bold tracking-wider">Brand / Subsidiary</span>
+                      <span className="text-slate-900 dark:text-white font-bold">{boycott?.companyName || brand}</span>
+                    </div>
+                  )}
+
+                  {(boycott?.parentCompany || manufacturer) && (
                     <div className="flex items-center justify-between text-xs">
                       <span className="text-slate-500 dark:text-slate-400 uppercase font-bold tracking-wider">Parent Company</span>
-                      <span className="text-slate-900 dark:text-white font-bold">{boycott.parentCompany}</span>
+                      <span className="px-2.5 py-0.5 rounded-full bg-rose-500/15 border border-rose-500/30 text-rose-600 dark:text-rose-300 font-black">
+                        {boycott?.parentCompany || manufacturer}
+                      </span>
                     </div>
                   )}
 
