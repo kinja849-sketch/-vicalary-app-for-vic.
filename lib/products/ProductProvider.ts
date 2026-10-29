@@ -46,6 +46,9 @@ export interface ProductPrice {
   country: string;
   currency: string;
   price: number | null;
+  price_min?: number;
+  price_max?: number;
+  price_range?: string;
   status: 'verified' | 'estimated' | 'needs_user_price';
   source: string;
   retrievedAt: string;
@@ -70,6 +73,7 @@ export interface PriceProvider {
     productCategory?: string,
     productName?: string,
     ipAddress?: string,
-    sizeStr?: string
+    sizeStr?: string,
+    brand?: string
   ): Promise<ProductPrice | null>;
 }

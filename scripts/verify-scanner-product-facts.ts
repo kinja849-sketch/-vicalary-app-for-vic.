@@ -129,6 +129,11 @@ async function runVerification() {
   assert(!JSON.stringify(barillaData).includes('Calorie Data Pending'), 'Response must never contain "Calorie Data Pending"');
   assert(barillaData.description && barillaData.description.length >= 60, 'Barilla description must be substantive');
   assert(barillaData.goal_fit && barillaData.goal_fit.status === 'GOOD', 'Barilla (13g protein) should be GOOD fit for Muscle Gain');
+  assert(typeof barillaData.price === 'number' && barillaData.price > 0, 'Barilla must have an automatic positive local price');
+  assert(Boolean(barillaData.price_metadata?.price_range), 'Barilla must include an automatic local price_range');
+  assert(barillaData.price_metadata?.needs_user_price === false, 'Barilla price must not require manual user self-entry');
+  assert(barillaData.needs_crowdsourcing === false, 'needs_crowdsourcing must be false');
+  assert(barillaData.political_warning === undefined, 'Approved products must not include an ethically cleared political_warning');
 
   // 2B. Same Barilla Spaghetti scanned by a user with a Wheat / Gluten allergy & Weight Loss goal
   const barillaAllergyRes = await fetch(`${baseUrl}/api/analyze-product-barcode`, {
@@ -158,7 +163,7 @@ async function runVerification() {
   assert(barillaAllergyData.healthStatus === 'POOR', 'healthStatus must be POOR when allergen is matched');
   assert(barillaAllergyData.allergy_warnings?.length > 0, 'allergy_warnings must be non-empty');
 
-  // 2C. Known barcode with sodium: Indomie Mi Goreng (089686010947)
+  // 2C. Known barcode with sodium: Indomie Mi Goreng (089686010947) in Indonesia (ID / IDR)
   const indomieRes = await fetch(`${baseUrl}/api/analyze-product-barcode`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -166,7 +171,7 @@ async function runVerification() {
       barcode: '089686010947',
       userId: 'anon',
       language: 'en',
-      locationContext: { country_code: 'ID' },
+      locationContext: { country_code: 'ID', currency: 'IDR' },
       profileContext: {
         goal: 'Weight Loss',
         daily_calorie_goal: 1600,
@@ -189,12 +194,15 @@ async function runVerification() {
     coloring: indomieData.coloring,
     goal_fit: indomieData.goal_fit,
     price: indomieData.price,
-    price_metadata: indomieData.price_metadata
+    price_range: indomieData.price_metadata?.price_range,
+    price_source: indomieData.price_metadata?.source
   });
   assert(indomieData.status === 'APPROVED', 'Indomie should be APPROVED');
   assert(typeof indomieData.calories === 'number' && indomieData.calories > 0, 'Indomie calories must be numeric > 0');
   assert(typeof indomieData.sodium_mg === 'number' && indomieData.sodium_mg > 100, `Indomie sodium_mg must be converted to mg (>100mg), got ${indomieData.sodium_mg}`);
-  assert(Boolean(indomieData.ingredients && indomieData.ingredients.length > 20), 'Indomie ingredients must be loaded from OFF');
+  assert(Boolean(indomieData.ingredients && indomieData.ingredients.length > 20), 'Indomie ingredients must be loaded');
+  assert(typeof indomieData.price === 'number' && indomieData.price > 0, 'Indomie must have an automatic IDR price');
+  assert(Boolean(indomieData.price_metadata?.price_range?.includes('Rp')), 'Indomie price_range must be formatted in IDR (Rp)');
 
   // 2D. Boycott FLAGGED regression check: Oreo (7622210100917)
   const oreoRes = await fetch(`${baseUrl}/api/analyze-product-barcode`, {

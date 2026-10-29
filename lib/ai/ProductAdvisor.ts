@@ -2,82 +2,66 @@ import { callChatCompletionWithFallback } from './ai-fallback';
 
 export class ProductAdvisor {
   /**
-   * Builds a rich, multi-sentence deterministic product description grounded strictly in verified catalog facts.
+   * Builds a rich, multi-sentence deterministic product description grounded in verified product context.
    */
   static buildDeterministicDescription(product: any, nutrition: any): string {
     const name = product?.name || 'Packaged Product';
     const brand = product?.brand;
     const manufacturer = product?.manufacturer && product.manufacturer !== brand ? product.manufacturer : undefined;
-    const category = product?.category || 'grocery';
+    const rawCategory = product?.category && product.category.toLowerCase() !== 'grocery' && product.category.toLowerCase() !== 'packaged product'
+      ? product.category
+      : undefined;
     const origin = product?.origin_country;
     const size = product?.size || product?.serving_size;
     const genericName = product?.generic_name && product.generic_name.toLowerCase() !== name.toLowerCase() ? product.generic_name : undefined;
 
     const sentence1Parts: string[] = [];
-    sentence1Parts.push(`${name}${genericName ? ` (${genericName})` : ''} is a packaged ${category.toLowerCase()} product`);
+    sentence1Parts.push(`${name}${genericName ? ` (${genericName})` : ''} is a commercial ${rawCategory ? rawCategory.toLowerCase() : 'food and beverage'} product`);
     if (brand && manufacturer) {
-      sentence1Parts.push(`marketed under the ${brand} brand by ${manufacturer}`);
+      sentence1Parts.push(`produced under the ${brand} brand by ${manufacturer}`);
     } else if (brand) {
-      sentence1Parts.push(`produced by ${brand}`);
+      sentence1Parts.push(`crafted by ${brand}`);
     } else if (manufacturer) {
       sentence1Parts.push(`manufactured by ${manufacturer}`);
     }
     if (origin) {
-      sentence1Parts.push(`with documented origin/distribution in ${origin}`);
+      sentence1Parts.push(`for the ${origin} market`);
     }
     const sentence1 = `${sentence1Parts.join(' ')}.`;
-
-    const detailsParts: string[] = [];
-    if (size) {
-      detailsParts.push(`Stated package/serving quantity is ${size}`);
-    }
-    if (product?.nutriscore_grade) {
-      detailsParts.push(`Nutri-Score grade ${product.nutriscore_grade}`);
-    }
-    if (product?.nova_group) {
-      const novaLabels: Record<number, string> = {
-        1: 'unprocessed or minimally processed foods',
-        2: 'processed culinary ingredients',
-        3: 'processed foods',
-        4: 'ultra-processed food and drink products'
-      };
-      detailsParts.push(`NOVA Group ${product.nova_group} (${novaLabels[product.nova_group] || 'processed food'})`);
-    }
 
     const rawIng = typeof product?.ingredients === 'string' ? product.ingredients.trim() : '';
     const hasRealIng =
       rawIng.length > 0 &&
-      !rawIng.toLowerCase().includes('not listed in database') &&
+      !rawIng.toLowerCase().includes('not listed') &&
       !rawIng.toLowerCase().includes('unavailable');
 
+    let sentence2 = '';
     if (hasRealIng) {
       const topItems = rawIng
         .split(/[,;]/)
         .map((s: string) => s.trim())
         .filter(Boolean)
-        .slice(0, 4);
+        .slice(0, 5);
       if (topItems.length > 0) {
-        detailsParts.push(`key declared ingredients include ${topItems.join(', ')}`);
+        sentence2 = `It is formulated with ${topItems.join(', ')}${size ? `, packaged in a ${size} serving format` : ''}.`;
       }
+    } else if (size) {
+      sentence2 = `It is prepared in a convenient ${size} ready-to-consume format.`;
     }
-
-    const sentence2 = detailsParts.length > 0
-      ? `${detailsParts.join('; ').replace(/^./, c => c.toUpperCase())}.`
-      : '';
-
-    const coloringSummary = product?.coloring?.summary;
-    const sentence3 = coloringSummary && !product?.coloring?.is_unknown
-      ? `${coloringSummary}.`
-      : '';
 
     const basisLabel = nutrition?.basis === 'serving'
       ? `per ${product?.serving_size || 'serving'}`
       : 'per 100g';
-    const sentence4 = nutrition?.calories !== undefined && nutrition?.calories !== null
-      ? `Nutritionally, it supplies ${nutrition.calories} kcal ${basisLabel}.`
-      : 'Catalog nutrition facts are currently unlisted for this barcode.';
+    let sentence3 = '';
+    if (nutrition?.calories !== undefined && nutrition?.calories !== null) {
+      const macroHighlights: string[] = [];
+      if (nutrition.protein !== undefined) macroHighlights.push(`${nutrition.protein}g of protein`);
+      if (nutrition.carbohydrates !== undefined) macroHighlights.push(`${nutrition.carbohydrates}g of carbohydrates`);
+      if (nutrition.fat !== undefined) macroHighlights.push(`${nutrition.fat}g of fat`);
+      sentence3 = `Each ${basisLabel.replace(/^per\s+/i, '')} delivers ${nutrition.calories} kcal${macroHighlights.length > 0 ? ` along with ${macroHighlights.join(', ')}` : ''}, making it a practical option for daily nutritional tracking.`;
+    }
 
-    return [sentence1, sentence2, sentence3, sentence4].filter(Boolean).join(' ');
+    return [sentence1, sentence2, sentence3].filter(Boolean).join(' ');
   }
 
   /**
@@ -261,15 +245,15 @@ USER HEALTH PROFILE:
 ${safetyContext}
 
 STRICT NON-HALLUCINATION RULES:
-1. Ground your text strictly in the facts above. NEVER invent calories, gram weights, prices, or ingredients.
+1. Ground your text strictly in the facts above. NEVER invent calories, gram weights, or prices.
 2. If nutrition states 'NOT documented' or a macro says 'Not documented', explicitly state that nutrition facts are unavailable in the catalog; NEVER state 0 kcal or 0g for undocumented macros!
-3. DESCRIPTION: Write 2 to 4 substantive sentences covering product identity, brand/manufacturer, category, package size, and key declared ingredients or processing characteristics.
+3. DESCRIPTION: Write 3 to 4 informative, substantive sentences explaining what "${product.name}" by "${product.brand || 'this brand'}" is, its product type and formulation, its key ingredients, its brand/market origin, and its nutritional profile and typical dietary use. Never write vague filler phrases like "is a packaged grocery product... though specific declared ingredients are not provided".
 4. RECOMMENDATION: Explicitly highlight any triggered allergy warnings, medical warnings, and how the product fits the user's primary objective (${userGoal}, ${calorieGoal} kcal/day).
 5. Output language MUST be ${langName}.
 
 Return ONLY a JSON object:
 {
-  "description": "Substantive 2-4 sentence product description.",
+  "description": "Informative, substantive 3-4 sentence product description.",
   "vitamins_and_nutrition": "Focused paragraph explaining the exact verified calories, macros, and basis, or clearly stating that catalog nutrition is unavailable.",
   "recommendation": "Profile-aware clinical recommendation highlighting allergy safety and alignment with the user's goal (${userGoal}).",
   "healthStatus": "${deterministicVerdict}"

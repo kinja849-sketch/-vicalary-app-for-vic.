@@ -43,7 +43,8 @@ export class ScannerDecisionEngine {
         enrichedProduct.category,
         enrichedProduct.name,
         ipAddress,
-        enrichedProduct.size || enrichedProduct.serving_size
+        enrichedProduct.size || enrichedProduct.serving_size,
+        enrichedProduct.brand
       );
 
       return {

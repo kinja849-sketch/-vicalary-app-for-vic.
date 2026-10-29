@@ -7,7 +7,6 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
 import { saveFoodAnalysis } from '@/lib/api/food';
 import { toast } from 'sonner';
-import { CrowdsourceForm } from '@/components/CrowdsourceForm';
 import { useQueryClient } from '@tanstack/react-query';
 import { getOrCreateCoachConversation } from '@/lib/api/chat';
 import { useTranslation } from '@/lib/api/translation';
@@ -68,6 +67,9 @@ export interface ProductDetailsProps {
   estimated_price?: string | null;
   price_metadata?: {
     amount?: number | null;
+    price_min?: number | null;
+    price_max?: number | null;
+    price_range?: string | null;
     currency?: string;
     status?: 'verified' | 'estimated' | 'needs_user_price';
     source?: string;
@@ -152,7 +154,6 @@ export function ProductDetails({
   status = "APPROVED",
   boycott,
   political_warning,
-  needs_crowdsourcing = false,
   cheaper_alternatives = [],
   type = "FOOD",
   generic_name,
@@ -163,7 +164,6 @@ export function ProductDetails({
   warnings,
   interactions,
   onClose,
-  onAddToDiary,
 }: ProductDetailsProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -173,18 +173,18 @@ export function ProductDetails({
   const setNavbarHidden = useAnalysisStore(state => state.setNavbarHidden);
   const [isLogging, setIsLogging] = useState(false);
   const [isNavigatingCoach, setIsNavigatingCoach] = useState(false);
-  const [showCrowdsourceForm, setShowCrowdsourceForm] = useState(false);
 
   const effectiveServingSize = servingSize || serving_size || size;
 
-  // Authentic price confirmation: ONLY pre-populate when price comes from verified cache or search, never from unverified heuristics
+  // Automatic IP-based price resolution
   const initialNumericPrice = (typeof price === 'number' && !isNaN(price) && price > 0)
     ? price
     : (typeof price_metadata?.amount === 'number' && !isNaN(price_metadata.amount) && price_metadata.amount > 0)
       ? price_metadata.amount
-      : 0;
-  const [userEnteredPrice, setUserEnteredPrice] = useState<number | ''>(initialNumericPrice > 0 ? initialNumericPrice : '');
-  const [isEditingPrice, setIsEditingPrice] = useState<boolean>(initialNumericPrice === 0 && Boolean(price_metadata?.needs_user_price));
+      : (typeof price_metadata?.reference_estimate?.amount === 'number' && price_metadata.reference_estimate.amount > 0)
+        ? price_metadata.reference_estimate.amount
+        : 0;
+  const userEnteredPrice = initialNumericPrice;
 
   // Split ingredients cleanly into distinct items respecting parentheses
   const ingredientList = React.useMemo(() => {
@@ -557,15 +557,7 @@ export function ProductDetails({
                   </div>
                 )}
               </section>
-            ) : (
-              /* PASSED GATE: Cleared Banner */
-              <div className="flex items-center gap-2 p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl">
-                <ShieldCheck className="w-5 h-5 text-emerald-500 dark:text-emerald-400 shrink-0" />
-                <p className="text-xs font-bold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider">
-                  {t('ethically_cleared')}
-                </p>
-              </div>
-            )}
+            ) : null}
 
             {/* If NOT flagged, proceed to Section 1, 2, 3, 4 */}
             {!isFlagged && (
@@ -584,19 +576,19 @@ export function ProductDetails({
                     {description ? (
                       description.split('\n\n').map((para: string, i: number) => <p key={i}>{para}</p>)
                     ) : (
-                      <p>{productName} is an authentic packaged food product registered under brand {brand || 'unspecified'}.</p>
+                      <p>{productName} is an authentic packaged product crafted by {brand || manufacturer || 'its manufacturer'}.</p>
                     )}
                   </div>
                 </section>
 
-                {/* SECTION 1B: INGREDIENTS & FOOD COLORINGS */}
+                {/* SECTION 1B: INGREDIENTS OF THE PRODUCT */}
                 <section className="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-[2rem] p-6 sm:p-7 shadow-sm space-y-4">
                   <div className="flex items-center gap-2">
                     <div className="size-8 rounded-xl bg-emerald-500/20 flex items-center justify-center text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
                       <Sparkles className="w-4 h-4" />
                     </div>
                     <h2 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
-                      {t('ingredients_food_coloring')}
+                      {t('ingredients_of_product') === 'ingredients_of_product' ? 'Ingredients of the Product' : t('ingredients_of_product')}
                     </h2>
                   </div>
 
@@ -626,11 +618,9 @@ export function ProductDetails({
                         ))}
                       </div>
                     ) : (
-                      <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl">
-                        <p className="text-amber-800 dark:text-amber-300 text-xs font-medium">
-                          Declared ingredients are not listed in the barcode catalog for this product. Inspect the physical packaging panel to verify contents.
-                        </p>
-                      </div>
+                      <p className="text-slate-600 dark:text-slate-300 text-xs sm:text-sm font-medium">
+                        {ingredients || `${productName} standard commercial formulation (${brand || 'packaged product'}).`}
+                      </p>
                     )}
 
                     {/* Original packaging statement if more than 1 item */}
@@ -646,46 +636,36 @@ export function ProductDetails({
                     )}
                   </div>
 
-                  {/* Accurate Food Coloring Detection */}
-                  <div className="space-y-2 pt-1">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 block">
-                      {t('food_coloring_analysis')}
-                    </span>
-                    <div className="flex flex-wrap gap-2">
-                      {coloring?.has_synthetic && coloring.synthetic_colors && coloring.synthetic_colors.length > 0 ? (
-                        coloring.synthetic_colors.map((c, i) => (
-                          <span key={`syn-${i}`} className="px-3 py-1.5 bg-rose-500/20 border border-rose-500/40 rounded-xl text-xs font-bold text-rose-600 dark:text-rose-300 flex items-center gap-1.5">
-                            <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                            Synthetic: {c}
-                          </span>
-                        ))
-                      ) : null}
+                  {/* Show Food Coloring Badges only when colorings are present */}
+                  {coloring?.has_colorings && (
+                    <div className="space-y-2 pt-1">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 block">
+                        {t('food_coloring_analysis')}
+                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        {coloring.has_synthetic && coloring.synthetic_colors && coloring.synthetic_colors.length > 0
+                          ? coloring.synthetic_colors.map((c, i) => (
+                              <span key={`syn-${i}`} className="px-3 py-1.5 bg-rose-500/20 border border-rose-500/40 rounded-xl text-xs font-bold text-rose-600 dark:text-rose-300 flex items-center gap-1.5">
+                                <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                                Synthetic: {c}
+                              </span>
+                            ))
+                          : null}
 
-                      {coloring?.natural_colors && coloring.natural_colors.length > 0 ? (
-                        coloring.natural_colors.map((nc, i) => (
-                          <span key={`nat-${i}`} className="px-3 py-1.5 bg-emerald-500/20 border border-emerald-500/40 rounded-xl text-xs font-bold text-emerald-600 dark:text-emerald-300 flex items-center gap-1.5">
-                            <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                            Natural: {nc}
-                          </span>
-                        ))
-                      ) : null}
-
-                      {!coloring?.has_colorings && (coloring?.is_unknown || coloring?.status === 'unknown' || ingredientList.length === 0) ? (
-                        <span className="px-3 py-1.5 bg-amber-500/15 border border-amber-500/30 rounded-xl text-xs font-semibold text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
-                          <Info className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                          {coloring?.summary || 'Ingredients unavailable — food coloring status cannot be verified'}
-                        </span>
-                      ) : !coloring?.has_colorings ? (
-                        <span className="px-3 py-1.5 bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                          <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                          {t('no_added_colorings')}
-                        </span>
-                      ) : null}
+                        {coloring.natural_colors && coloring.natural_colors.length > 0
+                          ? coloring.natural_colors.map((nc, i) => (
+                              <span key={`nat-${i}`} className="px-3 py-1.5 bg-emerald-500/20 border border-emerald-500/40 rounded-xl text-xs font-bold text-emerald-600 dark:text-emerald-300 flex items-center gap-1.5">
+                                <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                                Natural: {nc}
+                              </span>
+                            ))
+                          : null}
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </section>
 
-                {/* SECTION 2: VITAMINS & NUTRITION */}
+                {/* SECTION 2: CALORIES */}
                 <section className="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-[2rem] p-6 sm:p-7 shadow-sm space-y-6">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
@@ -694,7 +674,7 @@ export function ProductDetails({
                       </div>
                       <div>
                         <h2 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
-                          {t('vitamins_nutrition')}
+                          {t('calories') || 'Calories'}
                         </h2>
                         <span className="text-[11px] text-slate-500 dark:text-slate-400 font-semibold">
                           {serving_basis === 'serving'
@@ -883,143 +863,48 @@ export function ProductDetails({
                   </div>
                 </section>
 
-                {/* SECTION 4: LOCALIZED PRICE & BUDGET CONFIRMATION */}
-                <section className="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-2.5">
+                {/* SECTION 4: AUTOMATIC IP-BASED LOCAL RETAIL PRICE RANGE */}
+                <section className="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <span className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white block">
-                        {price_metadata?.status === 'verified'
-                          ? t('verified_local_price')
-                          : price_metadata?.status === 'estimated'
-                            ? t('estimated_local_price')
-                            : 'Shelf Price (Enter Local Price)'}
+                      <span className="text-xs font-black uppercase tracking-wider text-slate-900 dark:text-white block">
+                        {t('verified_local_price') || 'Local Retail Price Range'}
                       </span>
                       {price_metadata?.source && (
-                        <span className="text-[11px] text-slate-500 dark:text-slate-400 block">
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400 block mt-0.5">
                           Source: {price_metadata.source}
                         </span>
                       )}
-                      {price_metadata?.reference_estimate && (userEnteredPrice === '' || Number(userEnteredPrice) === 0) && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (price_metadata?.reference_estimate?.amount) {
-                              setUserEnteredPrice(price_metadata.reference_estimate.amount);
-                              setIsEditingPrice(false);
-                            }
-                          }}
-                          className="mt-1 text-[11px] font-semibold text-amber-600 dark:text-amber-400 hover:underline text-left block"
-                        >
-                          {price_metadata.reference_estimate.label} — Tap to use
-                        </button>
-                      )}
                     </div>
                     <div className="text-right shrink-0">
-                      {isEditingPrice ? (
-                        <div className="flex items-center gap-1.5 justify-end">
-                          <span className="text-xs font-bold text-slate-500 dark:text-slate-400">{price_metadata?.currency || '$'}</span>
-                          <input
-                            type="number"
-                            step="any"
-                            value={userEnteredPrice}
-                            onChange={(e) => setUserEnteredPrice(e.target.value === '' ? '' : parseFloat(e.target.value))}
-                            placeholder="Enter price"
-                            className="w-28 px-2 py-1 bg-white dark:bg-black/70 border border-vic-green rounded-lg text-right font-black text-slate-900 dark:text-white text-base focus:outline-none"
-                          />
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setIsEditingPrice(true)}
-                          className="text-right group flex items-baseline gap-1.5 justify-end cursor-pointer"
-                          title="Click to enter or adjust purchase price"
-                        >
-                          <span className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-[#21ff64] group-hover:underline">
-                            {userEnteredPrice !== '' && Number(userEnteredPrice) > 0
-                              ? `${price_metadata?.currency || '$'} ${Number(userEnteredPrice).toLocaleString()}`
-                              : (estimated_price || "Enter Shelf Price")}
-                          </span>
-                        </button>
-                      )}
-                      <span className="text-[10px] text-slate-500 dark:text-slate-400 block mt-0.5">
-                        {userEnteredPrice !== '' && Number(userEnteredPrice) > 0
-                          ? 'Tap to adjust shelf price'
-                          : 'Enter shelf price to deduct from budget'}
+                      <span className="text-lg sm:text-xl font-black text-emerald-600 dark:text-[#21ff64] block">
+                        {price_metadata?.price_range ||
+                          estimated_price ||
+                          (initialNumericPrice > 0
+                            ? `${price_metadata?.currency === 'IDR' ? 'Rp' : (price_metadata?.currency || '$')} ${initialNumericPrice.toLocaleString()}`
+                            : 'Local Market Rate')}
                       </span>
+                      {initialNumericPrice > 0 && (
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400 font-semibold block mt-0.5">
+                          Avg Retail: {price_metadata?.currency === 'IDR' ? 'Rp' : (price_metadata?.currency || '$')} {initialNumericPrice.toLocaleString()}
+                        </span>
+                      )}
                     </div>
                   </div>
-
-                  {isEditingPrice && (
-                    <div className="flex justify-end pt-1">
-                      <button
-                        type="button"
-                        onClick={() => setIsEditingPrice(false)}
-                        className="text-[11px] font-bold text-emerald-600 dark:text-vic-green hover:underline uppercase tracking-wider"
-                      >
-                        Confirm Price
-                      </button>
-                    </div>
-                  )}
                 </section>
               </>
             )}
           </>
         )}
 
-      </main>
-
-      {/* Sticky Bottom Action Dock: ALWAYS VISIBLE AND HORIZONTALLY PROPORTIONED */}
-      <footer className="shrink-0 z-30 bg-white/95 dark:bg-[#0b141a]/95 backdrop-blur-xl border-t border-slate-200 dark:border-slate-800 px-5 py-3.5 shadow-lg max-w-2xl mx-auto w-full">
-        <div className="flex flex-row items-center gap-3 w-full">
-          {isMedication ? (
-            <button
-              onClick={handleConsultCoach}
-              disabled={isNavigatingCoach}
-              className="w-full h-14 px-4 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 active:scale-[0.98] text-white rounded-2xl font-black text-sm shadow-lg shadow-blue-500/25 flex items-center justify-center gap-2.5 transition-all disabled:opacity-50 whitespace-nowrap cursor-pointer border border-blue-400/30"
-            >
-              {isNavigatingCoach ? (
-                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              ) : (
-                <img
-                  src="/app-logo.png"
-                  alt="Application Logo"
-                  className="w-8 h-8 rounded-full object-cover shrink-0 ring-2 ring-white/80 shadow-md"
-                  onError={(e) => {
-                    (e.target as HTMLElement).setAttribute('src', '/icon.png');
-                  }}
-                />
-              )}
-              <span className="tracking-wide">{t('health_coach') || "Health Coach"}</span>
-            </button>
-          ) : (
-            <>
-              {!isFlagged ? (
-                <button
-                  onClick={handleConfirmLog}
-                  disabled={isLogging}
-                  className="flex-1 h-14 px-4 bg-vic-green hover:bg-vic-green/90 active:scale-[0.98] text-slate-900 rounded-2xl font-black text-sm shadow-md flex items-center justify-center gap-2.5 transition-all disabled:opacity-50 whitespace-nowrap cursor-pointer"
-                >
-                  {isLogging ? (
-                    <div className="w-5 h-5 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <Check className="w-5 h-5 text-slate-900" strokeWidth={3} />
-                  )}
-                  <span>{t('budget')}</span>
-                </button>
-              ) : (
-                <button
-                  onClick={onClose}
-                  className="flex-1 h-14 px-4 bg-rose-600 hover:bg-rose-500 active:scale-[0.98] text-white rounded-2xl font-black text-sm shadow-md flex items-center justify-center gap-2.5 transition-all whitespace-nowrap cursor-pointer"
-                >
-                  <AlertCircle className="w-5 h-5" />
-                  <span>{t('avoid_product_btn')}</span>
-                </button>
-              )}
-
+        {/* Action Buttons at the Bottom of the Scrollable Section (only visible once scrolled through the whole section) */}
+        <div className="pt-2 pb-10">
+          <div className="flex flex-row items-center gap-3 w-full">
+            {isMedication ? (
               <button
                 onClick={handleConsultCoach}
                 disabled={isNavigatingCoach}
-                className="flex-1 h-14 px-4 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 active:scale-[0.98] text-white rounded-2xl font-black text-sm shadow-lg shadow-blue-500/25 flex items-center justify-center gap-2.5 transition-all disabled:opacity-50 whitespace-nowrap cursor-pointer border border-blue-400/30"
+                className="w-full h-14 px-4 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 active:scale-[0.98] text-white rounded-2xl font-black text-sm shadow-lg shadow-blue-500/25 flex items-center justify-center gap-2.5 transition-all disabled:opacity-50 whitespace-nowrap cursor-pointer border border-blue-400/30"
               >
                 {isNavigatingCoach ? (
                   <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -1033,30 +918,57 @@ export function ProductDetails({
                     }}
                   />
                 )}
-                <span className="tracking-wide">{t('health_coach') || "Health Coach"}</span>
+                <span className="tracking-wide">{t('health_coach') === 'health_coach' ? 'Health Coach' : (t('health_coach') || 'Health Coach')}</span>
               </button>
-            </>
-          )}
+            ) : (
+              <>
+                {!isFlagged ? (
+                  <button
+                    onClick={handleConfirmLog}
+                    disabled={isLogging}
+                    className="flex-1 h-14 px-4 bg-vic-green hover:bg-vic-green/90 active:scale-[0.98] text-slate-900 rounded-2xl font-black text-sm shadow-md flex items-center justify-center gap-2.5 transition-all disabled:opacity-50 whitespace-nowrap cursor-pointer"
+                  >
+                    {isLogging ? (
+                      <div className="w-5 h-5 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <Check className="w-5 h-5 text-slate-900" strokeWidth={3} />
+                    )}
+                    <span>{t('budget')}</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={onClose}
+                    className="flex-1 h-14 px-4 bg-rose-600 hover:bg-rose-500 active:scale-[0.98] text-white rounded-2xl font-black text-sm shadow-md flex items-center justify-center gap-2.5 transition-all whitespace-nowrap cursor-pointer"
+                  >
+                    <AlertCircle className="w-5 h-5" />
+                    <span>{t('avoid_product_btn')}</span>
+                  </button>
+                )}
+
+                <button
+                  onClick={handleConsultCoach}
+                  disabled={isNavigatingCoach}
+                  className="flex-1 h-14 px-4 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 active:scale-[0.98] text-white rounded-2xl font-black text-sm shadow-lg shadow-blue-500/25 flex items-center justify-center gap-2.5 transition-all disabled:opacity-50 whitespace-nowrap cursor-pointer border border-blue-400/30"
+                >
+                  {isNavigatingCoach ? (
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <img
+                      src="/app-logo.png"
+                      alt="Application Logo"
+                      className="w-8 h-8 rounded-full object-cover shrink-0 ring-2 ring-white/80 shadow-md"
+                      onError={(e) => {
+                        (e.target as HTMLElement).setAttribute('src', '/icon.png');
+                      }}
+                    />
+                  )}
+                  <span className="tracking-wide">{t('health_coach') === 'health_coach' ? 'Health Coach' : (t('health_coach') || 'Health Coach')}</span>
+                </button>
+              </>
+            )}
+          </div>
         </div>
-
-        {needs_crowdsourcing && (
-          <button
-            onClick={() => setShowCrowdsourceForm(true)}
-            className="w-full mt-2 py-2 bg-blue-500/10 text-blue-500 dark:text-blue-400 rounded-xl text-xs font-bold hover:bg-blue-500/20 transition-all"
-          >
-            Report Product Info to Database
-          </button>
-        )}
-      </footer>
-
-      {showCrowdsourceForm && (
-        <CrowdsourceForm
-          barcode={barcode || ''}
-          productName={productName}
-          brandName={brand || manufacturer}
-          onClose={() => setShowCrowdsourceForm(false)}
-        />
-      )}
+      </main>
     </div>
   );
 }
