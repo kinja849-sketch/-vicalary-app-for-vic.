@@ -17,10 +17,17 @@ export interface ProductDetailsProps {
   productName: string;
   barcode?: string;
   servingSize?: string;
+  serving_size?: string;
+  size?: string;
   category?: string;
   description?: string;
   ingredients?: string | null;
+  ingredients_status?: 'verified' | 'ocr' | 'unavailable' | string;
+  allergens?: string[];
+  traces?: string[];
   coloring?: {
+    status?: 'verified_colorings' | 'verified_none' | 'unknown';
+    is_unknown?: boolean;
     has_colorings?: boolean;
     has_synthetic?: boolean;
     synthetic_colors?: string[];
@@ -31,29 +38,49 @@ export interface ProductDetailsProps {
   recommendation?: string;
   recommended_pairings?: string;
   healthStatus?: string;
+  is_safe_for_profile?: boolean;
+  safety_warnings?: string[];
+  allergy_warnings?: string[];
+  medical_warnings?: string[];
+  matched_allergens?: string[];
+  goal_fit?: {
+    status: 'GOOD' | 'MODERATE' | 'POOR';
+    targetGoal: string;
+    headline: string;
+    reason: string;
+  } | null;
   calories?: number | null;
   protein?: number | null;
   carbs?: number | null;
   fat?: number | null;
+  saturated_fat?: number | null;
   sugar?: number | null;
   fiber?: number | null;
   sodium_mg?: number | null;
   vitamins?: string[];
   minerals?: string[];
   serving_basis?: string;
+  nutrition_status?: 'verified' | 'ocr' | 'unavailable' | string;
   origin_country?: string;
   brand?: string;
   manufacturer?: string;
   price?: number | null;
   estimated_price?: string | null;
   price_metadata?: {
-    amount?: number;
+    amount?: number | null;
     currency?: string;
+    status?: 'verified' | 'estimated' | 'needs_user_price';
     source?: string;
     retrievedAt?: string;
     retailer?: string;
     needs_user_price?: boolean;
     confidence?: number;
+    reference_estimate?: {
+      amount: number;
+      currency: string;
+      formatted: string;
+      label: string;
+    } | null;
   } | null;
   is_compliant?: boolean;
   status?: 'FLAGGED' | 'APPROVED' | string;
@@ -88,13 +115,23 @@ export function ProductDetails({
   productName,
   barcode,
   servingSize,
+  serving_size,
+  size,
   category,
   description,
   ingredients,
+  ingredients_status,
+  allergens = [],
   coloring,
   vitamins_and_nutrition,
   recommendation,
   healthStatus = "GOOD",
+  is_safe_for_profile = true,
+  safety_warnings = [],
+  allergy_warnings = [],
+  medical_warnings = [],
+  matched_allergens = [],
+  goal_fit = null,
   calories,
   protein,
   carbs,
@@ -104,7 +141,7 @@ export function ProductDetails({
   sodium_mg,
   vitamins = [],
   minerals = [],
-  serving_basis = "serving",
+  serving_basis = "100g",
   origin_country,
   brand,
   manufacturer,
@@ -138,16 +175,16 @@ export function ProductDetails({
   const [isNavigatingCoach, setIsNavigatingCoach] = useState(false);
   const [showCrowdsourceForm, setShowCrowdsourceForm] = useState(false);
 
-  // Authentic price confirmation: allow user to inspect or adjust before confirming to daily budget
+  const effectiveServingSize = servingSize || serving_size || size;
+
+  // Authentic price confirmation: ONLY pre-populate when price comes from verified cache or search, never from unverified heuristics
   const initialNumericPrice = (typeof price === 'number' && !isNaN(price) && price > 0)
     ? price
     : (typeof price_metadata?.amount === 'number' && !isNaN(price_metadata.amount) && price_metadata.amount > 0)
       ? price_metadata.amount
-      : (typeof estimated_price === 'number' && estimated_price > 0)
-        ? estimated_price
-        : (estimated_price ? parseInt(String(estimated_price).replace(/[^0-9]/g, ''), 10) || 0 : 0);
+      : 0;
   const [userEnteredPrice, setUserEnteredPrice] = useState<number | ''>(initialNumericPrice > 0 ? initialNumericPrice : '');
-  const [isEditingPrice, setIsEditingPrice] = useState(false);
+  const [isEditingPrice, setIsEditingPrice] = useState<boolean>(initialNumericPrice === 0 && Boolean(price_metadata?.needs_user_price));
 
   // Split ingredients cleanly into distinct items respecting parentheses
   const ingredientList = React.useMemo(() => {
@@ -307,11 +344,13 @@ export function ProductDetails({
 
         <div className="flex items-center gap-2">
           <span className={`px-3 py-1 rounded-full text-xs font-black tracking-wider uppercase shadow-sm ${
-            isFlagged ? 'bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/30' :
-            healthStatus === 'MODERATE' ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30' :
-            'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30'
+            isFlagged || !is_safe_for_profile || healthStatus === 'POOR'
+              ? 'bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/30'
+              : healthStatus === 'MODERATE'
+                ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30'
+                : 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30'
           }`}>
-            {isFlagged ? 'Avoid' : healthStatus === 'MODERATE' ? 'Moderate' : 'Good'}
+            {isFlagged || !is_safe_for_profile ? 'Avoid' : healthStatus === 'POOR' ? 'Poor Fit' : healthStatus === 'MODERATE' ? 'Moderate' : 'Good'}
           </span>
         </div>
         <div className="size-10" /> {/* Spacer */}
@@ -346,10 +385,10 @@ export function ProductDetails({
             <h1 className="text-3xl sm:text-4xl font-black text-white tracking-tight drop-shadow-md">
               {productName}
             </h1>
-            {brand && (
+            {(brand || manufacturer) && (
               <p className="text-sm text-slate-300 font-semibold mt-1 flex items-center gap-1.5">
-                <ShoppingCart className="w-4 h-4 text-emerald-400" /> Brand: {brand}
-                {manufacturer && manufacturer !== brand && ` (${manufacturer})`}
+                <ShoppingCart className="w-4 h-4 text-emerald-400" /> Brand: {brand || manufacturer}
+                {manufacturer && brand && manufacturer !== brand && ` (${manufacturer})`}
               </p>
             )}
           </div>
@@ -589,7 +628,7 @@ export function ProductDetails({
                     ) : (
                       <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl">
                         <p className="text-amber-800 dark:text-amber-300 text-xs font-medium">
-                          {ingredients || "Ingredients not listed in database; photograph the ingredients panel to verify contents."}
+                          Declared ingredients are not listed in the barcode catalog for this product. Inspect the physical packaging panel to verify contents.
                         </p>
                       </div>
                     )}
@@ -631,12 +670,17 @@ export function ProductDetails({
                         ))
                       ) : null}
 
-                      {!coloring?.has_colorings && (
+                      {!coloring?.has_colorings && (coloring?.is_unknown || coloring?.status === 'unknown' || ingredientList.length === 0) ? (
+                        <span className="px-3 py-1.5 bg-amber-500/15 border border-amber-500/30 rounded-xl text-xs font-semibold text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
+                          <Info className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                          {coloring?.summary || 'Ingredients unavailable — food coloring status cannot be verified'}
+                        </span>
+                      ) : !coloring?.has_colorings ? (
                         <span className="px-3 py-1.5 bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
                           <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                           {t('no_added_colorings')}
                         </span>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                 </section>
@@ -653,7 +697,9 @@ export function ProductDetails({
                           {t('vitamins_nutrition')}
                         </h2>
                         <span className="text-[11px] text-slate-500 dark:text-slate-400 font-semibold">
-                          {servingSize ? `Basis: ${servingSize}` : (serving_basis === 'serving' ? 'Per Serving' : 'Per 100g')}
+                          {serving_basis === 'serving'
+                            ? `Basis: Per Serving${effectiveServingSize && effectiveServingSize !== '100g' ? ` (${effectiveServingSize})` : ''}`
+                            : 'Basis: Per 100g'}
                         </span>
                       </div>
                     </div>
@@ -666,13 +712,17 @@ export function ProductDetails({
                     </span>
                     <div className="text-4xl sm:text-5xl font-black text-slate-900 dark:text-white tracking-tight my-1">
                       {calories !== null && calories !== undefined ? (
-                        <><span className="text-emerald-600 dark:text-[#21ff64]">~{calories}</span> <span className="text-2xl font-bold text-slate-400">kcal</span></>
+                        <><span className="text-emerald-600 dark:text-[#21ff64]">{calories}</span> <span className="text-2xl font-bold text-slate-400">kcal</span></>
                       ) : (
-                        <span className="text-base sm:text-lg font-bold text-amber-600 dark:text-amber-400">Not available — scan nutrition label</span>
+                        <span className="text-base sm:text-lg font-bold text-amber-600 dark:text-amber-400">Nutrition facts unavailable in catalog</span>
                       )}
                     </div>
-                    {servingSize && (
-                      <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">Serving Size: {servingSize}</p>
+                    {calories !== null && calories !== undefined && (
+                      <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                        {serving_basis === 'serving'
+                          ? `Per Serving${effectiveServingSize && effectiveServingSize !== '100g' ? ` (${effectiveServingSize})` : ''}`
+                          : 'Per 100g'}
+                      </p>
                     )}
                   </div>
 
@@ -733,16 +783,97 @@ export function ProductDetails({
                   )}
                 </section>
 
-                {/* SECTION 3: RECOMMENDED FOR YOUR PLAN */}
-                <section className="bg-vic-blue/10 border border-vic-blue/20 rounded-[2rem] p-6 sm:p-7 shadow-sm space-y-4">
-                  <div className="flex items-center gap-2">
-                    <div className="size-8 rounded-xl bg-vic-blue/20 flex items-center justify-center text-vic-blue border border-vic-blue/30">
-                      <Check className="w-4 h-4" />
+                {/* SECTION 3: RECOMMENDED FOR YOUR PLAN (HARD-HIGHLIGHTED ALLERGIES & GOAL FIT) */}
+                <section className={`rounded-[2rem] p-6 sm:p-7 shadow-sm space-y-4 border ${
+                  !is_safe_for_profile || (allergy_warnings && allergy_warnings.length > 0) || (medical_warnings && medical_warnings.length > 0)
+                    ? 'bg-rose-500/10 border-rose-500/30'
+                    : healthStatus === 'POOR'
+                      ? 'bg-rose-500/5 border-rose-500/25'
+                      : healthStatus === 'MODERATE'
+                        ? 'bg-amber-500/5 border-amber-500/25'
+                        : 'bg-vic-blue/10 border-vic-blue/20'
+                }`}>
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <div className={`size-8 rounded-xl flex items-center justify-center border ${
+                        !is_safe_for_profile || healthStatus === 'POOR'
+                          ? 'bg-rose-500/20 text-rose-500 border-rose-500/30'
+                          : healthStatus === 'MODERATE'
+                            ? 'bg-amber-500/20 text-amber-500 border-amber-500/30'
+                            : 'bg-vic-blue/20 text-vic-blue border-vic-blue/30'
+                      }`}>
+                        {!is_safe_for_profile || healthStatus === 'POOR' ? (
+                          <TriangleAlert className="w-4 h-4" />
+                        ) : (
+                          <Check className="w-4 h-4" />
+                        )}
+                      </div>
+                      <h2 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
+                        {t('recommended_for_plan')}
+                      </h2>
                     </div>
-                    <h2 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
-                      {t('recommended_for_plan')}
-                    </h2>
+
+                    {goal_fit && (
+                      <span className={`px-3 py-1 rounded-full text-[11px] font-black uppercase tracking-wider border ${
+                        goal_fit.status === 'POOR'
+                          ? 'bg-rose-500/20 text-rose-600 dark:text-rose-300 border-rose-500/30'
+                          : goal_fit.status === 'MODERATE'
+                            ? 'bg-amber-500/20 text-amber-700 dark:text-amber-300 border-amber-500/30'
+                            : 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                      }`}>
+                        Goal Fit: {goal_fit.status}
+                      </span>
+                    )}
                   </div>
+
+                  {/* Hard-Highlighted Allergen & Medical Alert Banner */}
+                  {((allergy_warnings && allergy_warnings.length > 0) ||
+                    (medical_warnings && medical_warnings.length > 0) ||
+                    (safety_warnings && safety_warnings.length > 0)) && (
+                    <div className="p-4 bg-rose-500/15 border border-rose-500/40 rounded-2xl space-y-2">
+                      <div className="flex items-center gap-2 text-rose-600 dark:text-rose-300 font-black text-xs uppercase tracking-wider">
+                        <AlertCircle className="w-4 h-4 shrink-0" />
+                        <span>
+                          {allergy_warnings && allergy_warnings.length > 0
+                            ? `Allergy Safety Alert${matched_allergens && matched_allergens.length > 0 ? `: ${matched_allergens.join(', ')}` : ''}`
+                            : 'Medical Profile Contradiction'}
+                        </span>
+                      </div>
+                      <div className="space-y-1.5 text-xs sm:text-sm font-semibold text-rose-900 dark:text-rose-200 leading-relaxed">
+                        {(safety_warnings && safety_warnings.length > 0
+                          ? safety_warnings
+                          : [...(allergy_warnings || []), ...(medical_warnings || [])]
+                        ).map((warn, idx) => (
+                          <p key={idx}>{warn}</p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Explicit Goal Fit Highlight Card */}
+                  {goal_fit && (
+                    <div className={`p-4 rounded-2xl border space-y-1 ${
+                      goal_fit.status === 'POOR'
+                        ? 'bg-rose-500/10 border-rose-500/25'
+                        : goal_fit.status === 'MODERATE'
+                          ? 'bg-amber-500/10 border-amber-500/25'
+                          : 'bg-emerald-500/10 border-emerald-500/25'
+                    }`}>
+                      <p className={`text-xs font-black uppercase tracking-wider ${
+                        goal_fit.status === 'POOR'
+                          ? 'text-rose-600 dark:text-rose-300'
+                          : goal_fit.status === 'MODERATE'
+                            ? 'text-amber-700 dark:text-amber-300'
+                            : 'text-emerald-700 dark:text-emerald-300'
+                      }`}>
+                        {goal_fit.headline}
+                      </p>
+                      <p className="text-xs sm:text-sm text-slate-700 dark:text-slate-200 font-medium leading-relaxed">
+                        {goal_fit.reason}
+                      </p>
+                    </div>
+                  )}
+
                   <div className="text-slate-600 dark:text-slate-300 text-sm sm:text-[15px] leading-relaxed space-y-3 font-normal">
                     {recommendation ? (
                       recommendation.split('\n\n').map((p: string, i: number) => <p key={i}>{p}</p>)
@@ -754,16 +885,36 @@ export function ProductDetails({
 
                 {/* SECTION 4: LOCALIZED PRICE & BUDGET CONFIRMATION */}
                 <section className="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-2.5">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-3">
                     <div>
                       <span className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white block">
-                        {price_metadata?.source?.includes('Cache') ? t('verified_local_price') : t('estimated_local_price')}
+                        {price_metadata?.status === 'verified'
+                          ? t('verified_local_price')
+                          : price_metadata?.status === 'estimated'
+                            ? t('estimated_local_price')
+                            : 'Shelf Price (Enter Local Price)'}
                       </span>
                       {price_metadata?.source && (
-                        <span className="text-[11px] text-slate-500 dark:text-slate-400">Source: {price_metadata.source}</span>
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400 block">
+                          Source: {price_metadata.source}
+                        </span>
+                      )}
+                      {price_metadata?.reference_estimate && (userEnteredPrice === '' || Number(userEnteredPrice) === 0) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (price_metadata?.reference_estimate?.amount) {
+                              setUserEnteredPrice(price_metadata.reference_estimate.amount);
+                              setIsEditingPrice(false);
+                            }
+                          }}
+                          className="mt-1 text-[11px] font-semibold text-amber-600 dark:text-amber-400 hover:underline text-left block"
+                        >
+                          {price_metadata.reference_estimate.label} — Tap to use
+                        </button>
                       )}
                     </div>
-                    <div className="text-right">
+                    <div className="text-right shrink-0">
                       {isEditingPrice ? (
                         <div className="flex items-center gap-1.5 justify-end">
                           <span className="text-xs font-bold text-slate-500 dark:text-slate-400">{price_metadata?.currency || '$'}</span>
@@ -772,9 +923,8 @@ export function ProductDetails({
                             step="any"
                             value={userEnteredPrice}
                             onChange={(e) => setUserEnteredPrice(e.target.value === '' ? '' : parseFloat(e.target.value))}
-                            placeholder="0.00"
+                            placeholder="Enter price"
                             className="w-28 px-2 py-1 bg-white dark:bg-black/70 border border-vic-green rounded-lg text-right font-black text-slate-900 dark:text-white text-base focus:outline-none"
-                            autoFocus
                           />
                         </div>
                       ) : (
@@ -782,16 +932,20 @@ export function ProductDetails({
                           type="button"
                           onClick={() => setIsEditingPrice(true)}
                           className="text-right group flex items-baseline gap-1.5 justify-end cursor-pointer"
-                          title="Click to adjust purchase price"
+                          title="Click to enter or adjust purchase price"
                         >
                           <span className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-[#21ff64] group-hover:underline">
                             {userEnteredPrice !== '' && Number(userEnteredPrice) > 0
                               ? `${price_metadata?.currency || '$'} ${Number(userEnteredPrice).toLocaleString()}`
-                              : (estimated_price || "Price Unavailable")}
+                              : (estimated_price || "Enter Shelf Price")}
                           </span>
                         </button>
                       )}
-                      <span className="text-[10px] text-slate-500 dark:text-slate-400 block mt-0.5">Tap to adjust shelf price</span>
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400 block mt-0.5">
+                        {userEnteredPrice !== '' && Number(userEnteredPrice) > 0
+                          ? 'Tap to adjust shelf price'
+                          : 'Enter shelf price to deduct from budget'}
+                      </span>
                     </div>
                   </div>
 

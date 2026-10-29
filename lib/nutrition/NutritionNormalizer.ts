@@ -572,62 +572,42 @@ const COMMON_FOOD_NUTRITION: Record<string, {
 
 export class NutritionNormalizer {
   /**
-   * Resolves authoritative reference nutrition for packaged foods when label nutriments are missing.
-   * Scales per 100g / 100ml against stated package quantity / serving size (e.g. 250ml).
+   * Resolves deterministic zero-calorie nutrition ONLY for plain unflavored mineral/drinking water
+   * when label nutriments are omitted on packaging. Never fabricates category heuristics for food products.
    */
   static resolvePackagedProductNutrition(
     productName: string,
     category?: string,
-    servingSizeStr?: string,
-    quantityStr?: string
+    _servingSizeStr?: string,
+    _quantityStr?: string
   ): NormalizedNutrientData | null {
     const name = (productName || '').toLowerCase().trim();
     const cat = (category || '').toLowerCase().trim();
-    const size = (servingSizeStr || quantityStr || '').toLowerCase().trim();
 
-    let grams = 100;
-    const mlMatch = size.match(/(\d+(?:\.\d+)?)\s*(?:ml|mili|g|gram)/i) || name.match(/(\d+(?:\.\d+)?)\s*(?:ml|mili|g|gram)/i);
-    const literMatch = size.match(/(\d+(?:\.\d+)?)\s*(?:l|liter|litre)/i) || name.match(/(\d+(?:\.\d+)?)\s*(?:l|liter|litre)/i);
-    if (literMatch) {
-      grams = parseFloat(literMatch[1]) * 1000;
-    } else if (mlMatch) {
-      grams = parseFloat(mlMatch[1]);
-    } else if (name.includes('250')) {
-      grams = 250;
-    } else if (name.includes('200')) {
-      grams = 200;
-    } else if (name.includes('1000') || name.includes('1l')) {
-      grams = 1000;
-    }
+    const isFlavoredOrSweetened =
+      name.includes('flavored') ||
+      name.includes('flavoured') ||
+      name.includes('sparkling') && (name.includes('juice') || name.includes('lemonade') || name.includes('syrup')) ||
+      name.includes('vitamin water') ||
+      name.includes('coconut water') ||
+      name.includes('air kelapa') ||
+      name.includes('tonic water') ||
+      name.includes('soda water') && name.includes('sweet');
 
-    const scale = grams / 100;
+    const isPlainWater =
+      !isFlavoredOrSweetened &&
+      (name === 'water' ||
+        name.includes('mineral water') ||
+        name.includes('spring water') ||
+        name.includes('drinking water') ||
+        name.includes('purified water') ||
+        name.includes('air mineral') ||
+        name.includes('air minum') ||
+        cat === 'waters' ||
+        cat === 'mineral waters' ||
+        cat === 'spring waters');
 
-    // Check dairy / milk / susu
-    if (name.includes('milk') || name.includes('susu') || cat.includes('dairy') || cat.includes('milk')) {
-      const isSkim = name.includes('skim') || name.includes('low fat') || name.includes('non fat');
-      const isChocolate = name.includes('chocolate') || name.includes('cokelat');
-      
-      const baseKcal = isSkim ? 42 : isChocolate ? 78 : 62;
-      const baseProt = isSkim ? 3.4 : 3.2;
-      const baseCarb = isChocolate ? 11.5 : 4.8;
-      const baseFat = isSkim ? 0.2 : isChocolate ? 2.5 : 3.4;
-      const baseSugar = isChocolate ? 10.5 : 4.8;
-
-      return {
-        calories: Math.round(baseKcal * scale),
-        protein: Math.round(baseProt * scale * 10) / 10,
-        carbs: Math.round(baseCarb * scale * 10) / 10,
-        fat: Math.round(baseFat * scale * 10) / 10,
-        fiber: 0,
-        sugar: Math.round(baseSugar * scale * 10) / 10,
-        sodium_mg: Math.round(45 * scale),
-        vitamins: ['Vitamin D', 'Vitamin A', 'Vitamin B12', 'Riboflavin (B2)'],
-        minerals: ['Calcium', 'Phosphorus', 'Potassium', 'Magnesium']
-      };
-    }
-
-    // Check mineral water
-    if (name.includes('water') || name.includes('aqua') || name.includes('minerale') || name.includes('air mineral')) {
+    if (isPlainWater) {
       return {
         calories: 0,
         protein: 0,
@@ -635,7 +615,7 @@ export class NutritionNormalizer {
         fat: 0,
         fiber: 0,
         sugar: 0,
-        sodium_mg: 5,
+        sodium_mg: 0,
         vitamins: [],
         minerals: ['Calcium', 'Magnesium', 'Potassium']
       };
@@ -645,70 +625,10 @@ export class NutritionNormalizer {
   }
 
   /**
-   * Resolves authentic declared packaging ingredients for common packaged products
-   * when Open Food Facts data has empty or missing ingredients_text.
+   * Never fabricate or guess ingredients from product category heuristics.
+   * Declared ingredients must come strictly from authoritative catalog records or packaging OCR.
    */
-  static resolvePackagedProductIngredients(productName?: string, category?: string, brand?: string): string | null {
-    const name = (productName || '').toLowerCase().trim();
-    const cat = (category || '').toLowerCase().trim();
-    const b = (brand || '').toLowerCase().trim();
-
-    // 1. Milk / Susu
-    if (name.includes('milk') || name.includes('susu') || cat.includes('milk') || cat.includes('dairy')) {
-      if (name.includes('full cream') || (name.includes('plain') && !name.includes('low fat'))) {
-        return "Susu Sapi Segar (Fresh Cow's Milk) 100%";
-      }
-      if (name.includes('chocolate') || name.includes('cokelat') || name.includes('coklat')) {
-        return "Susu Sapi Segar (Fresh Cow's Milk), Sukrosa (Gula), Bubuk Cokelat, Penstabil Nabati, Perisa Alami Cokelat, Garam, Vitamin A, Vitamin D3, Vitamin B1, Vitamin B2, Vitamin B6, Vitamin B12";
-      }
-      if (name.includes('strawberry') || name.includes('stroberi')) {
-        return "Susu Sapi Segar (Fresh Cow's Milk), Sukrosa (Gula), Penstabil Nabati, Perisa Alami Stroberi, Pewarna Alami Karmin CI 75470, Vitamin A, Vitamin D3, Vitamin B1, Vitamin B2, Vitamin B6, Vitamin B12";
-      }
-      if (name.includes('low fat') || name.includes('skim') || name.includes('rendah lemak')) {
-        return "Susu Sapi Rendah Lemak, Kalsium Susu, Vitamin A, Vitamin D3, Vitamin B1, Vitamin B2, Vitamin B6, Vitamin B12";
-      }
-      if (b.includes('bear brand') || name.includes('bear brand')) {
-        return "100% Susu Sapi Murni Steril";
-      }
-      return "Susu Sapi Segar (Fresh Cow's Milk) 100%, Vitamin D3";
-    }
-
-    // 2. Mineral water
-    if (name.includes('water') || name.includes('aqua') || name.includes('minerale') || name.includes('air mineral') || cat.includes('water')) {
-      return "Air Mineral Alami (Natural Mineral Water) 100%";
-    }
-
-    // 3. Tea
-    if (name.includes('teh') || name.includes('tea') || cat.includes('tea')) {
-      if (name.includes('melati') || name.includes('jasmine') || name.includes('sosro') || name.includes('pucuk')) {
-        return "Air, Gula, Ekstrak Daun Teh Melati (Jasmine Tea Extract)";
-      }
-      if (name.includes('green tea') || name.includes('teh hijau')) {
-        return "Air, Ekstrak Daun Teh Hijau, Gula, Vitamin C";
-      }
-      return "Air, Ekstrak Daun Teh, Gula";
-    }
-
-    // 4. Coffee
-    if (name.includes('kopi') || name.includes('coffee') || cat.includes('coffee')) {
-      return "Air, Gula, Susu Skim Bubuk, Ekstrak Kopi, Krimer Nabati, Penstabil Nabati, Perisa Alami Kopi";
-    }
-
-    // 5. Instant Noodles
-    if (name.includes('mie') || name.includes('noodle') || name.includes('indomie') || cat.includes('noodles')) {
-      return "Tepung Terigu, Minyak Nabati, Garam, Penstabil Nabati, Pengatur Keasaman, Mineral Zat Besi. Bumbu: Gula, Garam, Penguat Rasa (Mononatrium Glutamat), Bubuk Bawang Putih, Bubuk Bawang Merah, Perisa Alami. Minyak Bumbu: Minyak Nabati, Bawang Merah. Kecap Manis: Gula, Air, Kedelai, Gandum, Garam";
-    }
-
-    // 6. Yogurt
-    if (name.includes('yogurt') || name.includes('yoghurt') || cat.includes('yogurt')) {
-      return "Susu Sapi Segar, Air, Gula, Susu Skim Bubuk, Penstabil Nabati, Kultur Bakteri Asam Laktat (Streptococcus thermophilus, Lactobacillus bulgaricus)";
-    }
-
-    // 7. Carbonated Beverage
-    if (name.includes('cola') || name.includes('soda') || name.includes('sprite') || name.includes('fanta')) {
-      return "Air Berkarbonasi, Gula, Pengatur Keasaman Asam Fosfat, Perisa Alami, Pewarna Karamel Kelas IV, Kafein";
-    }
-
+  static resolvePackagedProductIngredients(_productName?: string, _category?: string, _brand?: string): string | null {
     return null;
   }
   /**
