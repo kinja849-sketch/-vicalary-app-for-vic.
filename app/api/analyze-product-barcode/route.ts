@@ -17,8 +17,9 @@ export async function POST(req: NextRequest) {
 
     const supabase = createServerSupabaseClient();
 
-    // Client IP for market localization (supports Netlify x-nf-client-connection-ip, Cloudflare, and standard proxies)
+    // Client IP for market localization (supports client locationContext IP, Netlify x-nf-client-connection-ip, Cloudflare, and standard proxies)
     const clientIp =
+      locationContext?.ip ||
       req.headers.get('x-nf-client-connection-ip') ||
       req.headers.get('x-real-ip') ||
       req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
@@ -39,13 +40,11 @@ export async function POST(req: NextRequest) {
       supabase
     });
 
-    // Prioritize live IP-detected country from locationContext or edge headers for accurate IP-based local pricing
+    // Prioritize live IP-detected country strictly from locationContext (when method !== 'FALLBACK') or edge request IP
     const country =
-      locationContext?.country_code ||
+      (locationContext?.method !== 'FALLBACK' && locationContext?.country_code) ||
       req.headers.get('x-country') ||
-      userSettings?.country_code ||
-      locationContext?.country ||
-      'US';
+      undefined;
 
     const mergedProfile = {
       ...(onboarding || {}),
@@ -213,11 +212,13 @@ export async function POST(req: NextRequest) {
         price_min: decision.pricing.price_min ?? decision.pricing.price,
         price_max: decision.pricing.price_max ?? decision.pricing.price,
         price_range: decision.pricing.price_range || singleFormatted,
-        currency: curr,
+        currency: decision.pricing.currency || curr,
         status: 'verified',
         source: decision.pricing.source || 'Regional Retail Market Index',
         retrievedAt: decision.pricing.retrievedAt,
         retailer: decision.pricing.retailer || 'Local Retail Market',
+        ip_country_name: decision.pricing.ip_country_name,
+        ip_address: decision.pricing.ip_address || clientIp,
         needs_user_price: false,
         confidence: decision.pricing.confidence ?? 0.9
       };
@@ -229,6 +230,8 @@ export async function POST(req: NextRequest) {
         source: decision.pricing?.source || 'Regional Retail Market Index',
         retrievedAt: decision.pricing?.retrievedAt || new Date().toISOString(),
         retailer: decision.pricing?.retailer || 'Local Retail Market',
+        ip_country_name: decision.pricing?.ip_country_name,
+        ip_address: decision.pricing?.ip_address || clientIp,
         needs_user_price: false,
         confidence: 0.85
       };
@@ -256,8 +259,11 @@ export async function POST(req: NextRequest) {
       nutriscore_grade: p.nutriscore_grade || null,
       nova_group: p.nova_group || null,
 
-      // Ingredients of the Product
+      // Factory Ingredients of the Product
       ingredients: hasRealIngredients ? p.ingredients : null,
+      factory_ingredients_statement: p.factory_ingredients_statement || (hasRealIngredients ? `INGREDIENTS: ${p.ingredients?.toUpperCase()}.` : null),
+      contains_statement: p.contains_statement || null,
+      factory_ingredients_breakdown: p.factory_ingredients_breakdown || null,
       ingredients_status: hasRealIngredients ? (p.ingredients_status || 'verified') : 'unavailable',
       allergens: p.allergens || [],
       traces: p.traces || [],
@@ -274,15 +280,20 @@ export async function POST(req: NextRequest) {
       matched_allergens: safetyEval.matchedAllergens || [],
       goal_fit: safetyEval.goalFit || null,
 
-      // Authoritative Packaging Nutrition
+      // Authoritative Packaging Nutrition & Factory Nutrition Facts Breakdown
       calories: calcCalories,
       protein: calcProtein,
       carbs: calcCarbs,
       fat: calcFat,
       saturated_fat: calcSatFat,
+      trans_fat: n.trans_fat ?? null,
+      cholesterol_mg: n.cholesterol_mg ?? null,
       sugar: calcSugar,
+      added_sugar: n.added_sugar ?? null,
       fiber: calcFiber,
       sodium_mg: calcSodium,
+      servings_per_container: n.servings_per_container || null,
+      daily_values: n.daily_values || null,
       vitamins: n.vitamins ?? [],
       minerals: n.minerals ?? [],
       serving_basis: n.basis || '100g',

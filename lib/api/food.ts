@@ -185,8 +185,13 @@ export const analyzeMedication = async (userId: string, file: File, options?: an
         });
 
         const data = await res.json();
-        if (!res.ok || (data && data.error)) {
-            throw new Error(data?.error || 'Medication analysis failed');
+        if (!res.ok || (data && data.error) || data?.is_medication === false) {
+            const err: any = new Error(data?.message || data?.error || 'Medication analysis failed');
+            if (data?.is_medication === false || res.status === 422) {
+                err.not_medication = true;
+                err.detected_item = data?.detected_item;
+            }
+            throw err;
         }
 
         return { ...data, image_url: publicUrl || data.image_url };

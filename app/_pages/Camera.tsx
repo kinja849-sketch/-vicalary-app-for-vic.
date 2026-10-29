@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { Activity, SwitchCamera, ArrowLeft, RefreshCw, Camera as CameraIcon, Images } from "lucide-react";
+import { Activity, SwitchCamera, ArrowLeft, RefreshCw, Camera as CameraIcon, Images, AlertCircle } from "lucide-react";
 import { analyzeFoodImage, scanProduct, saveFoodAnalysis, analyzeMedication } from "@/lib/api/food";
 import { logMeal } from "@/lib/api/progress";
 import { useAnalysisStore } from "@/store/analysisStore";
@@ -46,6 +46,7 @@ export default function Camera({ initialMode }: CameraProps = {}) {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<any>(null);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [medicationWarningAlert, setMedicationWarningAlert] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [isScanningBarcode, setIsScanningBarcode] = useState(false);
   const barcodeIntervalRef = useRef<number | null>(null);
@@ -165,7 +166,13 @@ export default function Camera({ initialMode }: CameraProps = {}) {
       }
     } catch (err: any) {
       console.error("Gallery analysis failed:", err);
-      toast.error(err.message || "Failed to analyze uploaded image.");
+      if (err?.not_medication || err?.message?.toLowerCase().includes('not a medicine')) {
+        const msg = err.message || "Be serious, this is not a medicine at all.";
+        setMedicationWarningAlert(msg);
+        toast.error(`⚠️ ${msg}`, { duration: 7000 });
+      } else {
+        toast.error(err.message || "Failed to analyze uploaded image.");
+      }
       setCapturedImage(null);
     } finally {
       setIsAnalyzing(false);
@@ -467,9 +474,15 @@ export default function Camera({ initialMode }: CameraProps = {}) {
       setLatestAnalysis(fullResult);
       addNotification('success', scanMode === "BARCODE" ? "Medication analysis complete!" : "Food analysis complete!");
       // NO auto-save on photo capture! User confirms via "Log to Food Diary"
-    } catch (err) {
+    } catch (err: any) {
       console.error("Analysis failed:", err);
-      toast.error("Analysis failed. Please try again.");
+      if (err?.not_medication || err?.message?.toLowerCase().includes('not a medicine')) {
+        const msg = err.message || "Be serious, this is not a medicine at all.";
+        setMedicationWarningAlert(msg);
+        toast.error(`⚠️ ${msg}`, { duration: 7000 });
+      } else {
+        toast.error(err?.message || "Analysis failed. Please try again.");
+      }
       setCapturedImage(null);
     } finally {
       setIsAnalyzing(false);
@@ -625,6 +638,39 @@ export default function Camera({ initialMode }: CameraProps = {}) {
                 <div className="size-14 invisible shrink-0" />
               )}
             </div>
+
+            {/* Non-Medication Rejection Alert Modal */}
+            <AnimatePresence>
+              {medicationWarningAlert && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.9 }}
+                  className="absolute inset-0 z-50 flex items-center justify-center p-6 bg-black/85 backdrop-blur-md"
+                >
+                  <div className="max-w-xs sm:max-w-sm w-full bg-slate-900 border-2 border-rose-500/60 rounded-3xl p-6 text-center space-y-4 shadow-2xl">
+                    <div className="size-16 mx-auto rounded-full bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-500">
+                      <AlertCircle className="w-9 h-9 text-rose-500" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-black text-white tracking-wide">Not a Medicine</h3>
+                      <p className="text-sm font-black text-rose-400 mt-2 leading-relaxed">
+                        {medicationWarningAlert}
+                      </p>
+                      <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+                        This scanner is configured for medicines only. Please scan an authentic medication package, blister pack, or prescription bottle, or switch to Food mode.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setMedicationWarningAlert(null)}
+                      className="w-full py-3.5 bg-rose-600 hover:bg-rose-500 active:scale-95 text-white font-black rounded-xl text-sm transition-all shadow-lg shadow-rose-600/30 cursor-pointer"
+                    >
+                      Understood
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             <input
               type="file"

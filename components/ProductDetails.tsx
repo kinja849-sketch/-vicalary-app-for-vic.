@@ -1,7 +1,7 @@
 "use client"
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, AlertCircle, ShoppingCart, MessageSquare, Check, Globe, Pill, TriangleAlert, Dna, HeartPulse, ExternalLink, ShieldCheck, Scale, Info, Sparkles } from "lucide-react";
+import { ArrowLeft, AlertCircle, ShoppingCart, MessageSquare, Check, Globe, Pill, TriangleAlert, Dna, HeartPulse, ExternalLink, ShieldCheck, Scale, Info, Sparkles, ThumbsDown } from "lucide-react";
 import { useAnalysisStore } from '@/store/analysisStore';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
@@ -53,9 +53,23 @@ export interface ProductDetailsProps {
   carbs?: number | null;
   fat?: number | null;
   saturated_fat?: number | null;
+  trans_fat?: number | null;
+  cholesterol_mg?: number | null;
   sugar?: number | null;
+  added_sugar?: number | null;
   fiber?: number | null;
   sodium_mg?: number | null;
+  servings_per_container?: string | null;
+  daily_values?: {
+    fat?: number;
+    saturated_fat?: number;
+    cholesterol?: number;
+    sodium?: number;
+    carbohydrates?: number;
+    fiber?: number;
+    added_sugar?: number;
+    protein?: number;
+  } | null;
   vitamins?: string[];
   minerals?: string[];
   serving_basis?: string;
@@ -75,6 +89,8 @@ export interface ProductDetailsProps {
     source?: string;
     retrievedAt?: string;
     retailer?: string;
+    ip_country_name?: string;
+    ip_address?: string;
     needs_user_price?: boolean;
     confidence?: number;
     reference_estimate?: {
@@ -100,6 +116,10 @@ export interface ProductDetailsProps {
   needs_crowdsourcing?: boolean;
   cheaper_alternatives?: Array<{ name: string; price: string | number; reason: string }>;
   type?: string;
+  // Factory Ingredients format
+  factory_ingredients_statement?: string;
+  contains_statement?: string;
+  factory_ingredients_breakdown?: Array<{ name: string; sub_ingredients?: string; percentage?: string }>;
   // Medication-specific fields
   generic_name?: string;
   active_ingredients?: string[];
@@ -122,6 +142,9 @@ export function ProductDetails({
   category,
   description,
   ingredients,
+  factory_ingredients_statement,
+  contains_statement,
+  factory_ingredients_breakdown,
   ingredients_status,
   allergens = [],
   coloring,
@@ -138,9 +161,15 @@ export function ProductDetails({
   protein,
   carbs,
   fat,
+  saturated_fat,
+  trans_fat,
+  cholesterol_mg,
   sugar,
+  added_sugar,
   fiber,
   sodium_mg,
+  servings_per_container,
+  daily_values,
   vitamins = [],
   minerals = [],
   serving_basis = "100g",
@@ -221,6 +250,18 @@ export function ProductDetails({
 
   const isMedication = type === 'MEDICATION' || type === 'medication';
   const isFlagged = status === 'FLAGGED' || is_compliant === false || boycott?.flagged === true;
+  const [hasBoycotted, setHasBoycotted] = useState(false);
+  const [boycottCount, setBoycottCount] = useState(3);
+
+  const handleBoycottClick = () => {
+    if (!hasBoycotted) {
+      setHasBoycotted(true);
+      setBoycottCount(prev => prev + 1);
+      toast.success("Marked as boycotted. Thank you for your ethical solidarity!", { icon: "✊" });
+    } else {
+      toast.info("You have already recorded your boycott for this product.");
+    }
+  };
 
   // STRICT RULE: No auto-save on mount!
   // Only explicitly save and create purchase transaction when user taps "Log Product" / "Budget"
@@ -485,78 +526,100 @@ export function ProductDetails({
           <>
             {/* 1. BOYCOTT GATE (BEFORE normal recommendation) */}
             {isFlagged ? (
-              <section className="bg-rose-500/10 border-2 border-rose-500/30 rounded-[2rem] p-6 sm:p-7 shadow-xl space-y-5">
-                <div className="flex items-start gap-3">
-                  <div className="size-10 rounded-2xl bg-rose-500/20 flex items-center justify-center text-rose-500 dark:text-rose-400 border border-rose-500/30 shrink-0 mt-0.5">
-                    <AlertCircle className="w-5 h-5 text-rose-500 dark:text-rose-400" />
-                  </div>
-                  <div>
-                    <h2 className="text-base font-black text-rose-600 dark:text-rose-400 uppercase tracking-wider">
-                      {t('ethical_alert_flagged')}
-                    </h2>
-                    <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 font-medium">
-                      {t('ethical_recommendation_suspended')}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="p-5 bg-white dark:bg-black/40 border border-rose-500/20 rounded-2xl space-y-3">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-slate-500 dark:text-slate-400 uppercase font-bold tracking-wider">Campaign</span>
-                    <span className="text-rose-600 dark:text-rose-300 font-black">{boycott?.campaignName || 'Corporate Responsibility Watch'}</span>
+              <div className="space-y-4">
+                {/* Hero Boycott Verdict Card */}
+                <section className="bg-rose-50/80 dark:bg-rose-950/20 border border-rose-200/70 dark:border-rose-900/40 rounded-[2rem] p-6 sm:p-8 text-center shadow-md space-y-4">
+                  {/* FUCK NO! Hero Header */}
+                  <div className="flex flex-col items-center justify-center pt-2">
+                    <span className="text-4xl sm:text-5xl font-black text-rose-600 dark:text-rose-500 tracking-tight uppercase leading-none">
+                      FUCK NO!
+                    </span>
                   </div>
 
-                  {(boycott?.companyName || brand) && (
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-slate-500 dark:text-slate-400 uppercase font-bold tracking-wider">Brand / Subsidiary</span>
-                      <span className="text-slate-900 dark:text-white font-bold">{boycott?.companyName || brand}</span>
+                  {/* Badges Pill Row */}
+                  <div className="flex items-center justify-center gap-2 flex-wrap">
+                    <span className="px-3.5 py-1 rounded-full bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300 text-xs font-bold border border-rose-200 dark:border-rose-800/50">
+                      {boycott?.campaignName?.includes('Palestine') || boycott?.campaignName?.includes('BDS') ? 'Palestine' : (boycott?.campaignName || 'Palestine')}
+                    </span>
+                    <span className="px-3.5 py-1 rounded-full bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300 text-xs font-bold border border-rose-200 dark:border-rose-800/50">
+                      {boycott?.parentCompany ? 'Level 1' : 'Level 2'}
+                    </span>
+                    <div className="size-6 rounded-full bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-300 flex items-center justify-center border border-rose-200 dark:border-rose-800/50" title="Ethical Campaign Information">
+                      <Info className="w-3.5 h-3.5" />
                     </div>
-                  )}
-
-                  {(boycott?.parentCompany || manufacturer) && (
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-slate-500 dark:text-slate-400 uppercase font-bold tracking-wider">Parent Company</span>
-                      <span className="px-2.5 py-0.5 rounded-full bg-rose-500/15 border border-rose-500/30 text-rose-600 dark:text-rose-300 font-black">
-                        {boycott?.parentCompany || manufacturer}
-                      </span>
-                    </div>
-                  )}
-
-                  <div className="pt-2 border-t border-slate-200 dark:border-white/10 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                    <span className="font-bold text-slate-900 dark:text-white block mb-1">Documented Reason:</span>
-                    {boycott?.reason || political_warning || 'Documented political affiliation or corporate relationship under active campaign boycott.'}
                   </div>
 
+                  {/* Subtitle */}
+                  <h3 className="text-base sm:text-lg font-black text-rose-600 dark:text-rose-400 mt-2 mb-1">
+                    This Product is on the Boycott list
+                  </h3>
+
+                  {/* Narrative Statement */}
+                  <p className="text-xs sm:text-sm text-slate-700 dark:text-slate-300 leading-relaxed font-normal max-w-lg mx-auto">
+                    <span className="font-bold text-slate-900 dark:text-white">
+                      {productName}
+                    </span>
+                    {brand && brand.toLowerCase() !== productName.toLowerCase() ? ` (${brand})` : ''}
+                    {boycott?.parentCompany || manufacturer ? (
+                      <>
+                        {' '}owned by{' '}
+                        <span className="font-bold text-slate-900 dark:text-white">
+                          {boycott?.parentCompany || manufacturer}
+                        </span>
+                      </>
+                    ) : null}
+                    {', '}
+                    {boycott?.reason || political_warning?.replace(/^⚠️ ETHICAL RESPONSIBILITY ALERT — [^.]+\.\s*/, '') || 'is targeted by active consumer boycott campaigns due to documented corporate and political ties.'}
+                  </p>
+
+                  {/* Evidence Provenance Link */}
                   {boycott?.sourceUrl && (
                     <div className="pt-2">
                       <a
                         href={boycott.sourceUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 text-xs font-bold text-vic-blue hover:underline"
+                        className="inline-flex items-center gap-1.5 text-xs font-bold text-rose-600 dark:text-rose-400 hover:underline"
                       >
                         Inspect Supporting Evidence & Provenance <ExternalLink className="w-3.5 h-3.5" />
                       </a>
                     </div>
                   )}
-                </div>
+                </section>
 
-                {cheaper_alternatives && cheaper_alternatives.length > 0 && (
-                  <div className="space-y-3">
-                    <h3 className="text-xs font-black text-slate-900 dark:text-slate-300 uppercase tracking-wider">
-                      Recommended Ethical Alternatives
-                    </h3>
-                    <div className="space-y-2">
-                      {cheaper_alternatives.map((alt, i) => (
-                        <div key={i} className="flex items-center justify-between p-3.5 bg-white dark:bg-black/30 rounded-xl border border-slate-200 dark:border-white/5">
-                          <p className="text-sm font-bold text-slate-900 dark:text-white">{alt.name}</p>
-                          <span className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold">{alt.reason}</span>
-                        </div>
-                      ))}
+                {/* Community Solidarity Card: Boycott This Product */}
+                <section className="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-[2rem] p-5 sm:p-6 shadow-sm space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <ThumbsDown className="w-5 h-5 text-rose-600 fill-rose-600/20" />
+                      <span className="text-sm font-black text-slate-900 dark:text-white">
+                        {boycottCount} Boycott This Product
+                      </span>
                     </div>
+                    <span className="text-xs font-bold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded-full border border-amber-500/20 flex items-center gap-1">
+                      🪙 x5 Pts
+                    </span>
                   </div>
-                )}
-              </section>
+
+                  <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed font-medium">
+                    &ldquo;Boycott This&rdquo; means you avoid this brand. The number shows how many people boycott it.
+                  </p>
+
+                  <div className="pt-2">
+                    <button
+                      onClick={handleBoycottClick}
+                      className={`w-full py-3.5 px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                        hasBoycotted
+                          ? 'bg-rose-700 text-white shadow-inner'
+                          : 'bg-rose-50 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400 border border-rose-300 dark:border-rose-800 hover:bg-rose-100 dark:hover:bg-rose-900/40 active:scale-95'
+                      }`}
+                    >
+                      <ThumbsDown className="w-4 h-4" />
+                      <span>{hasBoycotted ? 'Boycotted' : 'Boycott This'}</span>
+                    </button>
+                  </div>
+                </section>
+              </div>
             ) : null}
 
             {/* If NOT flagged, proceed to Section 1, 2, 3, 4 */}
@@ -592,48 +655,74 @@ export function ProductDetails({
                     </h2>
                   </div>
 
-                  {/* Declared Ingredients Breakdown */}
+                  {/* Packaging Ingredients Statement Box */}
                   <div className="bg-white dark:bg-black/30 border border-slate-200 dark:border-white/5 rounded-2xl p-4 sm:p-5 space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block">
-                        Packaging Ingredients {ingredientList.length > 0 && `(${ingredientList.length})`}
+                        Factory Ingredients Statement
                       </span>
-                      {ingredientList.length > 0 && (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                          Authentic Label
-                        </span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                        Packaging Label
+                      </span>
+                    </div>
+
+                    <div className="p-3.5 bg-slate-50 dark:bg-white/5 rounded-xl border border-slate-200 dark:border-white/5 space-y-2">
+                      <p className="text-xs sm:text-[13px] font-bold text-slate-900 dark:text-slate-100 leading-relaxed font-mono">
+                        {factory_ingredients_statement || (ingredients ? `INGREDIENTS: ${ingredients.toUpperCase()}.` : `INGREDIENTS: ${productName.toUpperCase()} STANDARD COMMERCIAL FORMULATION.`)}
+                      </p>
+                      {contains_statement && (
+                        <p className="text-xs sm:text-[13px] font-black text-rose-600 dark:text-rose-400 font-mono tracking-wide">
+                          {contains_statement}
+                        </p>
                       )}
                     </div>
 
-                    {ingredientList.length > 0 ? (
-                      <div className="flex flex-wrap gap-2 pt-1">
-                        {ingredientList.map((item, idx) => (
-                          <div
-                            key={idx}
-                            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/60 text-xs sm:text-[13px] font-semibold text-slate-800 dark:text-slate-100 shadow-sm"
-                          >
-                            <span className="size-1.5 rounded-full bg-emerald-500 shrink-0" />
-                            <span>{item}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-slate-600 dark:text-slate-300 text-xs sm:text-sm font-medium">
-                        {ingredients || `${productName} standard commercial formulation (${brand || 'packaged product'}).`}
-                      </p>
-                    )}
+                    {/* Factory Ingredients Breakdown */}
+                    <div className="pt-2 border-t border-slate-100 dark:border-white/5 space-y-2">
+                      <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block">
+                        Factory Formulation Breakdown
+                      </span>
 
-                    {/* Original packaging statement if more than 1 item */}
-                    {ingredientList.length > 1 && ingredients && (
-                      <div className="pt-2 border-t border-slate-100 dark:border-white/5">
-                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                          Full Packaging Statement
-                        </span>
-                        <p className="text-slate-500 dark:text-slate-400 text-xs leading-relaxed italic">
-                          "{ingredients}"
-                        </p>
-                      </div>
-                    )}
+                      {factory_ingredients_breakdown && factory_ingredients_breakdown.length > 0 ? (
+                        <div className="space-y-1.5 pt-1">
+                          {factory_ingredients_breakdown.map((item, idx) => (
+                            <div
+                              key={idx}
+                              className="flex items-start justify-between gap-2 p-2.5 rounded-xl bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/50 text-xs"
+                            >
+                              <div className="space-y-0.5">
+                                <span className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                                  <span className="size-1.5 rounded-full bg-emerald-500 shrink-0" />
+                                  {item.name}
+                                </span>
+                                {item.sub_ingredients && (
+                                  <p className="text-[11px] text-slate-500 dark:text-slate-400 pl-3">
+                                    Sub-ingredients: ({item.sub_ingredients})
+                                  </p>
+                                )}
+                              </div>
+                              {item.percentage && (
+                                <span className="text-[11px] font-black text-emerald-600 dark:text-emerald-400 shrink-0">
+                                  {item.percentage}
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : ingredientList.length > 0 ? (
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          {ingredientList.map((item, idx) => (
+                            <div
+                              key={idx}
+                              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/60 text-xs sm:text-[13px] font-semibold text-slate-800 dark:text-slate-100 shadow-sm"
+                            >
+                              <span className="size-1.5 rounded-full bg-emerald-500 shrink-0" />
+                              <span>{item}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
 
                   {/* Show Food Coloring Badges only when colorings are present */}
@@ -676,16 +765,17 @@ export function ProductDetails({
                         <h2 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
                           {t('calories') || 'Calories'}
                         </h2>
-                        <span className="text-[11px] text-slate-500 dark:text-slate-400 font-semibold">
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400 font-semibold block">
+                          {servings_per_container ? `${servings_per_container} • ` : ''}
                           {serving_basis === 'serving'
-                            ? `Basis: Per Serving${effectiveServingSize && effectiveServingSize !== '100g' ? ` (${effectiveServingSize})` : ''}`
+                            ? `Serving size: ${effectiveServingSize && effectiveServingSize !== '100g' ? effectiveServingSize : '1 serving'}`
                             : 'Basis: Per 100g'}
                         </span>
                       </div>
                     </div>
                   </div>
 
-                  {/* Calories Card */}
+                  {/* Calories Hero Card */}
                   <div className="bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-2xl p-5 text-center shadow-inner">
                     <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest block mb-1">
                       {t('nutritional_energy')}
@@ -699,14 +789,131 @@ export function ProductDetails({
                     </div>
                     {calories !== null && calories !== undefined && (
                       <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                        {serving_basis === 'serving'
-                          ? `Per Serving${effectiveServingSize && effectiveServingSize !== '100g' ? ` (${effectiveServingSize})` : ''}`
-                          : 'Per 100g'}
+                        Amount Per Serving {effectiveServingSize ? `(${effectiveServingSize})` : ''}
                       </p>
                     )}
                   </div>
 
-                  {/* Macros Grid */}
+                  {/* Factory Nutrition Facts Panel (Packaging Label Standard) */}
+                  <div className="bg-white dark:bg-black/40 rounded-2xl border-2 border-slate-900 dark:border-white/20 p-4 sm:p-5 space-y-2.5 font-sans">
+                    <div className="border-b-4 border-slate-900 dark:border-white pb-2 flex items-baseline justify-between">
+                      <div>
+                        <h3 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white uppercase tracking-tight">Nutrition Facts</h3>
+                        {servings_per_container && (
+                          <p className="text-xs text-slate-600 dark:text-slate-300 font-semibold">{servings_per_container}</p>
+                        )}
+                        <p className="text-xs font-bold text-slate-900 dark:text-white">
+                          Serving size: {effectiveServingSize || (serving_basis === 'serving' ? '1 serving' : '100g')}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="border-b-2 border-slate-900 dark:border-white pb-1 flex justify-between items-end">
+                      <span className="text-xs font-black text-slate-900 dark:text-white uppercase">Amount per serving</span>
+                      <span className="text-lg font-black text-slate-900 dark:text-white">{calories ?? 0} kcal</span>
+                    </div>
+
+                    <div className="text-right text-[11px] font-black text-slate-900 dark:text-white border-b border-slate-200 dark:border-white/10 pb-1">
+                      % Daily Value*
+                    </div>
+
+                    <div className="divide-y divide-slate-200 dark:divide-white/10 text-xs">
+                      {/* Total Fat */}
+                      <div className="py-1.5 flex justify-between items-center">
+                        <span className="font-bold text-slate-900 dark:text-white">
+                          Total Fat <span className="font-normal">{fat !== null && fat !== undefined ? `${fat}g` : '–'}</span>
+                        </span>
+                        <span className="font-black text-slate-900 dark:text-white">
+                          {daily_values?.fat !== undefined ? `${daily_values.fat}%` : '–'}
+                        </span>
+                      </div>
+                      {/* Saturated Fat */}
+                      <div className="py-1.5 pl-4 flex justify-between items-center text-[11px]">
+                        <span className="text-slate-700 dark:text-slate-300">
+                          Saturated Fat {saturated_fat !== null && saturated_fat !== undefined ? `${saturated_fat}g` : '–'}
+                        </span>
+                        <span className="font-bold text-slate-900 dark:text-white">
+                          {daily_values?.saturated_fat !== undefined ? `${daily_values.saturated_fat}%` : '–'}
+                        </span>
+                      </div>
+                      {/* Trans Fat */}
+                      <div className="py-1.5 pl-4 flex justify-between items-center text-[11px]">
+                        <span className="text-slate-700 dark:text-slate-300">
+                          Trans Fat {trans_fat !== null && trans_fat !== undefined ? `${trans_fat}g` : '0g'}
+                        </span>
+                        <span className="text-slate-400">–</span>
+                      </div>
+                      {/* Cholesterol */}
+                      <div className="py-1.5 flex justify-between items-center">
+                        <span className="font-bold text-slate-900 dark:text-white">
+                          Cholesterol <span className="font-normal">{cholesterol_mg !== null && cholesterol_mg !== undefined ? `${cholesterol_mg}mg` : '0mg'}</span>
+                        </span>
+                        <span className="font-black text-slate-900 dark:text-white">
+                          {daily_values?.cholesterol !== undefined ? `${daily_values.cholesterol}%` : '0%'}
+                        </span>
+                      </div>
+                      {/* Sodium */}
+                      <div className="py-1.5 flex justify-between items-center">
+                        <span className="font-bold text-slate-900 dark:text-white">
+                          Sodium <span className="font-normal">{sodium_mg !== null && sodium_mg !== undefined ? `${sodium_mg}mg` : '–'}</span>
+                        </span>
+                        <span className="font-black text-slate-900 dark:text-white">
+                          {daily_values?.sodium !== undefined ? `${daily_values.sodium}%` : '–'}
+                        </span>
+                      </div>
+                      {/* Total Carbohydrate */}
+                      <div className="py-1.5 flex justify-between items-center">
+                        <span className="font-bold text-slate-900 dark:text-white">
+                          Total Carbohydrate <span className="font-normal">{carbs !== null && carbs !== undefined ? `${carbs}g` : '–'}</span>
+                        </span>
+                        <span className="font-black text-slate-900 dark:text-white">
+                          {daily_values?.carbohydrates !== undefined ? `${daily_values.carbohydrates}%` : '–'}
+                        </span>
+                      </div>
+                      {/* Dietary Fiber */}
+                      <div className="py-1.5 pl-4 flex justify-between items-center text-[11px]">
+                        <span className="text-slate-700 dark:text-slate-300">
+                          Dietary Fiber {fiber !== null && fiber !== undefined ? `${fiber}g` : '–'}
+                        </span>
+                        <span className="font-bold text-slate-900 dark:text-white">
+                          {daily_values?.fiber !== undefined ? `${daily_values.fiber}%` : '–'}
+                        </span>
+                      </div>
+                      {/* Total Sugars */}
+                      <div className="py-1.5 pl-4 flex justify-between items-center text-[11px]">
+                        <span className="text-slate-700 dark:text-slate-300">
+                          Total Sugars {sugar !== null && sugar !== undefined ? `${sugar}g` : '–'}
+                        </span>
+                        <span className="text-slate-400">–</span>
+                      </div>
+                      {/* Added Sugars */}
+                      {added_sugar !== null && added_sugar !== undefined && (
+                        <div className="py-1.5 pl-8 flex justify-between items-center text-[11px]">
+                          <span className="text-slate-600 dark:text-slate-400">
+                            Includes {added_sugar}g Added Sugars
+                          </span>
+                          <span className="font-bold text-slate-900 dark:text-white">
+                            {daily_values?.added_sugar !== undefined ? `${daily_values.added_sugar}%` : '–'}
+                          </span>
+                        </div>
+                      )}
+                      {/* Protein */}
+                      <div className="py-1.5 flex justify-between items-center border-b-4 border-slate-900 dark:border-white">
+                        <span className="font-bold text-slate-900 dark:text-white">
+                          Protein <span className="font-normal">{protein !== null && protein !== undefined ? `${protein}g` : '–'}</span>
+                        </span>
+                        <span className="font-black text-slate-900 dark:text-white">
+                          {daily_values?.protein !== undefined ? `${daily_values.protein}%` : '–'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight pt-1">
+                      * The % Daily Value (DV) tells you how much a nutrient in a serving of food contributes to a daily diet. 2,000 calories a day is used for general nutrition advice.
+                    </p>
+                  </div>
+
+                  {/* Macros Quick Grid */}
                   <div className="grid grid-cols-3 sm:grid-cols-6 gap-2.5">
                     <div className="bg-white dark:bg-black/30 rounded-2xl p-3 border border-slate-200 dark:border-white/5 text-center">
                       <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">{t('protein_label')}</span>
@@ -870,8 +1077,13 @@ export function ProductDetails({
                       <span className="text-xs font-black uppercase tracking-wider text-slate-900 dark:text-white block">
                         {t('verified_local_price') || 'Local Retail Price Range'}
                       </span>
+                      {price_metadata?.ip_country_name && (
+                        <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold block mt-0.5">
+                          Detected Region: {price_metadata.ip_country_name} ({price_metadata.currency || '$'})
+                        </span>
+                      )}
                       {price_metadata?.source && (
-                        <span className="text-[11px] text-slate-500 dark:text-slate-400 block mt-0.5">
+                        <span className="text-[10px] text-slate-500 dark:text-slate-400 block mt-0.5">
                           Source: {price_metadata.source}
                         </span>
                       )}

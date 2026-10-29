@@ -62,10 +62,14 @@ export async function POST(req: NextRequest) {
 
     // 2. Identify Medication details via OpenAI Vision or GPT
     const systemPrompt = `You are an expert clinical pharmacologist and patient medication safety intelligence engine.
-Your primary objective is to analyze the medication package photo or medication query and extract authentic clinical facts:
-WHAT THE MEDICATION IS FOR, how it works, and how to use it safely.
 
-CRITICAL VISION EXTRACTION MANDATE:
+CRITICAL STEP 0: AUTHENTIC MEDICATION CLASSIFICATION (MANDATORY GATE):
+You must first evaluate if the photo or query represents an authentic pharmaceutical medication, over-the-counter (OTC) drug, prescription medicine, medicinal syrup, blister pack, pills/tablets/capsules, medicinal ointment/drops, or official medicine box/packaging.
+- If the image depicts coffee, tea, food, beverages, snacks, fruit, groceries, clothing, electronics, or ANY NON-MEDICINAL ITEM:
+  You MUST set "is_medication": false, "non_medication_detected": "<detected item, e.g. Coffee / Fruit / Snack / Beverage>", and DO NOT fabricate or invent medical indications or active ingredients for it.
+- If and ONLY if the item is an authentic medicinal drug or pharmaceutical product, set "is_medication": true, "non_medication_detected": null, and extract authentic clinical facts.
+
+CRITICAL VISION EXTRACTION MANDATE (When is_medication is true):
 - You MUST read the visible product/brand name, active substances, and dosage strengths directly from the package photo.
 - DO NOT return placeholder generic text such as "Scanned Medication", "Pharmaceutical Product", or "Medication indication".
 - If the box displays "Guaifenesin Sodium citrate Syrup", the brand/trade name is "Guaifenesin Sodium citrate Syrup", active ingredients are ["Guaifenesin", "Sodium citrate"], and the indication is cough expectorant / chest congestion relief.
@@ -85,6 +89,8 @@ Analyze the package typography, markings, formulation, and labeling carefully:
 
 Return ONLY a valid JSON object matching this schema:
 {
+  "is_medication": true,
+  "non_medication_detected": null,
   "name": "Exact visible trade name on the package (NEVER 'Scanned Medication')",
   "generic_name": "Scientific INN generic name(s) (NEVER 'Pharmaceutical Product')",
   "active_ingredients": ["Active substance 1 (strength)", "Active substance 2 (strength)"],
@@ -127,6 +133,18 @@ Return ONLY a valid JSON object matching this schema:
     });
 
     let medData = parseJSONSafely(visionResult.choices[0]?.message?.content);
+
+    // ZERO-TOLERANCE NON-MEDICATION GATE
+    if (medData.is_medication === false) {
+      const detectedItem = medData.non_medication_detected || 'non-medicinal product';
+      console.warn(`[analyze-medication] Non-medication rejected: ${detectedItem}`);
+      return NextResponse.json({
+        error: 'Be serious, this is not a medicine at all.',
+        message: 'Be serious, this is not a medicine at all.',
+        is_medication: false,
+        detected_item: detectedItem
+      }, { status: 422 });
+    }
 
     // Second-pass retry if the vision model failed to parse or returned generic placeholder strings
     const isPlaceholder = !medData.name || 

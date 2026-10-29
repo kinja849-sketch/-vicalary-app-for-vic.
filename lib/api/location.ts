@@ -1,6 +1,7 @@
 import { supabase } from '../supabase'
 
 export interface LocationData {
+  ip?: string
   country_code: string
   country_name: string
   city?: string
@@ -33,6 +34,15 @@ const countryToLangMap: Record<string, string[]> = {
   'BR': ['pt', 'en'], 
   'VN': ['vi', 'en'], 
   'TR': ['tr', 'en'],
+  'JP': ['ja', 'en'],
+  'KR': ['ko', 'en'],
+  'SG': ['en', 'zh', 'ms'],
+  'MY': ['ms', 'en'],
+  'TH': ['th', 'en'],
+  'PH': ['en', 'tl'],
+  'AU': ['en'],
+  'NZ': ['en'],
+  'CA': ['en', 'fr'],
   
   // Additional Arabic-speaking countries
   'EG': ['ar', 'en'], 'QA': ['ar', 'en'], 'KW': ['ar', 'en'], 'OM': ['ar', 'en'],
@@ -50,13 +60,13 @@ const countryToLangMap: Record<string, string[]> = {
   'MM': ['my', 'en'],
   
   // Korean-speaking countries
-  'KR': ['ko', 'en'], 'KP': ['ko', 'en'],
+  'KP': ['ko', 'en'],
   
   // German-speaking countries
   'AT': ['de', 'en'], 'CH': ['de', 'fr', 'en'], 'LI': ['de', 'en'], 'LU': ['de', 'fr', 'en'],
   
   // French-speaking countries
-  'MC': ['fr', 'en'], 'BE': ['fr', 'de', 'en'], 'CA': ['en', 'fr'], 'SN': ['fr', 'en'],
+  'MC': ['fr', 'en'], 'BE': ['fr', 'de', 'en'], 'SN': ['fr', 'en'],
   'CI': ['fr', 'en'], 'CM': ['fr', 'en'], 'CD': ['fr', 'en'], 'CG': ['fr', 'en'],
   'GA': ['fr', 'en'], 'NE': ['fr', 'en'], 'ML': ['fr', 'en'], 'TG': ['fr', 'en'],
   'BJ': ['fr', 'en'], 'CF': ['fr', 'en'],
@@ -76,26 +86,37 @@ const countryToLangMap: Record<string, string[]> = {
   'UY': ['es', 'en'], 'PA': ['es', 'en'], 'GQ': ['es', 'en']
 };
 
-const countryToCurrencyMap: Record<string, { code: string, symbol: string }> = {
+export const countryToCurrencyMap: Record<string, { code: string, symbol: string }> = {
   'ID': { code: 'IDR', symbol: 'Rp' }, 'US': { code: 'USD', symbol: '$' },
   'GB': { code: 'GBP', symbol: '£' }, 'FR': { code: 'EUR', symbol: '€' },
   'DE': { code: 'EUR', symbol: '€' }, 'ES': { code: 'EUR', symbol: '€' },
+  'IT': { code: 'EUR', symbol: '€' }, 'NL': { code: 'EUR', symbol: '€' },
+  'BE': { code: 'EUR', symbol: '€' }, 'AT': { code: 'EUR', symbol: '€' },
+  'CH': { code: 'CHF', symbol: 'CHF' }, 'CA': { code: 'CAD', symbol: 'CA$' },
+  'AU': { code: 'AUD', symbol: 'A$' }, 'NZ': { code: 'NZD', symbol: 'NZ$' },
+  'SG': { code: 'SGD', symbol: 'S$' }, 'MY': { code: 'MYR', symbol: 'RM' },
+  'TH': { code: 'THB', symbol: '฿' }, 'PH': { code: 'PHP', symbol: '₱' },
+  'VN': { code: 'VND', symbol: '₫' }, 'JP': { code: 'JPY', symbol: '¥' },
+  'KR': { code: 'KRW', symbol: '₩' }, 'CN': { code: 'CNY', symbol: '¥' },
   'SA': { code: 'SAR', symbol: 'SR' }, 'AE': { code: 'AED', symbol: 'DH' },
   'IN': { code: 'INR', symbol: '₹' }, 'BD': { code: 'BDT', symbol: '৳' },
-  'PK': { code: 'PKR', symbol: 'Rs' }, 'CN': { code: 'CNY', symbol: '¥' },
-  'RU': { code: 'RUB', symbol: '₽' }, 'BR': { code: 'BRL', symbol: 'R$' },
-  'VN': { code: 'VND', symbol: '₫' }, 'TR': { code: 'TRY', symbol: '₺' },
+  'PK': { code: 'PKR', symbol: 'Rs' }, 'RU': { code: 'RUB', symbol: '₽' },
+  'BR': { code: 'BRL', symbol: 'R$' }, 'TR': { code: 'TRY', symbol: '₺' },
   'KE': { code: 'KES', symbol: 'KSh' }, 'SO': { code: 'SOS', symbol: 'Sh' }
 };
 
 export const detectLocation = async (forceRefresh = false): Promise<LocationData | null> => {
-  const CACHE_KEY = 'vicalary_location_v3';
+  const CACHE_KEY = 'vicalary_location_v4';
   if (!forceRefresh && typeof window !== 'undefined') {
     const cached = localStorage.getItem(CACHE_KEY);
     if (cached) {
-      const { data, timestamp } = JSON.parse(cached);
-      if (Date.now() - timestamp < 24 * 60 * 60 * 1000) {
-        return { ...data, method: 'CACHE' };
+      try {
+        const { data, timestamp } = JSON.parse(cached);
+        if (data && data.method !== 'FALLBACK' && Date.now() - timestamp < 24 * 60 * 60 * 1000) {
+          return { ...data, method: 'CACHE' };
+        }
+      } catch (_e) {
+        localStorage.removeItem(CACHE_KEY);
       }
     }
   }
@@ -107,17 +128,18 @@ export const detectLocation = async (forceRefresh = false): Promise<LocationData
       // Primary: geojs.io (unlimited, fast)
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 1500);
+        const timeoutId = setTimeout(() => controller.abort(), 3500);
         const res = await fetch('https://get.geojs.io/v1/ip/geo.json', { signal: controller.signal });
         clearTimeout(timeoutId);
         if (res.ok) {
           const data = await res.json();
           if (data.country_code) {
-            const countryCode = data.country_code;
+            const countryCode = data.country_code.toUpperCase();
             const currencyInfo = countryToCurrencyMap[countryCode] || { code: 'USD', symbol: '$' };
             const langInfo = countryToLangMap[countryCode] || ['en'];
 
             const result: LocationData = {
+              ip: data.ip || undefined,
               country_code: countryCode,
               country_name: data.country || 'United States',
               city: data.city || 'Unknown',
@@ -143,15 +165,19 @@ export const detectLocation = async (forceRefresh = false): Promise<LocationData
 
       // Secondary: ipwho.is
       try {
-        const res = await fetch('https://ipwho.is/');
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3500);
+        const res = await fetch('https://ipwho.is/', { signal: controller.signal });
+        clearTimeout(timeoutId);
         if (res.ok) {
           const data = await res.json();
           if (data.success) {
-            const countryCode = data.country_code || 'US';
+            const countryCode = (data.country_code || 'US').toUpperCase();
             const currencyInfo = countryToCurrencyMap[countryCode] || { code: 'USD', symbol: '$' };
             const langInfo = countryToLangMap[countryCode] || ['en'];
 
             const result: LocationData = {
+              ip: data.ip || undefined,
               country_code: countryCode,
               country_name: data.country || 'United States',
               city: data.city || 'Unknown',
@@ -177,14 +203,18 @@ export const detectLocation = async (forceRefresh = false): Promise<LocationData
 
       // Secondary: ipapi.co
       try {
-        const res = await fetch('https://ipapi.co/json/');
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3500);
+        const res = await fetch('https://ipapi.co/json/', { signal: controller.signal });
+        clearTimeout(timeoutId);
         if (res.ok) {
           const data = await res.json();
-          const countryCode = data.country_code || 'US';
+          const countryCode = (data.country_code || 'US').toUpperCase();
           const currencyInfo = countryToCurrencyMap[countryCode] || { code: 'USD', symbol: '$' };
           const langInfo = countryToLangMap[countryCode] || ['en'];
 
           const result: LocationData = {
+            ip: data.ip || undefined,
             country_code: countryCode,
             country_name: data.country_name || 'United States',
             city: data.city || 'Unknown',

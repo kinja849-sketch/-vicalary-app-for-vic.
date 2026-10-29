@@ -204,7 +204,14 @@ async function runVerification() {
   assert(typeof indomieData.price === 'number' && indomieData.price > 0, 'Indomie must have an automatic IDR price');
   assert(Boolean(indomieData.price_metadata?.price_range?.includes('Rp')), 'Indomie price_range must be formatted in IDR (Rp)');
 
-  // 2D. Boycott FLAGGED regression check: Oreo (7622210100917)
+  // 2D. Factory Packaging Ingredients & Nutrition Facts verification: Barilla Spaghetti
+  assert(Boolean(barillaData.factory_ingredients_statement && barillaData.factory_ingredients_statement.startsWith('INGREDIENTS:')), 'Barilla must have factory_ingredients_statement starting with INGREDIENTS:');
+  assert(Boolean(barillaData.contains_statement && barillaData.contains_statement.includes('WHEAT')), 'Barilla contains_statement must state CONTAINS: WHEAT.');
+  assert(Array.isArray(barillaData.factory_ingredients_breakdown) && barillaData.factory_ingredients_breakdown.length > 0, 'Barilla must have factory_ingredients_breakdown array');
+  assert(barillaData.daily_values && typeof barillaData.daily_values.protein === 'number', 'Barilla must have calculated daily_values');
+  console.log('  [PASS] Barilla factory packaging ingredients and Nutrition Facts breakdown verified.');
+
+  // 2E. Boycott FLAGGED regression check: Oreo (7622210100917)
   const oreoRes = await fetch(`${baseUrl}/api/analyze-product-barcode`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
