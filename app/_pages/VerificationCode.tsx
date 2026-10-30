@@ -229,7 +229,7 @@ export default function VerificationCode() {
                 </p>
 
                 {/* Code Inputs */}
-                <div className="flex justify-center gap-2 sm:gap-3 mb-10" onPaste={handlePaste}>
+                <div className="flex justify-center gap-1.5 sm:gap-2.5 mb-10 w-full max-w-full px-1" onPaste={handlePaste}>
                     {code.map((digit, index) => (
                         <motion.input
                             key={index}
@@ -245,7 +245,7 @@ export default function VerificationCode() {
                             onKeyDown={(e) => handleKeyDown(index, e)}
                             onFocus={() => setFocusedIndex(index)}
                             onBlur={() => setFocusedIndex(null)}
-                            className={`size-12 sm:size-14 text-center text-2xl font-black rounded-2xl border bg-white dark:bg-[#1f2c34] text-slate-900 dark:text-white shadow-sm outline-none transition-all
+                            className={`w-10 sm:w-12 md:w-14 h-12 sm:h-14 text-center text-xl sm:text-2xl font-black rounded-2xl border bg-white dark:bg-[#1f2c34] text-slate-900 dark:text-white shadow-sm outline-none transition-all
                                 ${focusedIndex === index 
                                     ? 'border-vic-green ring-2 ring-vic-green/20' 
                                     : digit 

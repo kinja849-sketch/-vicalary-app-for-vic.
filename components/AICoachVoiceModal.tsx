@@ -992,7 +992,7 @@ export default function AICoachVoiceModal({
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        className="fixed inset-0 z-[120] bg-white flex flex-col justify-between items-center p-6 select-none text-slate-900 overflow-hidden font-display"
+        className="fixed inset-0 z-[120] bg-white flex flex-col justify-between items-center p-6 pt-safe pb-safe select-none text-slate-900 overflow-hidden font-display"
       >
         {/* Clean Center Stage: Minimalist Primary Green Avatar with Unpredictable Eye Movement */}
         {hasMicPermission === false ? (
@@ -1083,7 +1083,7 @@ export default function AICoachVoiceModal({
         )}
 
         {/* Minimalist Bottom Close Button */}
-        <div className="relative z-10 w-full max-w-xs flex items-center justify-center pb-4">
+        <div className="relative z-10 w-full max-w-xs flex items-center justify-center pb-safe" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1rem)' }}>
           <button
             onClick={handleClose}
             className="p-4 bg-slate-100 hover:bg-slate-200 active:scale-95 rounded-full text-slate-700 transition-all shadow-md border border-slate-200"

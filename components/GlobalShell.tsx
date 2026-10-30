@@ -97,8 +97,8 @@ export function GlobalShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-[100dvh] w-full bg-slate-100 dark:bg-slate-950 flex justify-center items-stretch">
-      <div className="w-full max-w-[480px] min-h-[100dvh] bg-white dark:bg-[#0b141a] flex flex-col relative shadow-2xl [overflow-x:clip]">
-        <main className={`flex-1 flex flex-col ${isNavbarVisible ? 'pb-20' : ''}`}>
+      <div className="w-full min-h-[100dvh] bg-white dark:bg-[#0b141a] flex flex-col relative shadow-2xl [overflow-x:clip]">
+        <main className={`flex-1 flex flex-col ${isNavbarVisible ? 'pb-[calc(4.5rem+env(safe-area-inset-bottom,0px))]' : ''}`}>
           {children}
         </main>
         {isNavbarVisible && <BottomNavbar />}

@@ -156,7 +156,7 @@ export function MealAnalysis({
   return (
     <div className="fixed inset-0 z-[9999] bg-white dark:bg-[#0b141a] text-slate-900 dark:text-white flex flex-col h-[100dvh] overflow-hidden">
       {/* Top Header Sticky with back button */}
-      <header className="h-16 shrink-0 z-30 flex items-center justify-between px-5 bg-white/95 dark:bg-[#0b141a]/95 backdrop-blur-xl border-b border-slate-200 dark:border-slate-800">
+      <header className="h-16 pt-safe shrink-0 z-30 flex items-center justify-between px-5 bg-white/95 dark:bg-[#0b141a]/95 backdrop-blur-xl border-b border-slate-200 dark:border-slate-800">
         <button
           onClick={onClose}
           aria-label="Return to Camera"
@@ -427,7 +427,7 @@ export function MealAnalysis({
         </section>
 
         {/* BOTTOM ACTION BUTTONS: Placed at the end of the section so they are visible only after scrolling through the section, NEVER following/floating over content */}
-        <section className="pt-2 pb-12 space-y-3 w-full">
+        <section className="pt-2 pb-safe space-y-3 w-full" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 3rem)' }}>
           {isGoalAchieved && (
             <div className="w-full py-2 px-3 bg-red-500/10 border border-red-500/20 rounded-xl text-center text-xs font-bold text-red-600 dark:text-red-400 flex items-center justify-center gap-1.5">
               <AlertCircle className="w-4 h-4 shrink-0" />

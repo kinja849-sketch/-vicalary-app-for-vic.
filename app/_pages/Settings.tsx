@@ -131,8 +131,8 @@ export default function Settings() {
   const currentLangObj = languages.find(l => l.code === lang);
 
   return (
-    <div className="flex flex-col h-screen max-w-2xl mx-auto w-full bg-white dark:bg-[#0d1418]">
-      <header className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-10 bg-white dark:bg-[#0d1418]">
+    <div className="flex flex-col h-[100dvh] max-w-2xl mx-auto w-full bg-white dark:bg-[#0d1418]">
+      <header className="flex items-center justify-between p-4 pt-safe border-b border-slate-200 dark:border-slate-800 sticky top-0 z-10 bg-white dark:bg-[#0d1418]">
         <Link
           href="/dashboard"
           className="flex items-center gap-2 text-vic-deep-blue dark:text-vic-green font-bold hover:opacity-70 transition-opacity"

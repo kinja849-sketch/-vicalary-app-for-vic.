@@ -2471,13 +2471,13 @@ export default function ChatConversation() {
     }
 
     return (
-        <div className="fixed inset-0 max-w-[480px] mx-auto z-50 flex flex-col bg-[#F0F2F5] dark:bg-[#111B21] transition-colors duration-300 overflow-hidden touch-pan-y overscroll-none select-none">
+        <div className="fixed inset-0 max-w-2xl mx-auto z-50 flex flex-col bg-[#F0F2F5] dark:bg-[#111B21] transition-colors duration-300 overflow-hidden touch-pan-y overscroll-none select-none">
             {/* Background Pattern Overlay */}
             <div className="absolute inset-0 opacity-[0.06] pointer-events-none dark:invert"></div>
 
             <div className="relative flex flex-col flex-1 h-full overflow-hidden w-full max-w-full">
                 {/* Header */}
-                <header className="shrink-0 h-[64px] bg-[#F0F2F5] dark:bg-[#202C33] border-b border-white/5 flex items-center px-4 gap-3 z-30 shadow-sm">
+                <header className="shrink-0 pt-safe bg-[#F0F2F5] dark:bg-[#202C33] border-b border-white/5 flex items-center px-4 py-2 min-h-[64px] gap-3 z-30 shadow-sm">
                     <button onClick={handleBackToChat} className="p-2 -ml-2 text-[#54656F] dark:text-[#8696A0] hover:bg-black/5 dark:hover:bg-white/5 rounded-full">
                         <ArrowLeft size={20} />
                     </button>
@@ -2891,8 +2891,8 @@ export default function ChatConversation() {
                 )}
 
                 {/* Input Footer */}
-                <footer className="px-3 md:px-4 py-2 bg-[#F0F2F5] dark:bg-[#202c33] flex items-end gap-2 relative z-40 pb-safe shrink-0 w-full max-w-[480px] mx-auto">
-                    <div className="flex-1 flex items-end gap-2 w-full max-w-[480px] mx-auto min-w-0">
+                <footer className="px-3 md:px-4 py-2 bg-[#F0F2F5] dark:bg-[#202c33] flex items-end gap-2 relative z-40 pb-safe shrink-0 w-full max-w-2xl mx-auto">
+                    <div className="flex-1 flex items-end gap-2 w-full max-w-2xl mx-auto min-w-0">
                         {(!conversation && !isVirtual) ? (
                             <div className="w-full flex items-center justify-center p-4 text-slate-500 text-sm">
                                 <div className="animate-spin size-5 border-2 border-vic-green border-t-transparent rounded-full"></div>

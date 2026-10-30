@@ -685,11 +685,11 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="relative mx-auto flex h-auto min-h-screen w-full max-w-md flex-col bg-background-light dark:bg-[#0d1418] [overflow-x:clip] font-display">
+    <div className="relative mx-auto flex h-auto min-h-screen w-full max-w-2xl flex-col bg-background-light dark:bg-[#0d1418] [overflow-x:clip] font-display">
       <CelebrationConfetti active={showCelebration} onComplete={() => setShowCelebration(false)} />
       {/* Modals */}
       <div className={`modal-overlay !bg-black ${showCameraModal ? "active" : ""}`}>
-        <div className="modal-content !p-0 bg-black w-screen h-[100dvh] flex flex-col overflow-hidden">
+        <div className="modal-content !p-0 bg-black w-full h-[100dvh] flex flex-col overflow-hidden">
           <div className="relative w-full h-full bg-black overflow-hidden">
             <video
               ref={cameraVideoRef}
@@ -706,7 +706,7 @@ export default function Dashboard() {
             <div className="absolute inset-0 pointer-events-none border-[40px] border-black/5" />
 
             {/* Top Glass Header */}
-            <div className="absolute top-0 left-0 right-0 p-6 flex justify-between items-center bg-gradient-to-b from-black/60 to-transparent">
+            <div className="absolute top-0 left-0 right-0 p-6 pt-safe flex justify-between items-center bg-gradient-to-b from-black/60 to-transparent">
               <button
                 onClick={closeCamera}
                 className="size-10 rounded-full bg-black/20 backdrop-blur-2xl text-white flex items-center justify-center border border-white/10 hover:bg-black/40 transition-all active:scale-90"
@@ -727,7 +727,7 @@ export default function Dashboard() {
             </div>
 
             {/* Bottom Perception Controls */}
-            <div className="absolute bottom-0 left-0 right-0 p-10 pb-16 flex flex-col items-center gap-8 bg-gradient-to-t from-black/80 via-black/40 to-transparent">
+            <div className="absolute bottom-0 left-0 right-0 p-10 pb-safe flex flex-col items-center gap-8 bg-gradient-to-t from-black/80 via-black/40 to-transparent">
 
 
               <div className="flex items-center justify-center w-full max-w-md gap-8">

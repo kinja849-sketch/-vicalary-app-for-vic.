@@ -634,4 +634,31 @@ a[href*="netlify.com"] {
   cursor: grabbing;
   transform: scale(1.18);
   box-shadow: 0 6px 18px rgba(11, 60, 124, 0.55);
-}
+}
+
+/* Safe Area Insets & Responsive Viewport Helpers */
+@layer utilities {
+  .safe-area-top,
+  .pt-safe {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .safe-area-bottom,
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .safe-area-left,
+  .pl-safe {
+    padding-left: env(safe-area-inset-left, 0px);
+  }
+  .safe-area-right,
+  .pr-safe {
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+}
+
+html,
+body {
+  overflow-x: hidden;
+  max-width: 100vw;
+}
+

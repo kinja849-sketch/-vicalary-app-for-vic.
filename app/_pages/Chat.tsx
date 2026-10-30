@@ -410,7 +410,7 @@ export default function Chat() {
 
   return (
     <div className="flex flex-col max-w-2xl mx-auto w-full bg-white dark:bg-[#0b141a] h-[100dvh] font-sans">
-      <header className="px-4 py-3 bg-white dark:bg-[#0d1418] sticky top-0 z-10 border-b border-slate-100 dark:border-slate-800">
+      <header className="px-4 py-3 pt-safe bg-white dark:bg-[#0d1418] sticky top-0 z-10 border-b border-slate-100 dark:border-slate-800">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-4">
             <Link href="/dashboard" className="text-vic-deep-blue dark:text-vic-green hover:opacity-70 transition-opacity">

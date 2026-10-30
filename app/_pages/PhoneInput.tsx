@@ -161,7 +161,7 @@ export default function PhoneInput() {
                                             initial={{ opacity: 0, y: 10, scale: 0.95 }}
                                             animate={{ opacity: 1, y: 0, scale: 1 }}
                                             exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                                            className="absolute top-full left-0 mt-2 w-[calc(100vw-48px)] sm:w-[320px] bg-white dark:bg-[#1f2c34] rounded-2xl shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden z-50 origin-top-left"
+                                            className="absolute top-full left-0 mt-2 w-[calc(100vw-48px)] max-w-[320px] bg-white dark:bg-[#1f2c34] rounded-2xl shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden z-50 origin-top-left"
                                         >
                                             <div className="p-3 border-b border-slate-50 dark:border-slate-800 bg-slate-50/50 dark:bg-black/20">
                                                 <input

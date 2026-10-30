@@ -1403,7 +1403,7 @@ export default function RecipeDetails() {
 
             {/* IMMERSIVE AI COOKING MODE OVERLAY */}
             {isVoiceMode && (
-                <div className="fixed inset-0 z-[100] bg-white dark:bg-[#0A1014] flex flex-col px-6 pt-5 pb-8 text-slate-900 dark:text-white overflow-hidden animate-in fade-in duration-300">
+                <div className="fixed inset-0 z-[100] bg-white dark:bg-[#0A1014] flex flex-col px-6 pt-safe pb-safe text-slate-900 dark:text-white overflow-hidden animate-in fade-in duration-300">
                     {/* Header */}
                     <div className="flex justify-between items-center mb-6 shrink-0">
                         <div className="flex flex-col">

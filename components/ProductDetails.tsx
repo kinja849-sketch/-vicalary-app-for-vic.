@@ -374,7 +374,7 @@ export function ProductDetails({
   return (
     <div className="fixed inset-0 z-[9999] bg-white dark:bg-[#0b141a] text-slate-900 dark:text-white flex flex-col h-[100dvh] overflow-hidden">
       {/* Top Header Sticky with back button */}
-      <header className="h-16 shrink-0 z-30 flex items-center justify-between px-5 bg-white/95 dark:bg-[#0b141a]/95 backdrop-blur-xl border-b border-slate-200 dark:border-slate-800">
+      <header className="h-16 pt-safe shrink-0 z-30 flex items-center justify-between px-5 bg-white/95 dark:bg-[#0b141a]/95 backdrop-blur-xl border-b border-slate-200 dark:border-slate-800">
         <button
           onClick={onClose}
           aria-label="Return to Scanner"
@@ -1110,7 +1110,7 @@ export function ProductDetails({
         )}
 
         {/* Action Buttons at the Bottom of the Scrollable Section (only visible once scrolled through the whole section) */}
-        <div className="pt-2 pb-10">
+        <div className="pt-2 pb-safe" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 2.5rem)' }}>
           <div className="flex flex-row items-center gap-3 w-full">
             {isMedication ? (
               <button

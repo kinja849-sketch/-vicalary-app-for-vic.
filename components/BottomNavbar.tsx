@@ -85,8 +85,8 @@ export const BottomNavbar: React.FC = () => {
     };
 
     return (
-        <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[480px] z-[999] bg-white/95 dark:bg-[#0d1418]/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 safe-area-bottom shadow-[0_-4px_16px_rgba(0,0,0,0.08)] select-none">
-            <div className="flex items-center justify-around h-16 w-full px-1">
+        <nav className="fixed bottom-0 left-0 right-0 w-full z-[999] bg-white/95 dark:bg-[#0d1418]/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 safe-area-bottom shadow-[0_-4px_16px_rgba(0,0,0,0.08)] select-none">
+            <div className="flex items-center justify-around h-16 w-full max-w-2xl mx-auto px-1">
                 {navItems.map((item) => {
                     const isActive = pathname === item.path;
                     return (

@@ -643,7 +643,8 @@ export default function Camera({ initialMode }: CameraProps = {}) {
         {!isAnalyzing && (
           <Link
             href="/dashboard"
-            className="absolute top-8 left-6 p-3 bg-black/40 backdrop-blur-xl rounded-full border border-white/20 hover:bg-black/60 transition-all z-20"
+            style={{ top: 'calc(env(safe-area-inset-top, 0px) + 1.25rem)' }}
+            className="absolute left-6 p-3 bg-black/40 backdrop-blur-xl rounded-full border border-white/20 hover:bg-black/60 transition-all z-20"
           >
             <ArrowLeft className="w-6 h-6" />
           </Link>
@@ -655,7 +656,8 @@ export default function Camera({ initialMode }: CameraProps = {}) {
             onClick={switchCamera}
             disabled={isSwitching}
             aria-label={facingMode === 'environment' ? 'Switch to front camera' : 'Switch to back camera'}
-            className="absolute top-8 right-6 p-3 bg-black/40 backdrop-blur-xl rounded-full border border-white/20 hover:bg-black/60 transition-all active:scale-90 z-20 disabled:opacity-50"
+            style={{ top: 'calc(env(safe-area-inset-top, 0px) + 1.25rem)' }}
+            className="absolute right-6 p-3 bg-black/40 backdrop-blur-xl rounded-full border border-white/20 hover:bg-black/60 transition-all active:scale-90 z-20 disabled:opacity-50"
           >
             <SwitchCamera className={`w-6 h-6 transition-transform duration-300 ${isSwitching ? 'animate-spin' : ''}`} />
           </button>
@@ -680,7 +682,10 @@ export default function Camera({ initialMode }: CameraProps = {}) {
 
         {/* Bottom Controls */}
         {!isAnalyzing && (
-          <div className="absolute bottom-12 left-1/2 -translate-x-1/2 flex items-center justify-center gap-6 z-20 w-full px-6 max-w-md">
+          <div
+            style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 2.5rem)' }}
+            className="absolute left-1/2 -translate-x-1/2 flex items-center justify-center gap-6 z-20 w-full px-6 max-w-md"
+          >
             {!isScanner && scanMode !== "BARCODE" ? (
               <button
                 onClick={() => fileInputRef.current?.click()}

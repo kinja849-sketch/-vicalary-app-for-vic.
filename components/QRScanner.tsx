@@ -152,7 +152,7 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
     return (
         <div className="fixed inset-0 z-[1000] bg-black flex flex-col items-center">
             {/* Header / Actions */}
-            <div className="absolute top-0 inset-x-0 z-10 flex items-center justify-between p-5 mt-10">
+            <div className="absolute top-0 inset-x-0 z-10 flex items-center justify-between p-5 pt-safe" style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1.25rem)' }}>
                 <button
                     onClick={() => { 
                         if (scannerRef.current?.isScanning) {
@@ -180,8 +180,8 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
             <div id="reader" className="w-full h-full max-h-screen relative overflow-hidden bg-black" style={{ height: '100dvh' }}>
             </div>
 
-            {/* Status indicator ?â€ bottom of screen */}
-            <div className="absolute bottom-0 inset-x-0 pb-12 flex flex-col items-center gap-6 z-20">
+            {/* Status indicator bottom of screen */}
+            <div className="absolute bottom-0 inset-x-0 pb-safe flex flex-col items-center gap-6 z-20" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 2rem)' }}>
                 {isAnalyzing ? (
                     <div className="flex flex-col items-center gap-4 bg-black/60 p-6 rounded-3xl backdrop-blur-md border border-white/10">
                         <div className="w-10 h-10 border-4 border-vic-green border-t-transparent rounded-full animate-spin" />
@@ -224,7 +224,7 @@ export default function QRScanner({ onScan, onClose, onManualCapture, isAnalyzin
             <style dangerouslySetInnerHTML={{__html: `
                 #reader video {
                     object-fit: cover !important;
-                    width: 100vw !important;
+                    width: 100% !important;
                     height: 100dvh !important;
                     position: absolute !important;
                     top: 0 !important;

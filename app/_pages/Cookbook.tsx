@@ -77,8 +77,8 @@ export default function Cookbook() {
     });
 
     return (
-        <div className="flex flex-col min-h-screen max-w-2xl mx-auto w-full bg-slate-50 dark:bg-[#0d1418]">
-            <header className="p-6 bg-white dark:bg-[#0d1418] relative z-20">
+        <div className="flex flex-col min-h-[100dvh] max-w-2xl mx-auto w-full bg-slate-50 dark:bg-[#0d1418]">
+            <header className="p-6 pt-safe bg-white dark:bg-[#0d1418] relative z-20">
                 <div className="flex items-center gap-4 mb-6">
                     <Link href="/dashboard" className="text-slate-900 dark:text-white">
                         <ArrowLeft size={24} />
