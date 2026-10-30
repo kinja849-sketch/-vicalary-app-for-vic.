@@ -1,6 +1,7 @@
 import { supabase } from '../supabase'
 import { logInfo, logError, logWarn } from './logging'
 import { getUserLocation } from './location'
+import { format } from 'date-fns'
 // Removed gemini import as it is now strictly backend-driven via Edge Functions
 
 // ============================================================================
@@ -250,7 +251,7 @@ export const scanProduct = async (userId: string, barcode: string, options?: any
     return data;
 }
 
-export const saveFoodAnalysis = async (userId: string, analysis: any, isPurchaseConfirmed: boolean = false) => {
+export const saveFoodAnalysis = async (userId: string, analysis: any, isPurchaseConfirmed: boolean = false, skipDailyProgressSync: boolean = false) => {
     if (analysis.is_already_saved && !isPurchaseConfirmed) return null;
 
     // 1. Save food item
@@ -323,7 +324,7 @@ export const saveFoodAnalysis = async (userId: string, analysis: any, isPurchase
 
     // Update daily_progress ONLY for meals you eat (Camera meals), NOT for scanner product purchases
     // Do not log null calories as 0 in daily intake if calories are genuinely missing
-    if (!analysis.is_scanner_product && analysis.calories !== null && analysis.calories !== undefined) {
+    if (!skipDailyProgressSync && !analysis.is_scanner_product && analysis.calories !== null && analysis.calories !== undefined) {
         await updateDailyProgress(
             userId,
             Number(analysis.calories || 0),
@@ -513,7 +514,7 @@ export const getRecentMeals = async (userId: string, limit = 10) => {
 // ============================================================================
 
 export const updateDailyProgress = async (userId: string, calories: number, protein: number = 0, carbs: number = 0, fat: number = 0, fiber: number = 0, sugar: number = 0) => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = format(new Date(), 'yyyy-MM-dd');
 
     const { data: existingProgress } = await supabase
         .from('daily_progress')

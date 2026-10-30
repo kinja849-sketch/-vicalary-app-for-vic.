@@ -21,6 +21,7 @@ import { uploadAvatar } from "@/lib/api/auth";
 import { CustomAnimatedIcon } from "@/components/CustomAnimatedIcon";
 import { CheckpointCalendar } from "@/components/CheckpointCalendar";
 import { useTranslation } from "@/lib/api/translation";
+import { format } from "date-fns";
 import { useCurrency } from "@/lib/CurrencyContext";
 import { supabase } from "@/lib/supabase";
 import { SpiritualReminder } from "@/components/SpiritualReminder";
@@ -91,7 +92,7 @@ export default function Dashboard() {
   });
 
   // Fetch daily progress
-  const today = new Date().toISOString().split('T')[0];
+  const today = format(new Date(), 'yyyy-MM-dd');
 
   const { data: dailyProgress, isLoading: loadingProgress } = useQuery({
     queryKey: ['daily-progress', user?.id, today],
@@ -155,9 +156,21 @@ export default function Dashboard() {
     }
   }, [user, profile, authLoading]);
 
-  // Trigger celebration confetti when daily calorie goal is reached
+  // Trigger celebration confetti ONLY when the user hits the 100 mark
   const hasCelebratedRef = useRef(false);
   useEffect(() => {
+    if (typeof window === 'undefined' || !user?.id) return;
+    const celebrationKey = `celebrated_goal_${user.id}_${today}`;
+    const justHit100 = sessionStorage.getItem('just_hit_100_goal') === 'true';
+
+    if (justHit100) {
+      sessionStorage.removeItem('just_hit_100_goal');
+      sessionStorage.setItem(celebrationKey, 'true');
+      hasCelebratedRef.current = true;
+      setShowCelebration(true);
+      return;
+    }
+
     const goal = Number(
       dailyProgress?.calories_goal ||
       profile?.goal_calories ||
@@ -166,13 +179,14 @@ export default function Dashboard() {
     );
     const consumed = Number(dailyProgress?.calories_consumed || 0);
 
+    // If goal is already achieved, mark as celebrated for today so navigation never re-triggers confetti
     if (goal > 0 && consumed >= goal) {
-      if (!hasCelebratedRef.current) {
+      if (!sessionStorage.getItem(celebrationKey)) {
+        sessionStorage.setItem(celebrationKey, 'true');
         hasCelebratedRef.current = true;
-        setShowCelebration(true);
       }
     }
-  }, [dailyProgress, profile, onboarding]);
+  }, [dailyProgress, profile, onboarding, user?.id, today]);
 
   // Route Guard: Redirect to onboarding if profile is incomplete or missing
   useEffect(() => {

@@ -13,6 +13,7 @@ import { requestCameraAccess } from "@/lib/api/permissions";
 import { useNotificationStore } from "@/store/notificationStore";
 import { useCoachInjectionStore } from "@/store/coachInjectionStore";
 import { useAuth } from "@/lib/AuthContext";
+import { useQueryClient } from "@tanstack/react-query";
 import { MealAnalysis } from "@/components/MealAnalysis";
 import { ProductDetails } from "@/components/ProductDetails";
 
@@ -27,6 +28,7 @@ export default function Camera({ initialMode }: CameraProps = {}) {
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const { user } = useAuth();
+  const queryClient = useQueryClient();
 
   const isScanner = initialMode === "BARCODE" ||
     searchParams?.get("mode") === "scanner" ||
@@ -543,7 +545,7 @@ export default function Camera({ initialMode }: CameraProps = {}) {
     const activeUserId = user?.id || userId;
     if (!activeUserId || !analysisResult) return;
     try {
-      await saveFoodAnalysis(activeUserId, analysisResult);
+      await saveFoodAnalysis(activeUserId, analysisResult, false, true);
       
       const mealToLog = {
         mealImage: capturedImage || analysisResult.image_url,
@@ -581,7 +583,15 @@ export default function Camera({ initialMode }: CameraProps = {}) {
         addNotification('success', "Logged to your diary successfully!");
       }
 
-      router.push("/dashboard");
+      if (logResult?.justAchieved && typeof window !== 'undefined') {
+        sessionStorage.setItem('just_hit_100_goal', 'true');
+      }
+
+      queryClient.invalidateQueries({ queryKey: ['daily-progress'] });
+      queryClient.invalidateQueries({ queryKey: ['daily-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['food-history'] });
+
+      return logResult;
     } catch (err) {
       console.error("Save failed:", err);
       toast.error("Failed to save to log.");

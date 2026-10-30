@@ -11,6 +11,7 @@ import { useTranslation } from "@/lib/api/translation";
 import { getOrCreateCoachConversation } from "@/lib/api/chat";
 import { getDailyProgress } from "@/lib/api/progress";
 import { getUserProfile } from "@/lib/api/auth";
+import { format } from "date-fns";
 import { FoodItemImageResolver } from "@/lib/services/FoodItemImageResolver";
 
 export interface MealAnalysisProps {
@@ -51,7 +52,7 @@ export function MealAnalysis({
     return () => setNavbarHidden(false);
   }, [setNavbarHidden]);
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = format(new Date(), 'yyyy-MM-dd');
   const { data: dailyProgress } = useQuery({
     queryKey: ['daily-progress', user?.id, today],
     queryFn: () => getDailyProgress(user?.id || '', today),

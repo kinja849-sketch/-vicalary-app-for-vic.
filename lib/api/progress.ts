@@ -56,7 +56,7 @@ export const getDailyProgress = async (userId: string, date: string) => {
     const prog = data && data.length > 0 ? data[0] : null;
 
     if (prog && typeof window !== 'undefined') {
-        const today = new Date().toISOString().split('T')[0];
+        const today = format(new Date(), 'yyyy-MM-dd');
         if (date === today) {
             const consumed = Number(prog.calories_consumed || 0);
             let goal = Number(prog.calories_goal || 0);
@@ -181,7 +181,7 @@ export const getCalendarData = async (userId: string, year: number, month: numbe
 // ============================================================================
 
 export const logMeal = async (userId: string, mealData: any) => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = format(new Date(), 'yyyy-MM-dd');
 
     let analysis = null;
 
@@ -277,6 +277,7 @@ export const logMeal = async (userId: string, mealData: any) => {
             .from('daily_progress')
             .update({
                 calories_consumed: newConsumed,
+                calories_goal: goalCalories,
                 protein_consumed: Number(currentProgress.protein_consumed || 0) + mealMacros.protein,
                 carbs_consumed: Number(currentProgress.carbs_consumed || 0) + mealMacros.carbs,
                 fat_consumed: Number(currentProgress.fat_consumed || 0) + mealMacros.fat,
@@ -347,9 +348,7 @@ export const logMeal = async (userId: string, mealData: any) => {
                 fat_consumed: mealMacros.fat,
                 fat_goal: onboarding?.fat_goal || 70,
                 fiber_consumed: mealMacros.fiber,
-                fiber_goal: onboarding?.fiber_goal || 30,
                 sugar_consumed: mealMacros.sugar,
-                sugar_goal: onboarding?.sugar_goal || 50,
                 meals_logged: 1
             });
 
