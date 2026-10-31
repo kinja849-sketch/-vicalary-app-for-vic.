@@ -15,7 +15,7 @@ export default function Profile() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { user, loading: authLoading, signOut } = useAuth();
-  const { t, lang } = useTranslation();
+  const { t, lang, formatUserName, formatDigits } = useTranslation();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -136,7 +136,14 @@ export default function Profile() {
               accept="image/*"
             />
           </div>
-          <h2 className="text-2xl font-bold text-slate-900 dark:text-white">{(profile as any)?.first_name ? `${(profile as any).first_name} ${(profile as any).last_name || ''}` : (user.user_metadata?.full_name || "User")}</h2>
+          <h2 className="text-2xl font-bold text-slate-900 dark:text-white">
+            {formatUserName(
+              (profile as any)?.full_name ||
+              ((profile as any)?.first_name ? `${(profile as any).first_name} ${(profile as any).last_name || ''}`.trim() : '') ||
+              user.user_metadata?.full_name ||
+              "User"
+            )}
+          </h2>
           <p className="text-slate-600 dark:text-slate-400">{(profile as any)?.email || user.email}</p>
         </div>
 
@@ -144,11 +151,11 @@ export default function Profile() {
         <div className="grid grid-cols-2 gap-4 mb-8">
           <div className="bg-slate-50 dark:bg-[#1f2c34] p-4 rounded-xl border border-slate-200 dark:border-slate-800">
             <p className="text-sm text-slate-500 mb-1">{t('current_weight')}</p>
-            <p className="text-xl font-bold text-slate-900 dark:text-white">{(profile as any)?.weight_kg || "--"} kg</p>
+            <p className="text-xl font-bold text-slate-900 dark:text-white">{(profile as any)?.weight_kg ? `${formatDigits((profile as any).weight_kg)} kg` : "-- kg"}</p>
           </div>
           <div className="bg-slate-50 dark:bg-[#1f2c34] p-4 rounded-xl border border-slate-200 dark:border-slate-800">
             <p className="text-sm text-slate-500 mb-1">{t('goal')}</p>
-            <p className="text-xl font-bold text-slate-900 dark:text-white">{profile?.goal_calories || "--"}</p>
+            <p className="text-xl font-bold text-slate-900 dark:text-white">{profile?.goal_calories ? `${formatDigits(profile.goal_calories)}` : "--"}</p>
           </div>
         </div>
 
@@ -160,7 +167,7 @@ export default function Profile() {
               <span className="font-medium text-slate-900 dark:text-white">{t('member_since')}</span>
             </div>
             <span className="text-slate-600 dark:text-slate-400">
-              {profile?.created_at ? new Date(profile.created_at).toLocaleDateString(lang || 'en') : t('today')}
+              {profile?.created_at ? formatDigits(new Date(profile.created_at).toLocaleDateString(lang || 'en')) : t('today')}
             </span>
           </div>
           <div className="flex items-center justify-between p-4 bg-white dark:bg-[#1f2c34] rounded-xl border border-slate-200 dark:border-slate-800">
@@ -175,7 +182,7 @@ export default function Profile() {
         {/* My QR Code Section */}
         {qrData && (
           <div className="mt-8">
-            <MyQRCode data={qrData} fullName={(profile as any)?.full_name || user.user_metadata?.full_name} />
+            <MyQRCode data={qrData} fullName={formatUserName((profile as any)?.full_name || user.user_metadata?.full_name || 'User')} />
           </div>
         )}
 

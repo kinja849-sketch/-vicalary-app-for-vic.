@@ -15,7 +15,7 @@ const ZERO_DECIMAL_CURRENCIES = ['IDR', 'JPY', 'KRW', 'VND', 'CLP', 'HUF'];
 export default function Budget() {
     const router = useRouter();
     const { user } = useAuth();
-    const { t } = useTranslation();
+    const { t, formatDigits } = useTranslation();
     const { currencyCode: clientCurrency, countryCode: clientCountry } = useCurrency();
     const [showDiagnostics, setShowDiagnostics] = useState(false);
 
@@ -48,7 +48,7 @@ export default function Budget() {
             : amount;
         const symbol = activeBudget?.currencySymbol || '$';
         const separator = symbol === 'Rp' ? ' ' : '';
-        if (isNaN(numericAmount)) return `${symbol}${separator}0`;
+        if (isNaN(numericAmount)) return `${symbol}${separator}${formatDigits(0)}`;
 
         const currencyCode = activeBudget?.currency || 'USD';
         const isZeroDecimal = ZERO_DECIMAL_CURRENCIES.includes(currencyCode);
@@ -59,8 +59,8 @@ export default function Budget() {
             maximumFractionDigits: hasDecimals ? 2 : 0,
         }).format(numericAmount);
 
-        return `${symbol}${separator}${formattedNumber}`;
-    }, [activeBudget?.currency, activeBudget?.currencySymbol]);
+        return `${symbol}${separator}${formatDigits(formattedNumber)}`;
+    }, [activeBudget?.currency, activeBudget?.currencySymbol, formatDigits]);
 
     if (budgetLoading) {
         return (
@@ -160,7 +160,7 @@ export default function Budget() {
                                 <div className="mt-6 pt-4 border-t border-white/20">
                                     <div className="flex justify-between mb-2">
                                         <p className="text-xs font-bold opacity-80 uppercase">{t('monthly_cycle_overview')}</p>
-                                        <p className="text-xs font-bold opacity-80">{activeBudget.daysRemaining} {t('days_left_cycle')}</p>
+                                        <p className="text-xs font-bold opacity-80">{formatDigits(activeBudget.daysRemaining)} {t('days_left_cycle')}</p>
                                     </div>
                                     <div className="w-full bg-white/30 h-2 rounded-full overflow-hidden mb-2">
                                         <div 
@@ -185,7 +185,7 @@ export default function Budget() {
                         <div>
                             <h3 className="font-bold text-yellow-800 dark:text-yellow-500">⚠ {t('budget_warning_alert')}</h3>
                             <p className="text-sm text-yellow-700 dark:text-yellow-600 mt-1">
-                                {activeBudget.percentUsed.toFixed(0)}%
+                                {formatDigits(activeBudget.percentUsed.toFixed(0))}%
                             </p>
                         </div>
                     </div>
@@ -212,7 +212,7 @@ export default function Budget() {
                             </h3>
                             {activeBudget.recentExpenses?.length > 0 && (
                                 <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                                    {activeBudget.recentExpenses.length} {t('deducted_today')}
+                                    {formatDigits(activeBudget.recentExpenses.length)} {t('deducted_today')}
                                 </span>
                             )}
                         </div>
@@ -236,7 +236,7 @@ export default function Budget() {
                                                         {expense.merchant_name}
                                                     </p>
                                                     <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                                                        {t('deducted_today_at')} {timeStr}
+                                                        {t('deducted_today_at')} {formatDigits(timeStr)}
                                                     </p>
                                                 </div>
                                             </div>

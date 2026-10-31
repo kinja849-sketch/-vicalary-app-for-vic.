@@ -7,6 +7,9 @@ import { detectLocation, getPrimaryLanguage } from './location';
 import { updateSettings } from './settings';
 import { toast } from 'sonner';
 import { getUserLocalHour } from '../utils/mealSession';
+import { localizeDigits, localizeNumber, localizeUserName } from '../utils/localeFormatting';
+
+export { localizeDigits, localizeNumber, localizeUserName };
 
 import i18n from 'i18next';
 import { initReactI18next, useTranslation as useI18nextTranslation } from 'react-i18next';
@@ -63,7 +66,8 @@ i18n
   });
 
 export const getTranslation = (lang: string = 'en', key: string): string => {
-    return i18n.getResource(lang, 'translation', key) || i18n.getResource('en', 'translation', key) || key;
+    const raw = i18n.getResource(lang, 'translation', key) || i18n.getResource('en', 'translation', key) || key;
+    return typeof raw === 'string' ? localizeDigits(raw, lang) : String(raw || '');
 };
 
 export const useTranslation = () => {
@@ -221,13 +225,19 @@ export const useTranslation = () => {
     const currencySymbol = (settings as any)?.currency_symbol || detectedLoc?.currency_symbol || currencySymbols[currency] || '$';
     
     // Explicitly fallback to old logic if i18next returns key directly due to missing resource
-    const t = (key: string) => {
-        const res = i18nT(key);
-        return res === key ? getTranslation(lang, key) : res;
+    const t = (key: string, options?: any): string => {
+        const res = i18nT(key, options);
+        const resolved = res === key ? getTranslation(lang, key) : res;
+        return typeof resolved === 'string' ? localizeDigits(resolved, lang) : String(resolved || '');
     };
 
+    const formatDigits = (val: string | number | null | undefined) => localizeDigits(val, lang);
+    const formatNumber = (val: number | null | undefined, options?: Intl.NumberFormatOptions) => localizeNumber(val, options, lang);
+    const formatUserName = (name: string | null | undefined) => localizeUserName(name, lang);
+
     const formatCurrency = (amount: number) => {
-        return `${currencySymbol}${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        const formatted = `${currencySymbol}${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        return localizeDigits(formatted, lang);
     };
 
     const localHour = getUserLocalHour(timezone);
@@ -260,6 +270,11 @@ export const useTranslation = () => {
         countryFlag,
         localHour, 
         formatCurrency, 
+        formatDigits,
+        formatNumber,
+        formatUserName,
+        localizeDigits: formatDigits,
+        localizeUserName: formatUserName,
         speak, 
         refreshLocation, 
         isAuto 

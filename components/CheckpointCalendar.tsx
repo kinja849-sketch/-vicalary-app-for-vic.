@@ -15,7 +15,7 @@ interface CheckpointCalendarProps {
 
 export const CheckpointCalendar: React.FC<CheckpointCalendarProps> = ({ joinDate, onEditProgress }) => {
     const { user } = useAuth();
-    const { t, lang } = useTranslation();
+    const { t, lang, formatDigits } = useTranslation();
     const router = useRouter();
     const today = startOfToday();
     const [selectedDate, setSelectedDate] = useState<Date | null>(null);
@@ -153,11 +153,11 @@ export const CheckpointCalendar: React.FC<CheckpointCalendarProps> = ({ joinDate
             <div className="flex items-center justify-between mb-4">
                 <div className="flex flex-col">
                     <div className="flex items-center gap-2">
-                        <h3 className="text-lg font-bold text-slate-900 dark:text-white">{t('hijri_timeline')}</h3>
+                        <h3 className="text-lg font-bold text-slate-900 dark:text-white">{t('hijri_calendar') || t('hijri_timeline')}</h3>
                         <div className="size-2 rounded-full bg-vic-green animate-pulse" />
                     </div>
                     <span className="text-xs font-medium text-slate-500 uppercase tracking-widest font-mono">
-                        {getHijriDateString(today)}
+                        {formatDigits(getHijriDateString(today))}
                     </span>
                 </div>
 
@@ -208,7 +208,7 @@ export const CheckpointCalendar: React.FC<CheckpointCalendarProps> = ({ joinDate
                             </span>
 
                             <span className="text-2xl font-black leading-none mt-0.5">
-                                {hijriDay}
+                                {formatDigits(hijriDay)}
                             </span>
 
                             <span className={`text-[9px] font-bold mt-1 uppercase ${isToday ? 'text-slate-900/50' : isMilestone ? 'text-indigo-300' : 'text-slate-400'
@@ -218,7 +218,7 @@ export const CheckpointCalendar: React.FC<CheckpointCalendarProps> = ({ joinDate
                             
                             <span className={`text-[8px] font-bold mt-1 tracking-wider opacity-60 ${isToday ? 'text-slate-900' : isMilestone ? 'text-indigo-200' : 'text-slate-500'
                                 }`}>
-                                {date.getDate()} / Month {date.getMonth() + 1}
+                                {formatDigits(date.getDate())} / {t('month') || 'Month'} {formatDigits(date.getMonth() + 1)}
                             </span>
 
                             {isMilestone && (
@@ -234,7 +234,7 @@ export const CheckpointCalendar: React.FC<CheckpointCalendarProps> = ({ joinDate
                     <div className="flex items-start gap-3">
                         <Info className="text-indigo-500 mt-0.5 shrink-0" size={18} />
                         <p className="text-xs text-indigo-900 dark:text-indigo-200 leading-relaxed font-medium">
-                            {t('today_is')} <span className="font-bold">{getHijriDateString(today)}</span>. {t('milestone_week')} {getMilestoneWeek(today)}!
+                            {t('today_is')} <span className="font-bold">{formatDigits(getHijriDateString(today))}</span>. {t('milestone_week')} {formatDigits(getMilestoneWeek(today))}!
                         </p>
                     </div>
                     <button
@@ -248,7 +248,7 @@ export const CheckpointCalendar: React.FC<CheckpointCalendarProps> = ({ joinDate
                 <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-xl p-3 flex items-start gap-3 mt-2 border border-indigo-100 dark:border-indigo-800/30 animate-in fade-in slide-in-from-bottom-2">
                     <Info className="text-indigo-500 mt-0.5 shrink-0" size={18} />
                     <p className="text-xs text-indigo-900 dark:text-indigo-200 leading-relaxed font-medium">
-                        {t('today_is')} <span className="font-bold">{getHijriDateString(today)}</span>. {t('milestone_info')}
+                        {t('today_is')} <span className="font-bold">{formatDigits(getHijriDateString(today))}</span>. {t('milestone_info')}
                     </p>
                 </div>
             )}

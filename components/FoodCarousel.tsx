@@ -78,7 +78,7 @@ export default function FoodCarousel({
         rawActiveMeals && rawActiveMeals.length > 0 ? rawActiveMeals : []
     );
 
-    const { t } = useTranslation();
+    const { t, formatDigits } = useTranslation();
 
     const getVisibleCards = () => {
         if (activeMeals.length === 0) return [];
@@ -99,9 +99,9 @@ export default function FoodCarousel({
     const visibleCards = getVisibleCards();
 
     const mealLabels: any = {
-        breakfast: { title: t('breakfast') || "Breakfast", time: "6:00 AM - 11:00 AM", icon: Sunrise },
-        lunch: { title: t('lunch') || "Lunch", time: "11:00 AM - 4:00 PM", icon: Sun },
-        dinner: { title: t('dinner') || "Dinner", time: "4:00 PM - 4:00 AM", icon: Moon },
+        breakfast: { title: t('breakfast') || "Breakfast", time: formatDigits("6:00 AM - 11:00 AM"), icon: Sunrise },
+        lunch: { title: t('lunch') || "Lunch", time: formatDigits("11:00 AM - 4:00 PM"), icon: Sun },
+        dinner: { title: t('dinner') || "Dinner", time: formatDigits("4:00 PM - 4:00 AM"), icon: Moon },
         single: { title: categoryTitle || "Suggested", time: "Tailored for you", icon: UtensilsCrossed }
     };
 
@@ -165,7 +165,7 @@ export default function FoodCarousel({
                             </div>
                         )}
                         <div className="text-[10px] font-black text-vic-green tabular-nums">
-                            {activeMeals.length > 0 ? `${localIdx + 1} / ${activeMeals.length}` : ''}
+                            {activeMeals.length > 0 ? `${formatDigits(localIdx + 1)} / ${formatDigits(activeMeals.length)}` : ''}
                         </div>
                     </div>
                 </div>
@@ -200,7 +200,7 @@ export default function FoodCarousel({
                                             <div className="flex justify-between items-end mb-1">
                                                 <h2 className="product-name">{meal.name}</h2>
                                                 <div className="product-calories-badge">
-                                                    {meal.calories} <span className="text-[8px] opacity-70">KCAL</span>
+                                                    {formatDigits(meal.calories)} <span className="text-[8px] opacity-70">KCAL</span>
                                                 </div>
                                             </div>
                                             <div className="flex items-center gap-2 text-[10px] text-white/60 font-bold uppercase tracking-wider">
@@ -210,7 +210,7 @@ export default function FoodCarousel({
                                                 </div>
                                                 <div className="w-1 h-1 bg-white/20 rounded-full" />
                                                 <div className="flex items-center gap-1">
-                                                    {mealLabels[selectedTab].time.split(' - ')[0]}
+                                                    {formatDigits(mealLabels[selectedTab].time.split(' - ')[0])}
                                                 </div>
                                             </div>
                                         </div>

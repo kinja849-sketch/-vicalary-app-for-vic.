@@ -40,7 +40,7 @@ export default function Dashboard() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { user, loading: authLoading } = useAuth();
-  const { t, country, countryFlag, lang, localHour, speak } = useTranslation();
+  const { t, country, countryFlag, lang, localHour, speak, formatUserName, formatDigits } = useTranslation();
   const [currentView, setCurrentView] = useState<"dashboard" | "progress">("dashboard");
   const [darkMode, setDarkMode] = useState(false);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
@@ -831,7 +831,7 @@ export default function Dashboard() {
       <div className="flex items-center gap-4 px-4 pt-4">
         <div className="flex flex-col">
           <h1 className="text-[#111812] dark:text-white tracking-light text-[32px] font-bold leading-tight">
-            {t('welcome')}, {(profile as any)?.full_name || user.user_metadata?.full_name || user.user_metadata?.first_name || "User"}
+            {t('welcome')}, {formatUserName((profile as any)?.full_name || user.user_metadata?.full_name || user.user_metadata?.first_name || "User")}
           </h1>
           <p className="text-slate-600 dark:text-slate-400 text-base">{t('ready_journey')}</p>
         </div>

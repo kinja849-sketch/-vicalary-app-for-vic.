@@ -12,7 +12,7 @@ interface ProgressCardProps {
 }
 
 export const ProgressCard: React.FC<ProgressCardProps> = ({ profile, dailyProgress, user, onAvatarUpload, onCelebrate }) => {
-    const { t } = useTranslation();
+    const { t, formatDigits, isRTL } = useTranslation();
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const caloriesGoal = Number(dailyProgress?.calories_goal || profile?.goal_calories || 2000);
@@ -56,10 +56,10 @@ export const ProgressCard: React.FC<ProgressCardProps> = ({ profile, dailyProgre
                         <p className="text-slate-700 dark:text-slate-300 text-xs uppercase tracking-widest mb-1 font-black drop-shadow-sm">{t('todays_progress')}</p>
                         <div className="flex items-baseline whitespace-nowrap">
                             <span className="text-5xl font-black text-slate-900 dark:text-white leading-none tracking-tight drop-shadow-md">
-                                {percentage}
+                                {formatDigits(percentage)}
                             </span>
                             <span className="text-3xl font-black text-slate-800 dark:text-slate-200 leading-none drop-shadow-sm ml-1">
-                                %
+                                {isRTL ? '٪' : '%'}
                             </span>
                         </div>
                     </div>
@@ -137,17 +137,17 @@ export const ProgressCard: React.FC<ProgressCardProps> = ({ profile, dailyProgre
                     }`}>
                         <p className={`text-xl font-black leading-none mb-1 ${
                             isExceeded ? 'text-red-600 dark:text-red-500 font-black' : 'text-slate-900 dark:text-white'
-                        }`}>{caloriesConsumed}</p>
+                        }`}>{formatDigits(caloriesConsumed)}</p>
                         <p className={`text-[10px] font-bold uppercase tracking-wider ${
                             isExceeded ? 'text-red-600 dark:text-red-400 font-black' : 'text-slate-700 dark:text-slate-400'
                         }`}>{t('eaten')}</p>
                     </div>
                     <div className="bg-white/40 dark:bg-black/20 p-2 rounded-xl backdrop-blur-sm border border-white/20 dark:border-white/5">
-                        <p className="text-xl font-black text-slate-900 dark:text-white leading-none mb-1">{caloriesLeft}</p>
+                        <p className="text-xl font-black text-slate-900 dark:text-white leading-none mb-1">{formatDigits(caloriesLeft)}</p>
                         <p className="text-[10px] text-slate-700 dark:text-slate-400 font-bold uppercase tracking-wider">{t('left')}</p>
                     </div>
                     <div className="bg-white/40 dark:bg-black/20 p-2 rounded-xl backdrop-blur-sm border border-white/20 dark:border-white/5">
-                        <p className="text-xl font-black text-slate-900 dark:text-white leading-none mb-1">{caloriesGoal}</p>
+                        <p className="text-xl font-black text-slate-900 dark:text-white leading-none mb-1">{formatDigits(caloriesGoal)}</p>
                         <p className="text-[10px] text-slate-700 dark:text-slate-400 font-bold uppercase tracking-wider">{t('goal_stat')}</p>
                     </div>
                 </div>

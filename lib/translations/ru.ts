@@ -73,6 +73,7 @@ export const ru = {
     search_placeholder: "Поиск рецептов, ингредиентов...",
     no_notifications: "Уведомлений пока нет",
     notifications_desc: "Мы сообщим вам, когда появится что-то важное.",
+    hijri_calendar: "Календарь Хиджры",
     hijri_timeline: "Календарь Хиджры",
     today_is: "Сегодня",
     milestone_info: "Нажмите на выделенные дни, чтобы обновить прогресс.",

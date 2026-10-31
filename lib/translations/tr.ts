@@ -73,6 +73,7 @@ export const tr = {
     search_placeholder: "Tarif, malzeme ara...",
     no_notifications: "Henüz bildirim yok",
     notifications_desc: "Önemli bir şey olduğunda size haber vereceğiz.",
+    hijri_calendar: "Hicri Takvim",
     hijri_timeline: "Hicri Takvim",
     today_is: "Bugün",
     milestone_info: "Başarıları güncellemek için işaretli günlere dokunun.",

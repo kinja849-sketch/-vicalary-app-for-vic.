@@ -10,7 +10,7 @@ interface SpiritualReminderProps {
 }
 
 export const SpiritualReminder = ({ userId }: SpiritualReminderProps) => {
-    const { t, lang } = useTranslation();
+    const { t, lang, formatDigits } = useTranslation();
     const [reminder, setReminder] = useState<{ type: 'quran' | 'hadith', content: string, content_ar?: string, reference: string } | null>(null);
     const [isVisible, setIsVisible] = useState(false);
     // Keep track of the active phase so we don't re-fetch multiple times during the same phase
@@ -107,7 +107,7 @@ export const SpiritualReminder = ({ userId }: SpiritualReminderProps) => {
 
                     <div className="flex items-center justify-between">
                         <div className="flex flex-col gap-1">
-                            <span className="text-vic-pink text-xs font-bold uppercase tracking-wider">— {reminder.reference}</span>
+                            <span className="text-vic-pink text-xs font-bold uppercase tracking-wider">— {formatDigits(reminder.reference)}</span>
                             {(reminder as any).verifyUrl && (
                                 <a
                                     href={(reminder as any).verifyUrl}
