@@ -126,9 +126,7 @@ export default function Camera({ initialMode }: CameraProps = {}) {
           ctx.drawImage(img, 0, 0);
           if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
             try {
-              const detector = new (window as any).BarcodeDetector({
-                formats: ['ean_13', 'upc_a', 'upc_e', 'ean_8', 'code_128', 'code_39', 'code_93', 'itf', 'qr_code', 'data_matrix']
-              });
+              const detector = barcodeDetectorRef.current || new (window as any).BarcodeDetector();
               const barcodes = await detector.detect(canvas);
               if (barcodes.length > 0 && barcodes[0]?.rawValue) {
                 detectedBarcode = barcodes[0].rawValue;
@@ -513,8 +511,24 @@ export default function Camera({ initialMode }: CameraProps = {}) {
     setIsAnalyzing(true);
 
     try {
-      const response = await fetch(imageData);
-      const blob = await response.blob();
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((b) => {
+          if (b) {
+            resolve(b);
+          } else {
+            try {
+              const byteString = atob(imageData.split(',')[1]);
+              const mimeString = imageData.split(',')[0].split(':')[1].split(';')[0];
+              const ab = new ArrayBuffer(byteString.length);
+              const ia = new Uint8Array(ab);
+              for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+              resolve(new Blob([ab], { type: mimeString }));
+            } catch (e) {
+              reject(e);
+            }
+          }
+        }, "image/jpeg", 0.9);
+      });
       const file = new File([blob], "capture.jpg", { type: "image/jpeg" });
 
       const result = scanMode === "BARCODE"

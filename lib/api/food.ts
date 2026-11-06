@@ -64,20 +64,23 @@ export const analyzeFoodImage = async (userId: string, file: File, options?: any
         console.log("Analyzing image with backend Edge Function...");
 
         // 1. Upload to storage & convert to base64 in parallel for speed
-        const fileExt = file.name.split('.').pop();
-        const fileName = `${userId}-${Date.now()}.${fileExt}`;
-        const filePath = `${userId}/${fileName}`;
+        const cleanUserId = (userId || 'anon').replace(/[^a-zA-Z0-9_-]/g, '_');
+        const rawExt = file.name ? file.name.split('.').pop() || 'jpg' : 'jpg';
+        const fileExt = rawExt.toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+        const fileName = `${cleanUserId}-${Date.now()}.${fileExt}`;
+        const filePath = `${cleanUserId}/${fileName}`;
 
         const uploadPromise = supabase.storage
             .from('food-images')
             .upload(filePath, file)
             .then(res => {
-                if (res.error) throw res.error;
+                if (res.error) return null;
                 const { data: { publicUrl } } = supabase.storage
                     .from('food-images')
                     .getPublicUrl(filePath);
                 return publicUrl;
-            });
+            })
+            .catch(() => null);
 
         // Convert file to base64 for direct AI processing
         const base64Promise = new Promise<string | null>((resolve) => {
@@ -114,13 +117,17 @@ export const analyzeFoodImage = async (userId: string, file: File, options?: any
             })
         });
 
+        const rawResponseText = await res.text().catch(() => '');
+        let data: any = null;
+        try {
+            data = rawResponseText ? JSON.parse(rawResponseText) : null;
+        } catch {
+            data = null;
+        }
+
         if (!res.ok) {
-            const errorText = await res.text().catch(() => '');
-            let parsedError = '';
-            try {
-                const jsonErr = JSON.parse(errorText);
-                parsedError = jsonErr.error || jsonErr.message;
-            } catch {
+            let parsedError = data?.error || data?.message;
+            if (!parsedError) {
                 parsedError = res.status === 504 
                     ? 'Meal analysis timed out. Please try again with a clear photo.'
                     : `Meal analysis failed (HTTP ${res.status})`;
@@ -128,8 +135,6 @@ export const analyzeFoodImage = async (userId: string, file: File, options?: any
             console.warn('analyze-food-image returned error:', parsedError);
             throw new Error(parsedError);
         }
-
-        const data = await res.json();
 
         if (data && data.error) {
             const errMsg = data.error || 'analyze-food-image failed';
@@ -152,9 +157,11 @@ export const analyzeFoodImage = async (userId: string, file: File, options?: any
 
 export const analyzeMedication = async (userId: string, file: File, options?: any) => {
     try {
-        const fileExt = file.name.split('.').pop();
-        const fileName = `med-${userId}-${Date.now()}.${fileExt}`;
-        const filePath = `${userId}/${fileName}`;
+        const cleanUserId = (userId || 'anon').replace(/[^a-zA-Z0-9_-]/g, '_');
+        const rawExt = file.name ? file.name.split('.').pop() || 'jpg' : 'jpg';
+        const fileExt = rawExt.toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+        const fileName = `med-${cleanUserId}-${Date.now()}.${fileExt}`;
+        const filePath = `${cleanUserId}/${fileName}`;
 
         const uploadPromise = supabase.storage
             .from('food-images')
@@ -200,7 +207,13 @@ export const analyzeMedication = async (userId: string, file: File, options?: an
             })
         });
 
-        const data = await res.json();
+        const rawMedText = await res.text().catch(() => '');
+        let data: any = null;
+        try {
+            data = rawMedText ? JSON.parse(rawMedText) : null;
+        } catch {
+            data = null;
+        }
         if (!res.ok || (data && data.error) || data?.is_medication === false) {
             const err: any = new Error(data?.message || data?.error || 'Be serious. This is not a medicine at all.');
             if (data?.is_medication === false || res.status === 422) {
