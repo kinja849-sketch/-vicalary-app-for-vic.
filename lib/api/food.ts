@@ -114,10 +114,25 @@ export const analyzeFoodImage = async (userId: string, file: File, options?: any
             })
         });
 
+        if (!res.ok) {
+            const errorText = await res.text().catch(() => '');
+            let parsedError = '';
+            try {
+                const jsonErr = JSON.parse(errorText);
+                parsedError = jsonErr.error || jsonErr.message;
+            } catch {
+                parsedError = res.status === 504 
+                    ? 'Meal analysis timed out. Please try again with a clear photo.'
+                    : `Meal analysis failed (HTTP ${res.status})`;
+            }
+            console.warn('analyze-food-image returned error:', parsedError);
+            throw new Error(parsedError);
+        }
+
         const data = await res.json();
 
-        if (!res.ok || (data && data.error)) {
-            const errMsg = data?.error || 'analyze-food-image failed';
+        if (data && data.error) {
+            const errMsg = data.error || 'analyze-food-image failed';
             console.warn('analyze-food-image returned error:', errMsg);
             throw new Error(errMsg);
         }

@@ -513,13 +513,13 @@ Return ONLY a valid JSON object matching this schema:
             type: 'image_url',
             image_url: {
               url: resolvedImageUri,
-              detail: 'high'
+              detail: 'auto'
             }
           }
         ]
       }],
       temperature: 0.1,
-      max_tokens: 2500,
+      max_tokens: 450,
       response_format: { type: 'json_object' }
     });
 
@@ -546,7 +546,7 @@ Return ONLY a valid JSON object matching this schema:
           ]
         }],
         temperature: 0.1,
-        max_tokens: 2500,
+        max_tokens: 450,
         response_format: { type: 'json_object' }
       });
       const retryParsed = parseJSONSafely(retryVisionResult.choices[0]?.message?.content);
@@ -589,7 +589,8 @@ Return ONLY a valid JSON object matching this schema:
       items: identifiedFoods,
       supabase,
       imageUrl: resolvedImageUri,
-      primaryConfidence: avgVisionConfidence
+      primaryConfidence: avgVisionConfidence,
+      skipNetwork: true
     });
     const nutritionCalculation = orchestratedResult.calculation;
 
@@ -597,7 +598,7 @@ Return ONLY a valid JSON object matching this schema:
     // normalize the display items for their authentic isolated images while keeping the plate-level total calories!
     let finalCarouselItems = nutritionCalculation.normalized_items;
     if (isCookedDishMode && displayItemsForCarousel.length > 0) {
-      const displayNormalized = await NutritionNormalizer.calculateMealNutrition(displayItemsForCarousel, supabase);
+      const displayNormalized = await NutritionNormalizer.calculateMealNutrition(displayItemsForCarousel, supabase, { skipNetwork: true });
       finalCarouselItems = displayNormalized.normalized_items.map(item => ({
         ...item,
         is_cooked_ingredient: true,
@@ -703,7 +704,7 @@ Return ONLY a JSON object:
       model: 'gpt-4o-mini',
       messages: [{ role: 'user', content: synthesisPrompt }],
       temperature: 0.2,
-      max_tokens: 2500,
+      max_tokens: 650,
       response_format: { type: 'json_object' }
     });
 

@@ -321,6 +321,7 @@ Return ONLY valid JSON:
     supabase?: SupabaseClient;
     imageUrl?: string;
     primaryConfidence?: number;
+    skipNetwork?: boolean;
   }): Promise<MealOrFreshFoodWorkflowResult> {
     const workflow = this.classifyMealWorkflow(params.dishName, params.items);
     const confidence = params.primaryConfidence ?? 0.85;
@@ -351,12 +352,17 @@ Return ONLY valid JSON:
       const decomposed = await NutritionNormalizer.decomposeAndCalculateMixedMeal(
         params.dishName,
         params.items,
-        params.supabase
+        params.supabase,
+        { skipNetwork: params.skipNetwork ?? true }
       );
       calculation = decomposed.calculation;
       isDecomposedMixedMeal = decomposed.is_decomposed_template || calculation.normalized_items.length > 1;
     } else {
-      calculation = await NutritionNormalizer.calculateMealNutrition(params.items, params.supabase);
+      calculation = await NutritionNormalizer.calculateMealNutrition(
+        params.items,
+        params.supabase,
+        { skipNetwork: params.skipNetwork ?? true }
+      );
       isDecomposedMixedMeal = calculation.normalized_items.length > 1;
     }
 

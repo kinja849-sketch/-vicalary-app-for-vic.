@@ -1206,7 +1206,8 @@ export class NutritionNormalizer {
    */
   static async calculateMealNutrition(
     items: IdentifiedFoodItem[],
-    supabase?: SupabaseClient
+    supabase?: SupabaseClient,
+    options?: { skipNetwork?: boolean }
   ): Promise<MealNutritionCalculation> {
     if (!items || items.length === 0) {
       return {
@@ -1331,7 +1332,10 @@ export class NutritionNormalizer {
 
       // Check USDA FoodData Central for fresh foods and single whole ingredients (Examples C & D)
       if (!matchedData) {
-        const usdaMatch = await USDAFoodDataService.lookupFreshFood(lowerName, prepState);
+        const usdaMatch = await USDAFoodDataService.lookupFreshFood(lowerName, prepState, {
+          supabase,
+          skipNetwork: options?.skipNetwork ?? true
+        });
         if (usdaMatch) {
           matchedData = {
             calories: usdaMatch.per_100g.calories_kcal,
@@ -1663,7 +1667,8 @@ export class NutritionNormalizer {
   static async decomposeAndCalculateMixedMeal(
     dishName: string,
     observedItems?: IdentifiedFoodItem[],
-    supabase?: SupabaseClient
+    supabase?: SupabaseClient,
+    options?: { skipNetwork?: boolean }
   ): Promise<{
     is_decomposed_template: boolean;
     dish_name: string;
@@ -1713,7 +1718,7 @@ export class NutritionNormalizer {
         }));
       }
 
-      const calculation = await this.calculateMealNutrition(componentList, supabase);
+      const calculation = await this.calculateMealNutrition(componentList, supabase, options);
       return {
         is_decomposed_template: true,
         dish_name: template.dish_name_id,
@@ -1753,7 +1758,7 @@ export class NutritionNormalizer {
       }
     }
 
-    const calculation = await this.calculateMealNutrition(workingItems, supabase);
+    const calculation = await this.calculateMealNutrition(workingItems, supabase, options);
     return {
       is_decomposed_template: false,
       dish_name: dishName,
