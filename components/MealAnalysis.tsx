@@ -166,11 +166,10 @@ export function MealAnalysis({
           <ArrowLeft className="w-5 h-5" />
         </button>
         <div className="flex items-center gap-2">
-          <span className={`px-3 py-1 rounded-full text-xs font-black tracking-wider uppercase shadow-sm ${
-            verdict === 'GOOD' ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30' :
-            verdict === 'MODERATE' ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30' :
-            'bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/30'
-          }`}>
+          <span className={`px-3 py-1 rounded-full text-xs font-black tracking-wider uppercase shadow-sm ${verdict === 'GOOD' ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30' :
+              verdict === 'MODERATE' ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30' :
+                'bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/30'
+            }`}>
             {verdict === 'GOOD' ? 'Good' : verdict === 'MODERATE' ? 'Moderate' : 'Avoid'}
           </span>
         </div>
@@ -187,7 +186,7 @@ export function MealAnalysis({
             className="w-full h-full object-cover"
           />
           <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-90" />
-          
+
           <div className="absolute bottom-5 left-5 right-5">
             <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight drop-shadow-md">
               {name}
@@ -205,8 +204,9 @@ export function MealAnalysis({
             {/* Horizontal Scrollable Row of Food Item Tiles (Matching Reference media_1793309730201.png) */}
             <div className="flex items-stretch gap-3 overflow-x-auto pb-2 pt-1 no-scrollbar [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] -mx-5 px-5 sm:mx-0 sm:px-0">
               {items.map((item: any, idx: number) => {
-                const displayName = item.count ? `${item.name} (${item.count})` : item.name;
-                const displayKcal = Number(item.calories ?? 0);
+                const isCookedIngredient = Boolean(item.is_cooked_ingredient);
+                const displayName = !isCookedIngredient && item.count ? `${item.name} (${item.count})` : item.name;
+                const displayKcal = Math.round(Number(item.calories ?? 0));
                 const displayImg = item.image_url || item.image || FoodItemImageResolver.resolveImageUrl(item.name, item.variant_or_method);
 
                 return (
@@ -221,7 +221,8 @@ export function MealAnalysis({
                         alt={item.name}
                         className="w-full h-full object-contain drop-shadow-sm pointer-events-none"
                         onError={(e: any) => {
-                          e.target.src = 'https://images.unsplash.com/photo-1516684732162-798a0062be99?auto=format&fit=crop&w=300&q=80';
+                          e.target.onerror = null;
+                          e.target.src = mealImage || 'https://www.themealdb.com/images/ingredients/Flour.png';
                         }}
                       />
                     </div>
@@ -231,14 +232,22 @@ export function MealAnalysis({
                         {displayName}
                       </h4>
                       <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                        {item.portion_description || (item.portion_g ? `~${item.portion_g}g` : '')}
+                        {isCookedIngredient
+                          ? (item.portion_description || 'Used in dish')
+                          : (item.portion_description || (item.portion_g ? `~${item.portion_g}g` : ''))}
                       </p>
                     </div>
-                    {/* Calorie indicator badge */}
+                    {/* Calorie indicator badge (or cooked ingredient indicator when meal is cooked/baked) */}
                     <div className="mt-2 pt-2 border-t border-slate-200/60 dark:border-white/10 w-full flex items-center justify-center">
-                      <span className="text-xs sm:text-sm font-black text-slate-900 dark:text-white">
-                        {displayKcal} <span className="text-[10px] font-semibold text-slate-400">kcal</span>
-                      </span>
+                      {isCookedIngredient ? (
+                        <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                          Used in meal
+                        </span>
+                      ) : (
+                        <span className="text-xs sm:text-sm font-black text-slate-900 dark:text-white">
+                          {displayKcal} <span className="text-[10px] font-semibold text-slate-400">kcal</span>
+                        </span>
+                      )}
                     </div>
                   </div>
                 );
@@ -252,7 +261,7 @@ export function MealAnalysis({
               </span>
               <div className="flex items-baseline gap-1.5">
                 <span className="text-xl sm:text-2xl font-black text-white">
-                  {calories}
+                  {Math.round(calories)}
                 </span>
                 <span className="text-xs font-bold text-emerald-400">
                   kcal
@@ -374,13 +383,11 @@ export function MealAnalysis({
         </section>
 
         {/* SECTION 3: RECOMMENDED FOR YOUR PLAN */}
-        <section className={`border rounded-[2rem] p-6 sm:p-7 shadow-sm space-y-5 ${
-          isRecommended ? 'bg-emerald-500/5 dark:bg-emerald-500/10 border-emerald-500/20' : 'bg-rose-500/5 dark:bg-rose-500/10 border-rose-500/20'
-        }`}>
+        <section className={`border rounded-[2rem] p-6 sm:p-7 shadow-sm space-y-5 ${isRecommended ? 'bg-emerald-500/5 dark:bg-emerald-500/10 border-emerald-500/20' : 'bg-rose-500/5 dark:bg-rose-500/10 border-rose-500/20'
+          }`}>
           <div className="flex items-center gap-2">
-            <div className={`size-8 rounded-xl flex items-center justify-center border ${
-              isRecommended ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/30' : 'bg-rose-500/20 text-rose-600 dark:text-rose-400 border-rose-500/30'
-            }`}>
+            <div className={`size-8 rounded-xl flex items-center justify-center border ${isRecommended ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/30' : 'bg-rose-500/20 text-rose-600 dark:text-rose-400 border-rose-500/30'
+              }`}>
               {isRecommended ? <Check className="w-4 h-4" /> : <ShieldAlert className="w-4 h-4" />}
             </div>
             <div>
@@ -440,11 +447,10 @@ export function MealAnalysis({
               onClick={handleLogMeal}
               disabled={isLogging || isGoalAchieved}
               title={isGoalAchieved ? "Daily calorie goal reached. Reset progress to log more meals." : undefined}
-              className={`flex-1 h-14 px-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2.5 transition-all whitespace-nowrap ${
-                isGoalAchieved
+              className={`flex-1 h-14 px-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2.5 transition-all whitespace-nowrap ${isGoalAchieved
                   ? "bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 opacity-40 cursor-not-allowed pointer-events-none shadow-none"
                   : "bg-vic-green hover:bg-vic-green/90 active:scale-[0.98] text-slate-900 shadow-md cursor-pointer disabled:opacity-50"
-              }`}
+                }`}
             >
               {isLogging ? (
                 <div className="w-5 h-5 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />

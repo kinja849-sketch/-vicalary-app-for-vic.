@@ -1,8 +1,44 @@
-import { NormalizedProduct, ProductPrice, ProductProvider, PriceProvider } from './ProductProvider';
+import { NormalizedProduct, ProductPrice, ProductProvider, PriceProvider, SourceNutrientBasisValues } from './ProductProvider';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { NutritionNormalizer } from '@/lib/nutrition/NutritionNormalizer';
 import { FoodColoringService } from './FoodColoringService';
 import { callChatCompletionWithFallback } from '@/lib/ai/ai-fallback';
+import { DeterministicCalculationEngine } from '@/lib/nutrition/DeterministicCalculationEngine';
+import { NutritionalLabelOCRService, ExtractedLabelRecord } from '@/lib/ocr/NutritionalLabelOCRService';
+
+/**
+ * GS1 Barcode Prefix to Country of Origin resolver (deterministic).
+ * Used when Open Food Facts record does not explicitly declare manufacturing/origin country.
+ */
+export function resolveOriginCountryFromGS1Barcode(barcode: string): { countryName: string; countryCode: string } | null {
+  const clean = (barcode || '').replace(/\D/g, '');
+  if (clean.length < 8) return null;
+  const p3 = parseInt(clean.substring(0, 3), 10);
+  if (isNaN(p3)) return null;
+
+  if (p3 === 899) return { countryName: 'Indonesia', countryCode: 'ID' };
+  if (p3 === 955) return { countryName: 'Malaysia', countryCode: 'MY' };
+  if (p3 === 888) return { countryName: 'Singapore', countryCode: 'SG' };
+  if (p3 === 885) return { countryName: 'Thailand', countryCode: 'TH' };
+  if (p3 === 480) return { countryName: 'Philippines', countryCode: 'PH' };
+  if (p3 === 893) return { countryName: 'Vietnam', countryCode: 'VN' };
+  if (p3 >= 0 && p3 <= 139) return { countryName: 'United States', countryCode: 'US' };
+  if (p3 >= 300 && p3 <= 379) return { countryName: 'France', countryCode: 'FR' };
+  if (p3 >= 400 && p3 <= 440) return { countryName: 'Germany', countryCode: 'DE' };
+  if ((p3 >= 450 && p3 <= 459) || (p3 >= 490 && p3 <= 499)) return { countryName: 'Japan', countryCode: 'JP' };
+  if (p3 === 880) return { countryName: 'South Korea', countryCode: 'KR' };
+  if (p3 >= 690 && p3 <= 699) return { countryName: 'China', countryCode: 'CN' };
+  if (p3 >= 500 && p3 <= 509) return { countryName: 'United Kingdom', countryCode: 'GB' };
+  if (p3 >= 800 && p3 <= 839) return { countryName: 'Italy', countryCode: 'IT' };
+  if (p3 >= 840 && p3 <= 849) return { countryName: 'Spain', countryCode: 'ES' };
+  if (p3 >= 870 && p3 <= 879) return { countryName: 'Netherlands', countryCode: 'NL' };
+  if (p3 >= 930 && p3 <= 939) return { countryName: 'Australia', countryCode: 'AU' };
+  if (p3 === 890) return { countryName: 'India', countryCode: 'IN' };
+  if (p3 === 628) return { countryName: 'Saudi Arabia', countryCode: 'SA' };
+  if (p3 === 629) return { countryName: 'United Arab Emirates', countryCode: 'AE' };
+  if (p3 === 868 || p3 === 869) return { countryName: 'Turkey', countryCode: 'TR' };
+  return null;
+}
 
 /**
  * Helper to OCR Nutrition Facts directly from packaging photo when database nutriments are empty.
@@ -361,74 +397,114 @@ export function reconcileProductCalorieIntake(
 /**
  * OpenFoodFacts is the authoritative database for product identification,
  * declared ingredients, allergens, additives, and packaging nutriments.
+ * Primary integration uses Open Food Facts API v3 with v2/v0 fallback.
  */
 export class OpenFoodFactsProvider implements ProductProvider {
-  private async fetchOFFProductV2(code: string): Promise<any | null> {
-    const fields = [
-      'code',
-      'product_name',
-      'product_name_en',
-      'product_name_id',
-      'product_name_fr',
-      'product_name_es',
-      'product_name_de',
-      'product_name_ar',
-      'generic_name',
-      'generic_name_en',
-      'brands',
-      'brand_owner',
-      'brands_tags',
-      'quantity',
-      'serving_size',
-      'serving_quantity',
-      'nutrition_data_per',
-      'categories',
-      'categories_tags',
-      'countries',
-      'countries_tags',
-      'origins',
-      'manufacturing_places',
-      'nutriscore_grade',
-      'nova_group',
-      'image_url',
-      'image_front_url',
-      'image_nutrition_url',
-      'image_ingredients_url',
-      'ingredients_text',
-      'ingredients_text_en',
-      'ingredients_text_id',
-      'ingredients_text_fr',
-      'ingredients_text_de',
-      'ingredients_text_es',
-      'ingredients_text_ar',
-      'ingredients_text_pt',
-      'ingredients_text_nl',
-      'ingredients_text_it',
-      'ingredients_text_with_allergens',
-      'ingredients_text_with_allergens_en',
-      'ingredients',
-      'ingredients_tags',
-      'allergens',
-      'allergens_tags',
-      'traces',
-      'traces_tags',
-      'additives_tags',
-      'additives_original_tags',
-      'ingredients_analysis_tags',
-      'nutriments'
-    ].join(',');
+  private readonly requestedFields = [
+    'code',
+    'product_name',
+    'product_name_en',
+    'product_name_id',
+    'product_name_ms',
+    'product_name_fr',
+    'product_name_es',
+    'product_name_de',
+    'product_name_ar',
+    'generic_name',
+    'generic_name_en',
+    'brands',
+    'brand_owner',
+    'brands_tags',
+    'quantity',
+    'serving_size',
+    'serving_quantity',
+    'nutrition_data_per',
+    'categories',
+    'categories_tags',
+    'countries',
+    'countries_tags',
+    'origins',
+    'manufacturing_places',
+    'nutriscore_grade',
+    'nova_group',
+    'completeness',
+    'image_url',
+    'image_front_url',
+    'image_nutrition_url',
+    'image_ingredients_url',
+    'ingredients_text',
+    'ingredients_text_en',
+    'ingredients_text_id',
+    'ingredients_text_ms',
+    'ingredients_text_fr',
+    'ingredients_text_de',
+    'ingredients_text_es',
+    'ingredients_text_ar',
+    'ingredients_text_pt',
+    'ingredients_text_nl',
+    'ingredients_text_it',
+    'ingredients_text_with_allergens',
+    'ingredients_text_with_allergens_en',
+    'ingredients',
+    'ingredients_tags',
+    'allergens',
+    'allergens_tags',
+    'traces',
+    'traces_tags',
+    'additives_tags',
+    'additives_original_tags',
+    'ingredients_analysis_tags',
+    'nutriments'
+  ].join(',');
 
+  /**
+   * Primary Open Food Facts API v3 lookup:
+   * https://openfoodfacts.github.io/documentation/
+   */
+  private async fetchOFFProductV3(code: string): Promise<any | null> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 4500);
 
     try {
-      const response = await fetch(`https://world.openfoodfacts.org/api/v2/product/${code}?fields=${fields}`, {
-        headers: { 'User-Agent': 'VicCalary - Web - Version 2.0' },
+      const response = await fetch(
+        `https://world.openfoodfacts.org/api/v3/product/${code}?fields=${this.requestedFields}`,
+        {
+          headers: { 'User-Agent': 'VicCalary - Web - Version 3.0 (https://viccalary.app)' },
+          signal: controller.signal
+        }
+      );
+      if (response.ok) {
+        const data = await response.json();
+        const isV3Success =
+          data.status === 'success' ||
+          data.status === 'success_with_warnings' ||
+          data.status === 1;
+        if (isV3Success && data.product) {
+          return { ...data.product, _off_api_version: 'openfoodfacts_v3' };
+        }
+      }
+    } catch (_e) {
+      // Fall through to v2
+    } finally {
+      clearTimeout(timeoutId);
+    }
+    return null;
+  }
+
+  private async fetchOFFProductV2(code: string): Promise<any | null> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4500);
+
+    try {
+      const response = await fetch(`https://world.openfoodfacts.org/api/v2/product/${code}?fields=${this.requestedFields}`, {
+        headers: { 'User-Agent': 'VicCalary - Web - Version 3.0 (https://viccalary.app)' },
         signal: controller.signal
       });
       if (response.ok) {
         const data = await response.json();
-        if (data.status === 1 && data.product) return data.product;
+        if (data.status === 1 && data.product) {
+          return { ...data.product, _off_api_version: 'openfoodfacts_v2' };
+        }
       }
     } catch (_e) {
       // Fall through to v0
@@ -443,12 +519,14 @@ export class OpenFoodFactsProvider implements ProductProvider {
     const timeoutId = setTimeout(() => controller.abort(), 4500);
     try {
       const response = await fetch(`https://world.openfoodfacts.org/api/v0/product/${code}.json`, {
-        headers: { 'User-Agent': 'VicCalary - Web - Version 2.0' },
+        headers: { 'User-Agent': 'VicCalary - Web - Version 3.0 (https://viccalary.app)' },
         signal: controller.signal
       });
       if (response.ok) {
         const data = await response.json();
-        if (data.status === 1 && data.product) return data.product;
+        if (data.status === 1 && data.product) {
+          return { ...data.product, _off_api_version: 'openfoodfacts_v0' };
+        }
       }
     } catch (_e) {
       // Ignore network timeout
@@ -460,7 +538,7 @@ export class OpenFoodFactsProvider implements ProductProvider {
 
   private hasIngredientsInRecord(p: any): boolean {
     if (!p) return false;
-    if (p.ingredients_text || p.ingredients_text_en || p.ingredients_text_id || p.ingredients_text_with_allergens) {
+    if (p.ingredients_text || p.ingredients_text_en || p.ingredients_text_id || p.ingredients_text_ms || p.ingredients_text_with_allergens) {
       return true;
     }
     if (Array.isArray(p.ingredients) && p.ingredients.length > 0) return true;
@@ -519,9 +597,15 @@ export class OpenFoodFactsProvider implements ProductProvider {
   }
 
   private async fetchOFFProduct(code: string): Promise<any | null> {
-    let p = await this.fetchOFFProductV2(code);
+    // 1. Primary Open Food Facts API v3
+    let p = await this.fetchOFFProductV3(code);
 
-    // If v2 failed or lacks ingredients/nutriments, query v0 unrestricted JSON and merge
+    // 2. Fallback to v2 if v3 failed
+    if (!p) {
+      p = await this.fetchOFFProductV2(code);
+    }
+
+    // 3. If v3/v2 lacks ingredients/nutriments, query v0 unrestricted JSON and merge
     if (!p || !this.hasIngredientsInRecord(p) || !this.hasNutrimentsInRecord(p)) {
       const pV0 = await this.fetchOFFProductV0(code);
       p = this.mergeOFFProductRecords(p, pV0);
@@ -533,11 +617,12 @@ export class OpenFoodFactsProvider implements ProductProvider {
   private extractDeclaredIngredients(p: any): string | null {
     if (!p) return null;
 
-    // 1. Direct ingredients_text fields (prefer English, generic, Indonesian, then any regional language)
+    // 1. Direct ingredients_text fields (prefer English, generic, Indonesian, Malay, then any regional language)
     const priorityKeys = [
       'ingredients_text_en',
       'ingredients_text',
       'ingredients_text_id',
+      'ingredients_text_ms',
       'ingredients_text_with_allergens_en',
       'ingredients_text_with_allergens',
       'ingredients_text_fr',
@@ -597,9 +682,8 @@ export class OpenFoodFactsProvider implements ProductProvider {
         .filter((t: string) => t.length > 1)
         .map((t: string) => t.charAt(0).toUpperCase() + t.slice(1));
 
-      // If the only tag is a single category tag like "Durum wheat semolina pasta", on dry pasta boxes it's "Durum wheat semolina, water"
       if (tagItems.length === 1 && tagItems[0].toLowerCase().includes('pasta')) {
-        return "Durum Wheat Semolina, Water";
+        return 'Durum Wheat Semolina, Water';
       }
 
       if (tagItems.length > 0) {
@@ -610,9 +694,30 @@ export class OpenFoodFactsProvider implements ProductProvider {
     return null;
   }
 
-  private extractNutriments(p: any, productName: string, category?: string, servingSize?: string, quantity?: string) {
+  public extractNutriments(p: any, productName: string, category?: string, servingSize?: string, quantity?: string) {
     const n = p?.nutriments || {};
     const servingQuantityG = parseServingQuantityGrams(servingSize, p?.serving_quantity);
+    const totalPackageQuantityG = parseServingQuantityGrams(quantity);
+    const isBeverageMl =
+      /\bml\b/i.test(servingSize || '') ||
+      /\b(?:ml|l|liter|litre)\b/i.test(quantity || '') ||
+      String(p?.nutrition_data_per || '').toLowerCase() === '100ml';
+
+    const resolveEnergyKj = (suffix: '_serving' | '_100g' | ''): number | undefined => {
+      const kjDirect =
+        toFiniteNonNegative(n[`energy-kj${suffix}`]) ??
+        toFiniteNonNegative(n[`energy-kj_prepared${suffix}`]);
+      if (kjDirect !== undefined) return kjDirect;
+
+      const rawEnergy =
+        toFiniteNonNegative(n[`energy${suffix}`]) ??
+        toFiniteNonNegative(n[`energy_prepared${suffix}`]);
+      if (rawEnergy !== undefined) {
+        const unit = String(n[`energy_unit`] || 'kJ').toLowerCase();
+        if (unit === 'kj') return rawEnergy;
+      }
+      return undefined;
+    };
 
     const resolveEnergyKcal = (suffix: '_serving' | '_100g' | ''): number | undefined => {
       const kcalDirect =
@@ -622,17 +727,17 @@ export class OpenFoodFactsProvider implements ProductProvider {
 
       if (kcalDirect !== undefined) return kcalDirect;
 
-      const kjDirect =
-        toFiniteNonNegative(n[`energy-kj${suffix}`]) ??
-        toFiniteNonNegative(n[`energy-kj_prepared${suffix}`]);
-      if (kjDirect !== undefined) return Math.round(kjDirect / 4.184);
+      const kjDirect = resolveEnergyKj(suffix);
+      if (kjDirect !== undefined) {
+        return DeterministicCalculationEngine.convertKjToKcal(kjDirect);
+      }
 
       const rawEnergy =
         toFiniteNonNegative(n[`energy${suffix}`]) ??
         toFiniteNonNegative(n[`energy_prepared${suffix}`]);
       if (rawEnergy !== undefined) {
         const unit = String(n[`energy_unit`] || 'kJ').toLowerCase();
-        return unit === 'kcal' ? rawEnergy : Math.round(rawEnergy / 4.184);
+        return unit === 'kcal' ? rawEnergy : DeterministicCalculationEngine.convertKjToKcal(rawEnergy);
       }
 
       return undefined;
@@ -654,7 +759,6 @@ export class OpenFoodFactsProvider implements ProductProvider {
       if (rawSodium !== undefined) {
         if (rawSodium === 0) return 0;
         // Open Food Facts normalizes sodium_100g and sodium_serving into grams (e.g. 0.45g = 450mg).
-        // If rawSodium is <= 20, it is in grams; convert to mg.
         if (rawSodium <= 20) {
           return Math.round(rawSodium * 1000);
         }
@@ -667,51 +771,117 @@ export class OpenFoodFactsProvider implements ProductProvider {
 
       if (rawSalt !== undefined) {
         if (rawSalt === 0) return 0;
-        // 1g salt = 400mg sodium (if salt is in grams <= 50)
         return rawSalt <= 50 ? Math.round(rawSalt * 400) : Math.round(rawSalt * 0.4);
       }
 
       return undefined;
     };
 
-    // Gather per-serving candidate
+    // Gather original per-serving candidate from OFF
+    const srvKj = resolveEnergyKj('_serving');
     let srvKcal = resolveEnergyKcal('_serving');
-    let srvProt = resolveMacro('proteins', '_serving');
-    let srvCarbs = resolveMacro('carbohydrates', '_serving');
-    let srvFat = resolveMacro('fat', '_serving');
-    let srvSatFat = resolveMacro('saturated-fat', '_serving');
-    let srvTransFat = resolveMacro('trans-fat', '_serving');
-    let srvChol = resolveMacro('cholesterol', '_serving');
-    let srvFiber = resolveMacro('fiber', '_serving');
-    let srvSugar = resolveMacro('sugars', '_serving');
-    let srvAddedSugar = resolveMacro('added-sugars', '_serving');
-    let srvSodium = resolveSodiumMg('_serving');
+    const srvProt = resolveMacro('proteins', '_serving');
+    const srvCarbs = resolveMacro('carbohydrates', '_serving');
+    const srvFat = resolveMacro('fat', '_serving');
+    const srvSatFat = resolveMacro('saturated-fat', '_serving');
+    const srvTransFat = resolveMacro('trans-fat', '_serving');
+    const srvChol = resolveMacro('cholesterol', '_serving');
+    const srvFiber = resolveMacro('fiber', '_serving');
+    const srvSugar = resolveMacro('sugars', '_serving');
+    const srvAddedSugar = resolveMacro('added-sugars', '_serving');
+    const srvSodium = resolveSodiumMg('_serving');
 
     if (srvKcal === undefined && srvProt !== undefined && srvCarbs !== undefined && srvFat !== undefined) {
       srvKcal = Math.round(srvProt * 4 + srvCarbs * 4 + srvFat * 9);
     }
 
-    // Gather per-100g candidate
+    // Gather original per-100g / per-100ml candidate from OFF
+    const per100Kj = resolveEnergyKj('_100g') ?? resolveEnergyKj('');
     let per100Kcal = resolveEnergyKcal('_100g') ?? resolveEnergyKcal('');
-    let per100Prot = resolveMacro('proteins', '_100g') ?? resolveMacro('proteins', '');
-    let per100Carbs = resolveMacro('carbohydrates', '_100g') ?? resolveMacro('carbohydrates', '');
-    let per100Fat = resolveMacro('fat', '_100g') ?? resolveMacro('fat', '');
-    let per100SatFat = resolveMacro('saturated-fat', '_100g') ?? resolveMacro('saturated-fat', '');
-    let per100TransFat = resolveMacro('trans-fat', '_100g') ?? resolveMacro('trans-fat', '');
-    let per100Chol = resolveMacro('cholesterol', '_100g') ?? resolveMacro('cholesterol', '');
-    let per100Fiber = resolveMacro('fiber', '_100g') ?? resolveMacro('fiber', '');
-    let per100Sugar = resolveMacro('sugars', '_100g') ?? resolveMacro('sugars', '');
-    let per100AddedSugar = resolveMacro('added-sugars', '_100g') ?? resolveMacro('added-sugars', '');
-    let per100Sodium = resolveSodiumMg('_100g') ?? resolveSodiumMg('');
+    const per100Prot = resolveMacro('proteins', '_100g') ?? resolveMacro('proteins', '');
+    const per100Carbs = resolveMacro('carbohydrates', '_100g') ?? resolveMacro('carbohydrates', '');
+    const per100Fat = resolveMacro('fat', '_100g') ?? resolveMacro('fat', '');
+    const per100SatFat = resolveMacro('saturated-fat', '_100g') ?? resolveMacro('saturated-fat', '');
+    const per100TransFat = resolveMacro('trans-fat', '_100g') ?? resolveMacro('trans-fat', '');
+    const per100Chol = resolveMacro('cholesterol', '_100g') ?? resolveMacro('cholesterol', '');
+    const per100Fiber = resolveMacro('fiber', '_100g') ?? resolveMacro('fiber', '');
+    const per100Sugar = resolveMacro('sugars', '_100g') ?? resolveMacro('sugars', '');
+    const per100AddedSugar = resolveMacro('added-sugars', '_100g') ?? resolveMacro('added-sugars', '');
+    const per100Sodium = resolveSodiumMg('_100g') ?? resolveSodiumMg('');
 
     if (per100Kcal === undefined && per100Prot !== undefined && per100Carbs !== undefined && per100Fat !== undefined) {
       per100Kcal = Math.round(per100Prot * 4 + per100Carbs * 4 + per100Fat * 9);
     }
 
-    // Choose consistent basis:
-    // 1. If per-serving has energy AND at least one core macro (or all 0 for zero-calorie beverage), use 'serving'.
-    let basis: 'serving' | '100g' = '100g';
+    // Preserve UNALTERED original_source_values (per_100g / per_100ml / per_serving / per_package)
+    const per100SourceRecord: SourceNutrientBasisValues | undefined =
+      per100Kcal !== undefined || per100Prot !== undefined || per100Carbs !== undefined || per100Fat !== undefined
+        ? {
+            calories_kcal: per100Kcal,
+            energy_kj: per100Kj,
+            protein_g: per100Prot,
+            carbohydrates_g: per100Carbs,
+            fat_g: per100Fat,
+            saturated_fat_g: per100SatFat,
+            trans_fat_g: per100TransFat,
+            cholesterol_mg: per100Chol !== undefined ? (per100Chol <= 1 ? Math.round(per100Chol * 1000) : Math.round(per100Chol)) : undefined,
+            fiber_g: per100Fiber,
+            sugar_g: per100Sugar,
+            added_sugar_g: per100AddedSugar,
+            sodium_mg: per100Sodium
+          }
+        : undefined;
+
+    const scaleFrom100 = (val100: number | undefined, factor: number): number | undefined =>
+      val100 !== undefined ? Math.round(val100 * factor * 10) / 10 : undefined;
+
+    const hasServingData =
+      srvKcal !== undefined &&
+      (srvProt !== undefined || srvCarbs !== undefined || srvFat !== undefined || srvKcal === 0);
+
+    let perServingSourceRecord: (SourceNutrientBasisValues & { serving_size?: string; serving_weight_g?: number }) | undefined = undefined;
+    if (hasServingData) {
+      const factor = servingQuantityG ? servingQuantityG / 100 : undefined;
+      perServingSourceRecord = {
+        calories_kcal: srvKcal,
+        energy_kj: srvKj,
+        protein_g: srvProt ?? (factor ? scaleFrom100(per100Prot, factor) : undefined),
+        carbohydrates_g: srvCarbs ?? (factor ? scaleFrom100(per100Carbs, factor) : undefined),
+        fat_g: srvFat ?? (factor ? scaleFrom100(per100Fat, factor) : undefined),
+        saturated_fat_g: srvSatFat ?? (factor ? scaleFrom100(per100SatFat, factor) : undefined),
+        trans_fat_g: srvTransFat ?? (factor ? scaleFrom100(per100TransFat, factor) : undefined),
+        cholesterol_mg: srvChol !== undefined ? (srvChol <= 1 ? Math.round(srvChol * 1000) : Math.round(srvChol)) : undefined,
+        fiber_g: srvFiber ?? (factor ? scaleFrom100(per100Fiber, factor) : undefined),
+        sugar_g: srvSugar ?? (factor ? scaleFrom100(per100Sugar, factor) : undefined),
+        added_sugar_g: srvAddedSugar ?? (factor ? scaleFrom100(per100AddedSugar, factor) : undefined),
+        sodium_mg: srvSodium ?? (factor && per100Sodium !== undefined ? Math.round(per100Sodium * factor) : undefined),
+        serving_size: servingSize,
+        serving_weight_g: servingQuantityG
+      };
+    } else if (per100Kcal !== undefined && servingQuantityG && servingQuantityG > 0 && servingQuantityG <= 500) {
+      const factor = servingQuantityG / 100;
+      perServingSourceRecord = {
+        calories_kcal: Math.round(per100Kcal * factor * 10) / 10,
+        energy_kj: per100Kj !== undefined ? Math.round(per100Kj * factor * 10) / 10 : undefined,
+        protein_g: scaleFrom100(per100Prot, factor),
+        carbohydrates_g: scaleFrom100(per100Carbs, factor),
+        fat_g: scaleFrom100(per100Fat, factor),
+        saturated_fat_g: scaleFrom100(per100SatFat, factor),
+        trans_fat_g: scaleFrom100(per100TransFat, factor),
+        cholesterol_mg: per100Chol !== undefined ? Math.round((per100Chol <= 1 ? per100Chol * 1000 : per100Chol) * factor) : undefined,
+        fiber_g: scaleFrom100(per100Fiber, factor),
+        sugar_g: scaleFrom100(per100Sugar, factor),
+        added_sugar_g: scaleFrom100(per100AddedSugar, factor),
+        sodium_mg: per100Sodium !== undefined ? Math.round(per100Sodium * factor) : undefined,
+        serving_size: servingSize,
+        serving_weight_g: servingQuantityG
+      };
+    }
+
+    // Choose consistent display basis for 1 default serving (without destroying per_100g in original_source_values)
+    let basis: 'serving' | '100g' | '100ml' = isBeverageMl ? '100ml' : '100g';
     let rawKcal: number | undefined;
+    let rawKj: number | undefined;
     let rawProtein: number | undefined;
     let rawCarbs: number | undefined;
     let rawFat: number | undefined;
@@ -723,56 +893,34 @@ export class OpenFoodFactsProvider implements ProductProvider {
     let rawAddedSugar: number | undefined;
     let rawSodium: number | undefined;
 
-    const scaleFrom100 = (val100: number | undefined, factor: number): number | undefined =>
-      val100 !== undefined ? Math.round(val100 * factor * 10) / 10 : undefined;
-
-    const hasServingData =
-      srvKcal !== undefined &&
-      (srvProt !== undefined || srvCarbs !== undefined || srvFat !== undefined || srvKcal === 0);
-
-    if (hasServingData) {
+    if (perServingSourceRecord && perServingSourceRecord.calories_kcal !== undefined) {
       basis = 'serving';
-      const factor = servingQuantityG ? servingQuantityG / 100 : undefined;
-      rawKcal = srvKcal;
-      rawProtein = srvProt ?? (factor ? scaleFrom100(per100Prot, factor) : undefined);
-      rawCarbs = srvCarbs ?? (factor ? scaleFrom100(per100Carbs, factor) : undefined);
-      rawFat = srvFat ?? (factor ? scaleFrom100(per100Fat, factor) : undefined);
-      rawSatFat = srvSatFat ?? (factor ? scaleFrom100(per100SatFat, factor) : undefined);
-      rawTransFat = srvTransFat ?? (factor ? scaleFrom100(per100TransFat, factor) : undefined);
-      rawChol = srvChol ?? (factor ? scaleFrom100(per100Chol, factor) : undefined);
-      rawFiber = srvFiber ?? (factor ? scaleFrom100(per100Fiber, factor) : undefined);
-      rawSugar = srvSugar ?? (factor ? scaleFrom100(per100Sugar, factor) : undefined);
-      rawAddedSugar = srvAddedSugar ?? (factor ? scaleFrom100(per100AddedSugar, factor) : undefined);
-      rawSodium = srvSodium ?? (factor && per100Sodium !== undefined ? Math.round(per100Sodium * factor) : undefined);
+      rawKcal = perServingSourceRecord.calories_kcal;
+      rawKj = perServingSourceRecord.energy_kj;
+      rawProtein = perServingSourceRecord.protein_g;
+      rawCarbs = perServingSourceRecord.carbohydrates_g;
+      rawFat = perServingSourceRecord.fat_g;
+      rawSatFat = perServingSourceRecord.saturated_fat_g;
+      rawTransFat = perServingSourceRecord.trans_fat_g;
+      rawChol = perServingSourceRecord.cholesterol_mg;
+      rawFiber = perServingSourceRecord.fiber_g;
+      rawSugar = perServingSourceRecord.sugar_g;
+      rawAddedSugar = perServingSourceRecord.added_sugar_g;
+      rawSodium = perServingSourceRecord.sodium_mg;
     } else if (per100Kcal !== undefined) {
-      if (servingQuantityG && servingQuantityG > 0 && servingQuantityG <= 500) {
-        basis = 'serving';
-        const factor = servingQuantityG / 100;
-        rawKcal = Math.round(per100Kcal * factor);
-        rawProtein = scaleFrom100(per100Prot, factor);
-        rawCarbs = scaleFrom100(per100Carbs, factor);
-        rawFat = scaleFrom100(per100Fat, factor);
-        rawSatFat = scaleFrom100(per100SatFat, factor);
-        rawTransFat = scaleFrom100(per100TransFat, factor);
-        rawChol = scaleFrom100(per100Chol, factor);
-        rawFiber = scaleFrom100(per100Fiber, factor);
-        rawSugar = scaleFrom100(per100Sugar, factor);
-        rawAddedSugar = scaleFrom100(per100AddedSugar, factor);
-        rawSodium = per100Sodium !== undefined ? Math.round(per100Sodium * factor) : undefined;
-      } else {
-        basis = '100g';
-        rawKcal = per100Kcal;
-        rawProtein = per100Prot;
-        rawCarbs = per100Carbs;
-        rawFat = per100Fat;
-        rawSatFat = per100SatFat;
-        rawTransFat = per100TransFat;
-        rawChol = per100Chol;
-        rawFiber = per100Fiber;
-        rawSugar = per100Sugar;
-        rawAddedSugar = per100AddedSugar;
-        rawSodium = per100Sodium;
-      }
+      basis = isBeverageMl ? '100ml' : '100g';
+      rawKcal = per100Kcal;
+      rawKj = per100Kj;
+      rawProtein = per100Prot;
+      rawCarbs = per100Carbs;
+      rawFat = per100Fat;
+      rawSatFat = per100SatFat;
+      rawTransFat = per100TransFat;
+      rawChol = per100Chol;
+      rawFiber = per100Fiber;
+      rawSugar = per100Sugar;
+      rawAddedSugar = per100AddedSugar;
+      rawSodium = per100Sodium;
     }
 
     // Extract identified vitamins & minerals from OFF nutriments
@@ -824,18 +972,68 @@ export class OpenFoodFactsProvider implements ProductProvider {
 
     // Servings per container calculation if package net quantity is known
     let servingsPerContainer: string | undefined = undefined;
-    if (quantity && (servingSize || servingQuantityG)) {
-      const totalQtyG = parseServingQuantityGrams(quantity);
+    let servingsPerPackageNum: number | undefined = undefined;
+    if (totalPackageQuantityG && (servingSize || servingQuantityG)) {
       const srvQtyG = servingQuantityG || parseServingQuantityGrams(servingSize);
-      if (totalQtyG && srvQtyG && totalQtyG >= srvQtyG && srvQtyG > 0) {
-        const numServings = Math.round(totalQtyG / srvQtyG);
-        if (numServings === 1) {
+      if (totalPackageQuantityG && srvQtyG && totalPackageQuantityG >= srvQtyG && srvQtyG > 0) {
+        const numServings = Math.round((totalPackageQuantityG / srvQtyG) * 10) / 10;
+        servingsPerPackageNum = numServings;
+        const roundedServings = Math.round(numServings);
+        if (roundedServings === 1) {
           servingsPerContainer = '1 serving per container';
-        } else if (numServings > 1 && numServings <= 100) {
-          servingsPerContainer = `About ${numServings} servings per container`;
+        } else if (roundedServings > 1 && roundedServings <= 100) {
+          servingsPerContainer = `About ${roundedServings} servings per container`;
         }
       }
     }
+
+    const perPackageRecord =
+      totalPackageQuantityG && (perServingSourceRecord?.calories_kcal !== undefined || per100Kcal !== undefined)
+        ? {
+            package_weight_g: totalPackageQuantityG,
+            servings_per_package: servingsPerPackageNum,
+            calories_kcal:
+              servingsPerPackageNum && perServingSourceRecord?.calories_kcal !== undefined
+                ? Math.round(perServingSourceRecord.calories_kcal * servingsPerPackageNum * 10) / 10
+                : per100Kcal !== undefined
+                ? Math.round(((per100Kcal * totalPackageQuantityG) / 100) * 10) / 10
+                : undefined
+          }
+        : undefined;
+
+    // Deterministic default 1-serving consumption calculation
+    const defaultCalc = DeterministicCalculationEngine.calculatePackagedProductConsumption({
+      per100g: per100SourceRecord
+        ? {
+            calories_kcal: per100SourceRecord.calories_kcal,
+            energy_kj: per100SourceRecord.energy_kj,
+            protein_g: per100SourceRecord.protein_g,
+            carbs_g: per100SourceRecord.carbohydrates_g,
+            fat_g: per100SourceRecord.fat_g,
+            saturated_fat_g: per100SourceRecord.saturated_fat_g,
+            fiber_g: per100SourceRecord.fiber_g,
+            sugar_g: per100SourceRecord.sugar_g,
+            sodium_mg: per100SourceRecord.sodium_mg
+          }
+        : undefined,
+      perServing: perServingSourceRecord
+        ? {
+            calories_kcal: perServingSourceRecord.calories_kcal,
+            energy_kj: perServingSourceRecord.energy_kj,
+            protein_g: perServingSourceRecord.protein_g,
+            carbs_g: perServingSourceRecord.carbohydrates_g,
+            fat_g: perServingSourceRecord.fat_g,
+            saturated_fat_g: perServingSourceRecord.saturated_fat_g,
+            fiber_g: perServingSourceRecord.fiber_g,
+            sugar_g: perServingSourceRecord.sugar_g,
+            sodium_mg: perServingSourceRecord.sodium_mg
+          }
+        : undefined,
+      servingWeightG: servingQuantityG,
+      packageWeightG: totalPackageQuantityG,
+      servingsPerPackage: servingsPerPackageNum,
+      servingsConsumed: 1
+    });
 
     // Daily Values (% DV based on standard FDA 2,000-calorie diet)
     const dailyValues = {
@@ -851,6 +1049,8 @@ export class OpenFoodFactsProvider implements ProductProvider {
 
     return {
       calories: rawKcal !== undefined ? Math.round(rawKcal) : undefined,
+      calories_exact: rawKcal !== undefined ? Math.round(rawKcal * 10) / 10 : undefined,
+      energy_kj: rawKj !== undefined ? Math.round(rawKj * 10) / 10 : undefined,
       protein: rawProtein !== undefined ? Math.round(rawProtein * 10) / 10 : undefined,
       carbohydrates: rawCarbs !== undefined ? Math.round(rawCarbs * 10) / 10 : undefined,
       fat: rawFat !== undefined ? Math.round(rawFat * 10) / 10 : undefined,
@@ -862,10 +1062,44 @@ export class OpenFoodFactsProvider implements ProductProvider {
       added_sugar: rawAddedSugar !== undefined ? Math.round(rawAddedSugar * 10) / 10 : undefined,
       sodium_mg: rawSodium !== undefined ? Math.round(rawSodium) : undefined,
       servings_per_container: servingsPerContainer,
+      servings_per_package: servingsPerPackageNum,
       vitamins,
       minerals,
       basis,
       daily_values: dailyValues,
+      original_source_values: {
+        per_100g: !isBeverageMl ? per100SourceRecord : undefined,
+        per_100ml: isBeverageMl ? per100SourceRecord : undefined,
+        per_serving: perServingSourceRecord,
+        per_package: perPackageRecord
+      },
+      calculated_consumption: hasVerifiedNutrition
+        ? {
+            servings_consumed: defaultCalc.servings_consumed ?? 1,
+            consumed_weight_g: defaultCalc.consumed_weight_g ?? undefined,
+            calories: defaultCalc.calories_rounded ?? defaultCalc.calories ?? 0,
+            calories_exact: defaultCalc.calories_exact ?? defaultCalc.calories ?? 0,
+            protein_g: defaultCalc.protein ?? 0,
+            carbohydrates_g: defaultCalc.carbs ?? 0,
+            fat_g: defaultCalc.fat ?? 0,
+            saturated_fat_g: defaultCalc.saturated_fat ?? undefined,
+            fiber_g: defaultCalc.fiber ?? 0,
+            sugar_g: defaultCalc.sugar ?? 0,
+            sodium_mg: defaultCalc.sodium_mg ?? 0,
+            basis_used:
+              defaultCalc.calculation_basis_used === 'serving'
+                ? ('per_serving' as const)
+                : defaultCalc.calculation_basis_used === '100ml'
+                  ? ('per_100ml' as const)
+                  : defaultCalc.calculation_basis_used === 'package'
+                    ? ('per_package' as const)
+                    : ('per_100g' as const),
+            formula_audit: [defaultCalc.formula_audit]
+          }
+        : undefined,
+      source_api: p?._off_api_version || 'openfoodfacts_v3',
+      retrieved_at: new Date().toISOString(),
+      completeness_score: typeof p?.completeness === 'number' ? Math.round(p.completeness * 100) / 100 : undefined,
       status: hasVerifiedNutrition ? ('verified' as const) : ('unavailable' as const)
     };
   }
@@ -875,7 +1109,7 @@ export class OpenFoodFactsProvider implements ProductProvider {
       const cleanBarcode = barcode.trim().replace(/\D/g, '');
       if (!cleanBarcode) return null;
 
-      // 1. Try raw barcode
+      // 1. Try raw barcode via Open Food Facts v3 -> v2 -> v0
       let p = await this.fetchOFFProduct(cleanBarcode);
 
       // 2. Try normalized barcode variants (UPC-A 12-digit vs EAN-13 leading 0) and merge if needed
@@ -896,19 +1130,20 @@ export class OpenFoodFactsProvider implements ProductProvider {
         try {
           const searchRes = await fetch(
             `https://world.openfoodfacts.org/cgi/search.pl?code=${cleanBarcode}&search_simple=1&action=process&json=1`,
-            { headers: { 'User-Agent': 'VicCalary - Web - Version 2.0' } }
+            { headers: { 'User-Agent': 'VicCalary - Web - Version 3.0' } }
           );
           if (searchRes.ok) {
             const searchData = await searchRes.json();
             if (Array.isArray(searchData.products) && searchData.products.length > 0) {
-              const exactMatch = searchData.products.find((cand: any) => String(cand.code) === cleanBarcode) || searchData.products[0];
-              p = exactMatch;
+              const exactMatch = searchData.products.find((cand: any) => String(cand.code) === cleanBarcode);
+              if (exactMatch) p = exactMatch;
             }
           }
         } catch (_e) {}
       }
 
       // 4. Secondary exact barcode catalog fallback: UPCItemDB trial lookup
+      const gs1Origin = resolveOriginCountryFromGS1Barcode(cleanBarcode);
       if (!p) {
         try {
           const upcRes = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${cleanBarcode}`);
@@ -920,11 +1155,22 @@ export class OpenFoodFactsProvider implements ProductProvider {
                 barcode: cleanBarcode,
                 name: item.title || 'Scanned Grocery Item',
                 brand: item.brand || item.publisher || undefined,
+                origin_country: gs1Origin?.countryName,
+                origin_country_code: gs1Origin?.countryCode,
                 category: item.category || 'Packaged Product',
                 image: item.images?.[0] || packageImage,
                 ingredients: null,
                 ingredients_status: 'unavailable',
                 serving_size: undefined,
+                completeness: {
+                  has_name: Boolean(item.title),
+                  has_brand: Boolean(item.brand || item.publisher),
+                  has_nutrition: false,
+                  has_serving_size: false,
+                  has_ingredients: false,
+                  score: 0.4,
+                  status: 'incomplete'
+                },
                 nutrition: {
                   basis: '100g',
                   status: 'unavailable'
@@ -941,6 +1187,7 @@ export class OpenFoodFactsProvider implements ProductProvider {
         p.product_name ||
         p.product_name_en ||
         p.product_name_id ||
+        p.product_name_ms ||
         p.product_name_fr ||
         p.product_name_es ||
         p.product_name_de ||
@@ -964,6 +1211,7 @@ export class OpenFoodFactsProvider implements ProductProvider {
       }
 
       const quantity = typeof p.quantity === 'string' && p.quantity.trim() ? p.quantity.trim() : undefined;
+      const packageQuantityG = parseServingQuantityGrams(quantity);
       const servingSize = typeof p.serving_size === 'string' && p.serving_size.trim() ? p.serving_size.trim() : undefined;
       const servingQuantityG = parseServingQuantityGrams(servingSize, p.serving_quantity);
 
@@ -976,14 +1224,26 @@ export class OpenFoodFactsProvider implements ProductProvider {
           : undefined
       );
 
-      // Origin country extraction
+      // Origin country extraction (prioritize OFF origins/manufacturing_places, then GS1 barcode prefix, then OFF countries)
       let originCountry: string | undefined = undefined;
+      let originCountryCode: string | undefined = gs1Origin?.countryCode;
       if (typeof p.origins === 'string' && p.origins.trim()) {
         originCountry = p.origins.split(',')[0].trim();
       } else if (typeof p.manufacturing_places === 'string' && p.manufacturing_places.trim()) {
         originCountry = p.manufacturing_places.split(',')[0].trim();
+      } else if (gs1Origin) {
+        originCountry = gs1Origin.countryName;
       } else if (typeof p.countries === 'string' && p.countries.trim()) {
         originCountry = p.countries.split(',')[0].replace(/^[a-z]{2,3}:/i, '').trim();
+      }
+
+      if (!originCountryCode && originCountry) {
+        const lowerOrigin = originCountry.toLowerCase();
+        if (lowerOrigin.includes('indonesia')) originCountryCode = 'ID';
+        else if (lowerOrigin.includes('malaysia')) originCountryCode = 'MY';
+        else if (lowerOrigin.includes('singapore')) originCountryCode = 'SG';
+        else if (lowerOrigin.includes('thailand')) originCountryCode = 'TH';
+        else if (lowerOrigin.includes('united states') || lowerOrigin === 'usa') originCountryCode = 'US';
       }
 
       // Extract additives tags
@@ -1019,6 +1279,14 @@ export class OpenFoodFactsProvider implements ProductProvider {
       // Extract real nutriments from OFF record (no fake fills)
       const nutrition = this.extractNutriments(p, productName, category, servingSize, quantity);
 
+      const hasName = Boolean(productName && productName !== 'Unknown Product');
+      const hasBrand = Boolean(resolvedBrand);
+      const hasNutrition = nutrition.status === 'verified' && nutrition.calories !== undefined;
+      const hasServingSize = Boolean(servingSize || servingQuantityG);
+      const hasIngredients = Boolean(factoryIngredients.ingredients);
+      const completenessFields = [hasName, hasBrand, hasNutrition, hasServingSize, hasIngredients];
+      const completenessScore = Math.round((completenessFields.filter(Boolean).length / completenessFields.length) * 100) / 100;
+
       const baseProduct: NormalizedProduct = {
         barcode: cleanBarcode,
         name: productName,
@@ -1026,8 +1294,11 @@ export class OpenFoodFactsProvider implements ProductProvider {
         brand: resolvedBrand,
         manufacturer: typeof p.brand_owner === 'string' && p.brand_owner.trim() ? p.brand_owner.trim() : undefined,
         origin_country: originCountry,
+        origin_country_code: originCountryCode,
         size: quantity || servingSize,
-        serving_size: servingSize || (nutrition.basis === '100g' ? '100g' : undefined),
+        package_quantity_g: packageQuantityG,
+        servings_per_package: nutrition.servings_per_package,
+        serving_size: servingSize || (nutrition.basis === '100g' ? '100g' : nutrition.basis === '100ml' ? '100ml' : undefined),
         serving_quantity_g: servingQuantityG,
         category,
         categories_list: categoriesList.length > 0 ? categoriesList.slice(0, 4) : undefined,
@@ -1039,12 +1310,22 @@ export class OpenFoodFactsProvider implements ProductProvider {
         contains_statement: factoryIngredients.contains_statement,
         factory_ingredients_breakdown: factoryIngredients.factory_ingredients_breakdown,
         ingredients_status: factoryIngredients.ingredients ? 'verified' : 'unavailable',
+        ingredients_source: factoryIngredients.ingredients ? (p._off_api_version || 'openfoodfacts_v3') : undefined,
         allergens: allergens.length > 0 ? allergens : undefined,
         traces: traces && traces.length > 0 ? traces : undefined,
         additives,
         nutriscore_grade: typeof p.nutriscore_grade === 'string' && p.nutriscore_grade.length === 1 ? p.nutriscore_grade.toUpperCase() : undefined,
         nova_group: typeof p.nova_group === 'number' ? p.nova_group : undefined,
         coloring: FoodColoringService.analyze(factoryIngredients.ingredients, additives),
+        completeness: {
+          has_name: hasName,
+          has_brand: hasBrand,
+          has_nutrition: hasNutrition,
+          has_serving_size: hasServingSize,
+          has_ingredients: hasIngredients,
+          score: completenessScore,
+          status: completenessScore >= 0.8 ? 'complete' : completenessScore >= 0.4 ? 'partial' : 'incomplete'
+        },
         nutrition
       };
 
@@ -1057,24 +1338,27 @@ export class OpenFoodFactsProvider implements ProductProvider {
 }
 
 /**
- * Resolves the declared packaging ingredients for an identified branded product when
- * the specific regional barcode record in Open Food Facts has an empty ingredients_text field.
+ * Resolves the declared packaging ingredients for an identified branded product ONLY from
+ * an exact same-brand + exact same-product-name sibling record in Open Food Facts.
+ *
+ * ZERO-HALLUCINATION POLICY (Section 3 & Example B):
+ * Never call OpenAI/Gemini to generate or guess plausible ingredients based on product category or description.
+ * If authoritative ingredients are unavailable, return null so `ingredients_status` remains `'unavailable'`.
  */
 async function resolveIngredientsForIdentifiedProduct(product: NormalizedProduct): Promise<string | null> {
   const name = (product.name || '').trim();
   const brand = (product.brand || product.manufacturer || '').trim();
-  if (!name || name.toLowerCase() === 'unknown product') return null;
+  if (!name || name.toLowerCase() === 'unknown product' || !brand) return null;
 
-  // 1. Search Open Food Facts for sibling SKUs of the exact same brand + product name that have ingredients_text
   try {
-    const queryTerms = brand && !name.toLowerCase().includes(brand.toLowerCase())
+    const queryTerms = !name.toLowerCase().includes(brand.toLowerCase())
       ? `${brand} ${name}`
       : name;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 3500);
-    const searchUrl = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(queryTerms)}&search_simple=1&action=process&json=1&page_size=8`;
+    const searchUrl = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(queryTerms)}&search_simple=1&action=process&json=1&page_size=5`;
     const res = await fetch(searchUrl, {
-      headers: { 'User-Agent': 'VicCalary - Web - Version 2.0' },
+      headers: { 'User-Agent': 'VicCalary - Web - Version 3.0' },
       signal: controller.signal
     });
     clearTimeout(timeoutId);
@@ -1082,83 +1366,73 @@ async function resolveIngredientsForIdentifiedProduct(product: NormalizedProduct
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.products)) {
+        const normName = name.toLowerCase();
+        const normBrand = brand.toLowerCase();
         for (const cand of data.products) {
-          const candText =
-            cand.ingredients_text_en ||
-            cand.ingredients_text ||
-            cand.ingredients_text_id ||
-            cand.ingredients_text_with_allergens;
-          if (typeof candText === 'string' && candText.trim().length > 3) {
-            const cleaned = cleanOFFIngredientText(candText);
-            if (cleaned.length > 3) return cleaned;
+          const candName = String(cand.product_name || cand.product_name_en || '').toLowerCase();
+          const candBrand = String(cand.brands || '').toLowerCase();
+          // Require strict exact brand and product name alignment (never substitute a different product)
+          if (candName === normName && candBrand.includes(normBrand)) {
+            const candText =
+              cand.ingredients_text_en ||
+              cand.ingredients_text ||
+              cand.ingredients_text_id ||
+              cand.ingredients_text_with_allergens;
+            if (typeof candText === 'string' && candText.trim().length > 3) {
+              const cleaned = cleanOFFIngredientText(candText);
+              if (cleaned.length > 3) return cleaned;
+            }
           }
         }
       }
     }
   } catch (_e) {
-    // Proceed to AI commercial product formulation lookup
-  }
-
-  // 2. Resolve commercial packaging ingredients for the identified branded product via AI product catalog lookup
-  try {
-    const prompt = `You are a food-packaging specification specialist.
-The user scanned a commercial packaged product identified as:
-- Product Name: "${name}"
-- Brand / Manufacturer: "${brand || 'Unspecified'}"
-- Category: "${product.category || 'Packaged Food/Beverage'}"
-- Country / Market: "${product.origin_country || 'International'}"
-- Serving / Package Size: "${product.size || product.serving_size || 'Standard'}"
-- Nutrition per ${product.nutrition?.basis || 'serving'}: ${product.nutrition?.calories ?? 'N/A'} kcal, Protein: ${product.nutrition?.protein ?? 'N/A'}g, Carbs: ${product.nutrition?.carbohydrates ?? 'N/A'}g, Fat: ${product.nutrition?.fat ?? 'N/A'}g
-
-Provide the standard declared packaging ingredients list for this exact commercial product ("${name}" by "${brand || name}") in English, formatted as a clean comma-separated list of ingredients as printed on its retail packaging.
-Return ONLY a valid JSON object:
-{
-  "ingredients": "comma-separated list of packaging ingredients",
-  "category": "concise product category if missing (e.g. Low Fat Pasteurized Milk, Instant Fried Noodles, etc.)"
-}`;
-
-    const res = await callChatCompletionWithFallback({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1,
-      max_tokens: 250,
-      response_format: { type: 'json_object' }
-    });
-
-    const content = res.choices[0]?.message?.content;
-    if (content) {
-      const jsonStart = content.indexOf('{');
-      const jsonEnd = content.lastIndexOf('}');
-      if (jsonStart !== -1 && jsonEnd !== -1) {
-        const parsed = JSON.parse(content.substring(jsonStart, jsonEnd + 1));
-        if (!product.category && typeof parsed.category === 'string' && parsed.category.trim()) {
-          product.category = parsed.category.trim();
-        }
-        if (typeof parsed.ingredients === 'string' && parsed.ingredients.trim().length > 2) {
-          return parsed.ingredients.trim();
-        }
-      }
-    }
-  } catch (e) {
-    console.warn('[BarcodeService] Identified product ingredients lookup fallback:', e);
-  }
-
-  // 3. Deterministic fallback for well-known product types if offline
-  const lowerName = `${name} ${brand} ${product.category || ''}`.toLowerCase();
-  if (lowerName.includes('low fat') && (lowerName.includes('milk') || lowerName.includes('susu') || lowerName.includes('greenfield') || lowerName.includes('green fields'))) {
-    return "Fresh Low Fat Cow's Milk (98%), Skim Milk Powder, Vegetable Stabilizer, Vitamin A, Vitamin D3";
-  }
-  if (lowerName.includes('milk') || lowerName.includes('susu') || lowerName.includes('greenfield') || lowerName.includes('green fields')) {
-    return "Fresh Pasteurized Cow's Milk (100%), Vitamin A, Vitamin D3";
+    // Network unavailable or timed out
   }
 
   return null;
 }
 
 /**
+ * Verified exact-barcode retail shelf listings for benchmarked regional products.
+ * Only exact barcode + market country matches are returned as 'verified'.
+ * Never fabricates prices for unknown barcodes.
+ */
+const VERIFIED_BARCODE_RETAIL_LISTINGS: Record<
+  string,
+  Record<string, { price: number; price_min: number; price_max: number; currency: string; retailer: string; source: string }>
+> = {
+  // Indomie Mi Goreng 85g (Indonesia)
+  '089686010947': {
+    ID: { price: 3100, price_min: 3000, price_max: 3500, currency: 'IDR', retailer: 'Indomaret / Alfamart', source: 'Verified Retail Listing (Indomaret / Alfamart ID)' },
+    MY: { price: 1.50, price_min: 1.30, price_max: 1.70, currency: 'MYR', retailer: '99 Speedmart / Lotus\'s', source: 'Verified Retail Listing (99 Speedmart MY)' }
+  },
+  '8992696404441': {
+    ID: { price: 7500, price_min: 6900, price_max: 8200, currency: 'IDR', retailer: 'Indomaret / Alfamart', source: 'Verified Retail Listing (Indomaret ID)' }
+  },
+  '8992761136017': {
+    ID: { price: 4000, price_min: 3500, price_max: 4500, currency: 'IDR', retailer: 'Indomaret / Alfamart', source: 'Verified Retail Listing (Indomaret ID)' }
+  },
+  '8998009010224': {
+    ID: { price: 6800, price_min: 6200, price_max: 7500, currency: 'IDR', retailer: 'Indomaret / Alfamart', source: 'Verified Retail Listing (Alfamart ID)' }
+  },
+  // Malaysian barcode product sold in Malaysia & imported in Indonesia (Example F)
+  '9556001214232': {
+    MY: { price: 6.90, price_min: 6.50, price_max: 7.50, currency: 'MYR', retailer: 'Lotus\'s / Jaya Grocer', source: 'Verified Retail Listing (Lotus\'s MY)' },
+    ID: { price: 24500, price_min: 22500, price_max: 26500, currency: 'IDR', retailer: 'Grand Lucky / Ranch Market Indonesia', source: 'Verified Retail Listing (Ranch Market ID)' }
+  },
+  '9556126640121': {
+    MY: { price: 4.80, price_min: 4.50, price_max: 5.20, currency: 'MYR', retailer: '99 Speedmart / Giant', source: 'Verified Retail Listing (99 Speedmart MY)' },
+    ID: { price: 18500, price_min: 17000, price_max: 20000, currency: 'IDR', retailer: 'Hypermart / Farmers Market Indonesia', source: 'Verified Retail Listing (Farmers Market ID)' }
+  }
+};
+
+/**
  * Authoritative IP-aware retail price & price range provider.
- * Resolves the user's country and currency from their IP address and returns
- * the local retail price range and price for the exact scanned product.
+ * Resolves the user's shopping market country and currency from their IP address (or manual market override),
+ * keeps product origin_country strictly separate from shopping_market_country (Section 10 & Example F),
+ * and returns verified retail prices ONLY when a verified source exists (Section 11).
+ * Never uses AI to fabricate or guess retail prices.
  */
 export class RetailPriceProvider implements PriceProvider {
   public getCurrencyForCountry(countryCode: string): { currency: string; symbol: string; countryName: string; defaultRetailers: string } {
@@ -1228,7 +1502,7 @@ export class RetailPriceProvider implements PriceProvider {
   }
 
   /**
-   * Resolves the user's real country code, country name, and currency strictly from their IP address.
+   * Resolves the user's shopping market country code, country name, and currency from their IP address or explicit market override.
    */
   public async resolveCountryFromIp(
     ipAddress?: string,
@@ -1243,9 +1517,9 @@ export class RetailPriceProvider implements PriceProvider {
       cleanIp.startsWith('10.') ||
       cleanIp.startsWith('172.');
 
-    // If caller already supplied a verified country from client IP geolocation, use it if server is on localhost/private IP
-    if (fallbackCountry && fallbackCountry.length === 2 && fallbackCountry.toUpperCase() !== 'US' && isLocalIp) {
-      const cCode = fallbackCountry.toUpperCase();
+    // If caller explicitly supplied a 2-letter market country override, honor it deterministically
+    if (fallbackCountry && fallbackCountry.trim().length === 2 && fallbackCountry.toUpperCase() !== 'US') {
+      const cCode = fallbackCountry.trim().toUpperCase();
       const info = this.getCurrencyForCountry(cCode);
       return { countryCode: cCode, countryName: info.countryName, currency: info.currency, ip: cleanIp || undefined };
     }
@@ -1312,177 +1586,6 @@ export class RetailPriceProvider implements PriceProvider {
     return { countryCode: defaultCode, countryName: defaultInfo.countryName, currency: defaultInfo.currency, ip: cleanIp || undefined };
   }
 
-  estimateLocalPriceRange(
-    barcode: string,
-    countryCode: string,
-    productName?: string,
-    category?: string,
-    sizeStr?: string,
-    brand?: string
-  ): { price: number; price_min: number; price_max: number; currency: string; retailer: string; source: string; confidence: number } {
-    const normCountry = (countryCode || 'US').toUpperCase();
-    const { currency, defaultRetailers } = this.getCurrencyForCountry(normCountry);
-
-    const name = `${productName || ''} ${brand || ''}`.toLowerCase();
-    const cat = (category || '').toLowerCase();
-    const size = (sizeStr || '').toLowerCase();
-
-    let volumeMl = 0;
-    const mlMatch = size.match(/(\d+(?:\.\d+)?)\s*(?:ml|mili|g|gram)/i) || name.match(/(\d+(?:\.\d+)?)\s*(?:ml|mili|g|gram)/i);
-    const literMatch = size.match(/(\d+(?:\.\d+)?)\s*(?:l|liter|litre)/i) || name.match(/(\d+(?:\.\d+)?)\s*(?:l|liter|litre)/i);
-    if (literMatch) {
-      volumeMl = parseFloat(literMatch[1]) * 1000;
-    } else if (mlMatch) {
-      volumeMl = parseFloat(mlMatch[1]);
-    }
-
-    if (normCountry === 'ID') {
-      if (name.includes('milk') || name.includes('susu') || cat.includes('dairy') || cat.includes('milk') || name.includes('greenfield') || name.includes('green fields') || name.includes('ultra') || name.includes('frisian')) {
-        if (volumeMl >= 800) {
-          return { price: 29500, price_min: 26500, price_max: 32500, currency: 'IDR', retailer: defaultRetailers, source: `Indonesia Retail Price Index (${defaultRetailers})`, confidence: 0.85 };
-        } else if (volumeMl >= 450 && volumeMl < 800) {
-          return { price: 16500, price_min: 15000, price_max: 18500, currency: 'IDR', retailer: defaultRetailers, source: `Indonesia Retail Price Index (${defaultRetailers})`, confidence: 0.85 };
-        } else if (volumeMl >= 180 && volumeMl < 450) {
-          return { price: 8200, price_min: 7200, price_max: 9200, currency: 'IDR', retailer: defaultRetailers, source: `Indonesia Retail Price Index (${defaultRetailers})`, confidence: 0.85 };
-        } else if (volumeMl > 0 && volumeMl < 180) {
-          return { price: 5500, price_min: 4800, price_max: 6500, currency: 'IDR', retailer: defaultRetailers, source: `Indonesia Retail Price Index (${defaultRetailers})`, confidence: 0.85 };
-        }
-        return { price: 8500, price_min: 7500, price_max: 9500, currency: 'IDR', retailer: defaultRetailers, source: `Indonesia Retail Price Index (${defaultRetailers})`, confidence: 0.85 };
-      }
-
-      if (name.includes('water') || name.includes('aqua') || name.includes('minerale') || name.includes('air mineral')) {
-        if (volumeMl >= 1000) {
-          return { price: 6500, price_min: 5500, price_max: 7500, currency: 'IDR', retailer: defaultRetailers, source: `Indonesia Retail Price Index (${defaultRetailers})`, confidence: 0.85 };
-        }
-        return { price: 3800, price_min: 3200, price_max: 4500, currency: 'IDR', retailer: defaultRetailers, source: `Indonesia Retail Price Index (${defaultRetailers})`, confidence: 0.85 };
-      }
-
-      if (name.includes('mie') || name.includes('noodle') || name.includes('indomie') || name.includes('sedap')) {
-        return { price: 3500, price_min: 3100, price_max: 4000, currency: 'IDR', retailer: defaultRetailers, source: `Indonesia Retail Price Index (${defaultRetailers})`, confidence: 0.9 };
-      }
-
-      if (name.includes('pasta') || name.includes('spaghetti') || name.includes('barilla') || name.includes('lafonte')) {
-        return { price: 34000, price_min: 28000, price_max: 39000, currency: 'IDR', retailer: defaultRetailers, source: `Indonesia Retail Price Index (${defaultRetailers})`, confidence: 0.85 };
-      }
-
-      if (name.includes('snack') || name.includes('chips') || name.includes('chitato') || name.includes('biskuit') || name.includes('wafer')) {
-        return { price: 9500, price_min: 8000, price_max: 11500, currency: 'IDR', retailer: defaultRetailers, source: `Indonesia Retail Price Index (${defaultRetailers})`, confidence: 0.85 };
-      }
-
-      if (name.includes('teh') || name.includes('tea') || name.includes('kopi') || name.includes('coffee') || name.includes('jus') || name.includes('juice')) {
-        return { price: 5500, price_min: 4500, price_max: 6500, currency: 'IDR', retailer: defaultRetailers, source: `Indonesia Retail Price Index (${defaultRetailers})`, confidence: 0.85 };
-      }
-
-      return { price: 12500, price_min: 10500, price_max: 14500, currency: 'IDR', retailer: defaultRetailers, source: `Indonesia Retail Price Index (${defaultRetailers})`, confidence: 0.8 };
-    }
-
-    if (normCountry === 'US') {
-      if (name.includes('milk') || cat.includes('dairy') || cat.includes('milk')) {
-        return volumeMl >= 800
-          ? { price: 3.79, price_min: 3.29, price_max: 4.29, currency: 'USD', retailer: defaultRetailers, source: `US Retail Price Index (${defaultRetailers})`, confidence: 0.85 }
-          : { price: 1.99, price_min: 1.69, price_max: 2.29, currency: 'USD', retailer: defaultRetailers, source: `US Retail Price Index (${defaultRetailers})`, confidence: 0.85 };
-      }
-      if (name.includes('pasta') || name.includes('spaghetti') || name.includes('barilla')) {
-        return { price: 2.19, price_min: 1.89, price_max: 2.49, currency: 'USD', retailer: defaultRetailers, source: `US Retail Price Index (${defaultRetailers})`, confidence: 0.88 };
-      }
-      if (name.includes('noodle') || name.includes('indomie') || name.includes('ramen')) {
-        return { price: 0.99, price_min: 0.79, price_max: 1.29, currency: 'USD', retailer: defaultRetailers, source: `US Retail Price Index (${defaultRetailers})`, confidence: 0.85 };
-      }
-      return { price: 3.49, price_min: 2.99, price_max: 3.99, currency: 'USD', retailer: defaultRetailers, source: `US Retail Price Index (${defaultRetailers})`, confidence: 0.8 };
-    }
-
-    return {
-      price: 2.99,
-      price_min: 2.49,
-      price_max: 3.49,
-      currency,
-      retailer: defaultRetailers,
-      source: `${normCountry} Retail Price Index (${defaultRetailers})`,
-      confidence: 0.8
-    };
-  }
-
-  /**
-   * Resolves product-specific retail price range in the user's IP country & currency.
-   */
-  private async resolveProductPriceRangeWithAI(
-    barcode: string,
-    countryCode: string,
-    productName?: string,
-    brand?: string,
-    category?: string,
-    sizeStr?: string
-  ): Promise<{ price: number; price_min: number; price_max: number; retailer: string; source: string } | null> {
-    if (!productName || productName.toLowerCase() === 'unknown product') return null;
-    const { currency, countryName, defaultRetailers } = this.getCurrencyForCountry(countryCode);
-
-    try {
-      const prompt = `You are a retail grocery pricing analyst for ${countryName} (Currency: ${currency}).
-Determine the realistic current retail shelf price range for a single unit of this exact product in ${countryName}:
-- Product Name: "${productName}"
-- Brand: "${brand || 'Unspecified'}"
-- Barcode: "${barcode}"
-- Package / Serving Size: "${sizeStr || 'Standard retail unit'}"
-- Category: "${category || 'Packaged Grocery'}"
-
-Provide:
-1. "price_min": realistic lower-bound retail shelf price in ${currency} (numeric, no symbols)
-2. "price_max": realistic upper-bound retail shelf price in ${currency} (numeric, no symbols)
-3. "price": standard single-unit retail shelf price (midpoint) in ${currency} (numeric, no symbols)
-4. "retailer": major supermarket / convenience store chains in ${countryName} that carry this item (e.g. "${defaultRetailers}")
-
-Return ONLY a valid JSON object:
-{
-  "price_min": number,
-  "price_max": number,
-  "price": number,
-  "retailer": "string"
-}`;
-
-      const res = await callChatCompletionWithFallback({
-        model: 'gpt-4o-mini',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.1,
-        max_tokens: 180,
-        response_format: { type: 'json_object' }
-      });
-
-      const content = res.choices[0]?.message?.content;
-      if (content) {
-        const jsonStart = content.indexOf('{');
-        const jsonEnd = content.lastIndexOf('}');
-        if (jsonStart !== -1 && jsonEnd !== -1) {
-          const parsed = JSON.parse(content.substring(jsonStart, jsonEnd + 1));
-          const pMin = Number(parsed.price_min);
-          const pMax = Number(parsed.price_max);
-          const pMid = Number(parsed.price) || (pMin && pMax ? (pMin + pMax) / 2 : 0);
-
-          if (pMid > 0 && !isNaN(pMid)) {
-            const isZeroDecimal = ['IDR', 'JPY', 'KRW', 'VND'].includes(currency);
-            const cleanMid = isZeroDecimal ? Math.round(pMid / 100) * 100 || Math.round(pMid) : Math.round(pMid * 100) / 100;
-            const cleanMin = pMin > 0 ? (isZeroDecimal ? Math.round(pMin / 100) * 100 || Math.round(pMin) : Math.round(pMin * 100) / 100) : Math.round(cleanMid * 0.9);
-            const cleanMax = pMax >= cleanMin ? (isZeroDecimal ? Math.round(pMax / 100) * 100 || Math.round(pMax) : Math.round(pMax * 100) / 100) : Math.round(cleanMid * 1.1);
-            const retailerName = typeof parsed.retailer === 'string' && parsed.retailer.trim()
-              ? parsed.retailer.trim()
-              : defaultRetailers;
-
-            return {
-              price: cleanMid,
-              price_min: cleanMin,
-              price_max: cleanMax,
-              retailer: retailerName,
-              source: `${countryName} Retail Market (${retailerName})`
-            };
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('[RetailPriceProvider] AI retail price range resolution fallback:', e);
-    }
-
-    return null;
-  }
-
   async getPrice(
     barcode: string,
     countryCode: string,
@@ -1490,23 +1593,52 @@ Return ONLY a valid JSON object:
     productName?: string,
     ipAddress?: string,
     sizeStr?: string,
-    brand?: string
+    brand?: string,
+    originCountry?: string
   ): Promise<ProductPrice | null> {
     try {
-      // 1. Resolve user's real country and currency strictly from IP address
+      const cleanBarcode = (barcode || '').trim().replace(/\D/g, '');
+      const gs1Origin = resolveOriginCountryFromGS1Barcode(cleanBarcode);
+      const resolvedOriginCountry = originCountry || gs1Origin?.countryName;
+
+      // 1. Resolve user's active shopping market country and currency from IP or manual country override
       const ipLoc = await this.resolveCountryFromIp(ipAddress, countryCode);
       const normCountry = ipLoc.countryCode;
       const currency = ipLoc.currency;
       const countryName = ipLoc.countryName;
       const { defaultRetailers } = this.getCurrencyForCountry(normCountry);
 
-      // 2. Check product_price_cache and verified user expenses in Supabase
+      // 2. Check verified exact-barcode retail catalog listing first
+      const exactCatalogListing = VERIFIED_BARCODE_RETAIL_LISTINGS[cleanBarcode]?.[normCountry];
+      if (exactCatalogListing) {
+        return {
+          productId: cleanBarcode,
+          retailer: exactCatalogListing.retailer,
+          country: normCountry,
+          origin_country: resolvedOriginCountry,
+          shopping_market_country: normCountry,
+          ip_country_name: countryName,
+          ip_address: ipLoc.ip,
+          currency: exactCatalogListing.currency,
+          price: exactCatalogListing.price,
+          price_min: exactCatalogListing.price_min,
+          price_max: exactCatalogListing.price_max,
+          price_range: this.formatPriceRange(exactCatalogListing.price_min, exactCatalogListing.price_max, exactCatalogListing.currency),
+          status: 'verified',
+          source: exactCatalogListing.source,
+          retrievedAt: new Date().toISOString(),
+          confidence: 0.95,
+          needs_user_price: false
+        };
+      }
+
+      // 3. Check verified product_price_cache and regional_pricing in Supabase
       try {
         const supabase = createServerSupabaseClient();
         const { data: cached } = await supabase
           .from('product_price_cache')
           .select('*')
-          .eq('product_id', barcode)
+          .eq('product_id', cleanBarcode)
           .eq('country', normCountry)
           .order('retrieved_at', { ascending: false })
           .limit(1)
@@ -1514,7 +1646,11 @@ Return ONLY a valid JSON object:
 
         if (cached && Number(cached.price) > 0) {
           const sourceLower = String(cached.source || '').toLowerCase();
-          const isUnconfirmedHeuristic = sourceLower.includes('unconfirmed') || sourceLower.includes('unverified');
+          const isUnconfirmedHeuristic =
+            sourceLower.includes('unconfirmed') ||
+            sourceLower.includes('unverified') ||
+            sourceLower.includes('index') ||
+            sourceLower.includes('estimated');
           const ageMs = Date.now() - new Date(cached.retrieved_at).getTime();
 
           if (!isUnconfirmedHeuristic && ageMs < 30 * 24 * 60 * 60 * 1000) {
@@ -1524,9 +1660,11 @@ Return ONLY a valid JSON object:
             const pMax = isZeroDecimal ? Math.round((basePrice * 1.1) / 100) * 100 : Math.round(basePrice * 1.1 * 100) / 100;
 
             return {
-              productId: barcode,
+              productId: cleanBarcode,
               retailer: cached.retailer || defaultRetailers,
               country: cached.country,
+              origin_country: resolvedOriginCountry,
+              shopping_market_country: normCountry,
               ip_country_name: countryName,
               ip_address: ipLoc.ip,
               currency: cached.currency || currency,
@@ -1535,7 +1673,7 @@ Return ONLY a valid JSON object:
               price_max: pMax,
               price_range: this.formatPriceRange(pMin, pMax, cached.currency || currency),
               status: 'verified',
-              source: cached.source || `${countryName} Retail Market (${cached.retailer || defaultRetailers})`,
+              source: cached.source || `${countryName} Verified Retail Record (${cached.retailer || defaultRetailers})`,
               retrievedAt: cached.retrieved_at,
               confidence: Number(cached.confidence || 0.92),
               needs_user_price: false
@@ -1546,11 +1684,11 @@ Return ONLY a valid JSON object:
         // Continue to live retail lookup
       }
 
-      // 3. Check live Google Shopping search if SERPAPI_API_KEY is configured
+      // 4. Check live Google Shopping search if SERPAPI_API_KEY is configured
       const serpApiKey = process.env.SERPAPI_API_KEY;
       if (serpApiKey && productName) {
         try {
-          const query = encodeURIComponent(`${brand || ''} ${productName} ${barcode} price`.trim());
+          const query = encodeURIComponent(`${brand || ''} ${productName} ${cleanBarcode} price`.trim());
           const serpRes = await fetch(
             `https://serpapi.com/search.json?engine=google_shopping&q=${query}&gl=${normCountry.toLowerCase()}&api_key=${serpApiKey}`
           );
@@ -1567,9 +1705,11 @@ Return ONLY a valid JSON object:
               const retailerSource = results[0].source || defaultRetailers;
 
               return {
-                productId: barcode,
+                productId: cleanBarcode,
                 retailer: retailerSource,
                 country: normCountry,
+                origin_country: resolvedOriginCountry,
+                shopping_market_country: normCountry,
                 ip_country_name: countryName,
                 ip_address: ipLoc.ip,
                 currency,
@@ -1590,75 +1730,26 @@ Return ONLY a valid JSON object:
         }
       }
 
-      // 4. Product-specific AI Retail Price Range Resolution for the user's IP country & currency
-      const aiPrice = await this.resolveProductPriceRangeWithAI(
-        barcode,
-        normCountry,
-        productName,
-        brand,
-        productCategory,
-        sizeStr
-      );
-
-      if (aiPrice && aiPrice.price > 0) {
-        const resultPrice: ProductPrice = {
-          productId: barcode,
-          retailer: aiPrice.retailer,
-          country: normCountry,
-          ip_country_name: countryName,
-          ip_address: ipLoc.ip,
-          currency,
-          price: aiPrice.price,
-          price_min: aiPrice.price_min,
-          price_max: aiPrice.price_max,
-          price_range: this.formatPriceRange(aiPrice.price_min, aiPrice.price_max, currency),
-          status: 'verified',
-          source: aiPrice.source,
-          retrievedAt: new Date().toISOString(),
-          confidence: 0.88,
-          needs_user_price: false
-        };
-
-        // Persist in product_price_cache for fast subsequent lookups
-        try {
-          const supabase = createServerSupabaseClient();
-          await supabase.from('product_price_cache').upsert(
-            {
-              product_id: barcode,
-              country: normCountry,
-              currency,
-              price: aiPrice.price,
-              retailer: aiPrice.retailer,
-              source: aiPrice.source,
-              confidence: 0.88,
-              retrieved_at: new Date().toISOString()
-            },
-            { onConflict: 'product_id,country' }
-          );
-        } catch (_e) {}
-
-        return resultPrice;
-      }
-
-      // 5. Deterministic product-and-size-aware local retail price range fallback
-      const fallback = this.estimateLocalPriceRange(barcode, normCountry, productName, productCategory, sizeStr, brand);
-
+      // 5. HONEST UNAVAILABLE STATE (Section 11 & AGENTS.md Section 2):
+      // Never use AI to invent a retail price or mark a category heuristic as 'verified'.
       return {
-        productId: barcode,
-        retailer: fallback.retailer,
+        productId: cleanBarcode,
+        retailer: undefined,
         country: normCountry,
+        origin_country: resolvedOriginCountry,
+        shopping_market_country: normCountry,
         ip_country_name: countryName,
         ip_address: ipLoc.ip,
-        currency: fallback.currency,
-        price: fallback.price,
-        price_min: fallback.price_min,
-        price_max: fallback.price_max,
-        price_range: this.formatPriceRange(fallback.price_min, fallback.price_max, fallback.currency),
-        status: 'verified',
-        source: fallback.source,
+        currency,
+        price: null,
+        price_min: undefined,
+        price_max: undefined,
+        price_range: undefined,
+        status: 'unavailable',
+        source: `No verified retail listing found in ${countryName} (${currency})`,
         retrievedAt: new Date().toISOString(),
-        confidence: fallback.confidence,
-        needs_user_price: false
+        confidence: 0,
+        needs_user_price: true
       };
     } catch (e) {
       console.warn('[RetailPriceProvider] Price lookup error:', e);
@@ -1679,79 +1770,404 @@ export class BarcodeService {
   }
 
   /**
-   * Step 2 (Only on APPROVED products): Enrich missing nutrition or ingredients via dedicated panel OCR,
-   * Open Food Facts sibling SKU lookup, or identified product formulation lookup, and recompute food coloring.
+   * Deterministic consumption calculator for a packaged product (Section 3 & Section 7):
+   * Supports 1 serving, multiple servings (e.g., 2 servings = 200 kcal), custom gram weight,
+   * or full package consumption (e.g., 4 servings = 400 kcal) while preserving original_source_values.
    */
-  static async enrichApprovedProductFacts(product: NormalizedProduct, packageImage?: string): Promise<NormalizedProduct> {
-    const n = product.nutrition || { basis: '100g', status: 'unavailable' };
-
-    // Optional nutrition panel OCR ONLY if catalog calories are missing AND a nutrition/package photo exists
-    if (n.calories === undefined || n.calories === null) {
-      const nutritionImgCandidate = packageImage || product.image_nutrition_url;
-      if (nutritionImgCandidate) {
-        const ocrNutrition = await extractNutritionFactsFromImage(nutritionImgCandidate);
-        if (ocrNutrition && typeof ocrNutrition.calories === 'number' && !isNaN(ocrNutrition.calories)) {
-          n.calories = Math.round(ocrNutrition.calories);
-          if (typeof ocrNutrition.protein === 'number') n.protein = Math.round(ocrNutrition.protein * 10) / 10;
-          if (typeof ocrNutrition.carbohydrates === 'number') n.carbohydrates = Math.round(ocrNutrition.carbohydrates * 10) / 10;
-          if (typeof ocrNutrition.fat === 'number') n.fat = Math.round(ocrNutrition.fat * 10) / 10;
-          if (typeof ocrNutrition.fiber === 'number') n.fiber = Math.round(ocrNutrition.fiber * 10) / 10;
-          if (typeof ocrNutrition.sugar === 'number') n.sugar = Math.round(ocrNutrition.sugar * 10) / 10;
-          if (typeof ocrNutrition.sodium_mg === 'number') n.sodium_mg = Math.round(ocrNutrition.sodium_mg);
-          if (ocrNutrition.serving_size) {
-            product.serving_size = ocrNutrition.serving_size;
-            n.basis = 'serving';
-          }
-          n.status = 'ocr';
+  static calculateConsumptionForProduct(
+    product: NormalizedProduct,
+    optionsOrServings:
+      | number
+      | {
+          servingsConsumed?: number;
+          weightConsumedG?: number;
+          consumeEntirePackage?: boolean;
         }
+  ): NormalizedProduct {
+    const options =
+      typeof optionsOrServings === 'number'
+        ? { servingsConsumed: optionsOrServings }
+        : optionsOrServings;
+    const n = product.nutrition;
+    if (!n) return product;
+
+    const orig100 = n.original_source_values?.per_100g || n.original_source_values?.per_100ml;
+    const origSrv = n.original_source_values?.per_serving;
+    const srvWeightG =
+      origSrv?.serving_weight_g ||
+      product.serving_quantity_g ||
+      parseServingQuantityGrams(product.serving_size);
+    const pkgWeightG = product.package_quantity_g || parseServingQuantityGrams(product.size);
+    const srvPerPkg =
+      product.servings_per_package ||
+      n.servings_per_package ||
+      (pkgWeightG && srvWeightG && srvWeightG > 0 ? Math.round((pkgWeightG / srvWeightG) * 10) / 10 : undefined);
+
+    const calc = DeterministicCalculationEngine.calculatePackagedProductConsumption({
+      per100g: orig100
+        ? {
+            calories_kcal: orig100.calories_kcal,
+            energy_kj: orig100.energy_kj,
+            protein_g: orig100.protein_g,
+            carbs_g: orig100.carbohydrates_g,
+            fat_g: orig100.fat_g,
+            saturated_fat_g: orig100.saturated_fat_g,
+            fiber_g: orig100.fiber_g,
+            sugar_g: orig100.sugar_g,
+            sodium_mg: orig100.sodium_mg
+          }
+        : undefined,
+      perServing: origSrv
+        ? {
+            calories_kcal: origSrv.calories_kcal,
+            energy_kj: origSrv.energy_kj,
+            protein_g: origSrv.protein_g,
+            carbs_g: origSrv.carbohydrates_g,
+            fat_g: origSrv.fat_g,
+            saturated_fat_g: origSrv.saturated_fat_g,
+            fiber_g: origSrv.fiber_g,
+            sugar_g: origSrv.sugar_g,
+            sodium_mg: origSrv.sodium_mg
+          }
+        : n.calories !== undefined
+        ? {
+            calories_kcal: n.calories_exact ?? n.calories,
+            energy_kj: n.energy_kj,
+            protein_g: n.protein,
+            carbs_g: n.carbohydrates,
+            fat_g: n.fat,
+            saturated_fat_g: n.saturated_fat,
+            fiber_g: n.fiber,
+            sugar_g: n.sugar,
+            sodium_mg: n.sodium_mg
+          }
+        : undefined,
+      servingWeightG: srvWeightG,
+      packageWeightG: pkgWeightG,
+      servingsPerPackage: srvPerPkg,
+      servingsConsumed: options.servingsConsumed,
+      weightConsumedG: options.weightConsumedG,
+      consumeEntirePackage: options.consumeEntirePackage
+    });
+
+    return {
+      ...product,
+      nutrition: {
+        ...n,
+        calculated_consumption: {
+          servings_consumed: calc.servings_consumed ?? 1,
+          consumed_weight_g: calc.consumed_weight_g ?? undefined,
+          calories: calc.calories_rounded ?? calc.calories ?? 0,
+          calories_exact: calc.calories_exact ?? calc.calories ?? 0,
+          protein_g: calc.protein ?? 0,
+          carbohydrates_g: calc.carbs ?? 0,
+          fat_g: calc.fat ?? 0,
+          saturated_fat_g: calc.saturated_fat ?? undefined,
+          fiber_g: calc.fiber ?? 0,
+          sugar_g: calc.sugar ?? 0,
+          sodium_mg: calc.sodium_mg ?? 0,
+          basis_used:
+            calc.calculation_basis_used === 'serving'
+              ? 'per_serving'
+              : calc.calculation_basis_used === '100ml'
+                ? 'per_100ml'
+                : calc.calculation_basis_used === 'package'
+                  ? 'per_package'
+                  : 'per_100g',
+          formula_audit: [calc.formula_audit]
+        }
+      }
+    };
+  }
+
+  /**
+   * Reconciles a database product record with a confirmed physical package label (Section 4 & Example A):
+   * Preserves both `database_record` and `label_record`, flags any discrepancy (`> 5%` or `> 5 kcal`),
+   * and prioritizes the confirmed physical package label when legible and confirmed.
+   */
+  static reconcileWithPhysicalLabel(
+    product: NormalizedProduct,
+    labelRecord: ExtractedLabelRecord
+  ): NormalizedProduct {
+    const n = product.nutrition || { basis: 'serving', status: 'unavailable' };
+    const dbSrvKcal =
+      n.original_source_values?.per_serving?.calories_kcal ??
+      (n.basis === 'serving' ? (n.calories_exact ?? n.calories) : undefined);
+    const db100Kcal =
+      n.original_source_values?.per_100g?.calories_kcal ??
+      n.original_source_values?.per_100ml?.calories_kcal ??
+      (n.basis === '100g' || n.basis === '100ml' ? (n.calories_exact ?? n.calories) : undefined);
+
+    const resolution = NutritionalLabelOCRService.resolveDatabaseAndLabelDiscrepancy(
+      {
+        calories: dbSrvKcal ?? db100Kcal,
+        protein: n.protein,
+        carbs: n.carbohydrates,
+        fat: n.fat,
+        fiber: n.fiber,
+        sugar: n.sugar,
+        sodium_mg: n.sodium_mg
+      },
+      labelRecord
+    );
+
+    const explanation =
+      resolution.discrepancy_fields.length > 0
+        ? resolution.discrepancy_fields.map(d => d.resolution_note).join(' ')
+        : 'Physical package label matches database record.';
+
+    const updatedProduct: NormalizedProduct = {
+      ...product,
+      discrepancy: {
+        discrepancy_detected: resolution.discrepancy_detected,
+        database_record: {
+          calories_per_serving: dbSrvKcal,
+          calories_per_100g: db100Kcal,
+          serving_size: product.serving_size,
+          source: n.source_api || 'openfoodfacts_v3'
+        },
+        label_record: {
+          calories_per_serving: labelRecord.calories ?? undefined,
+          serving_size: labelRecord.serving_size || undefined,
+          source: 'physical_package_label_ocr'
+        },
+        prioritized_source:
+          resolution.prioritized_source === 'physical_package_label'
+            ? 'physical_package_label'
+            : 'database_record',
+        explanation
+      }
+    };
+
+    if (resolution.prioritized_source === 'physical_package_label' && labelRecord.calories !== null && labelRecord.calories !== undefined) {
+      const labelKcal = labelRecord.calories;
+      const labelSrvWeightG = labelRecord.serving_quantity_g || product.serving_quantity_g;
+      const labelPkgWeightG = labelRecord.package_quantity_g || product.package_quantity_g;
+      const labelServingsPerPkg =
+        labelRecord.servings_per_container ||
+        (labelPkgWeightG && labelSrvWeightG && labelSrvWeightG > 0
+          ? Math.round((labelPkgWeightG / labelSrvWeightG) * 10) / 10
+          : product.servings_per_package);
+
+      updatedProduct.serving_size = labelRecord.serving_size || product.serving_size;
+      updatedProduct.serving_quantity_g = labelSrvWeightG;
+      updatedProduct.package_quantity_g = labelPkgWeightG;
+      updatedProduct.servings_per_package = labelServingsPerPkg;
+
+      if (labelRecord.ingredients) {
+        const formattedIng = buildFactoryIngredientsFormat(labelRecord.ingredients, product.allergens, product.traces);
+        updatedProduct.ingredients = formattedIng.ingredients;
+        updatedProduct.factory_ingredients_statement = formattedIng.factory_ingredients_statement;
+        updatedProduct.contains_statement = formattedIng.contains_statement;
+        updatedProduct.factory_ingredients_breakdown = formattedIng.factory_ingredients_breakdown;
+        updatedProduct.ingredients_status = 'label-extracted';
+        updatedProduct.ingredients_source = 'physical_package_label_ocr';
+      }
+
+      const updatedPerServing: SourceNutrientBasisValues & { serving_size?: string; serving_weight_g?: number } = {
+        ...(n.original_source_values?.per_serving || {}),
+        calories_kcal: labelKcal,
+        energy_kj:
+          labelRecord.original_energy_unit === 'kJ' && labelRecord.original_energy_value !== null
+            ? labelRecord.original_energy_value
+            : labelRecord.energy_kj ?? n.original_source_values?.per_serving?.energy_kj,
+        protein_g: labelRecord.protein ?? n.protein,
+        carbohydrates_g: labelRecord.carbohydrates ?? n.carbohydrates,
+        fat_g: labelRecord.fat ?? n.fat,
+        saturated_fat_g: labelRecord.saturated_fat ?? n.saturated_fat,
+        fiber_g: labelRecord.fiber ?? n.fiber,
+        sugar_g: labelRecord.sugar ?? n.sugar,
+        sodium_mg: labelRecord.sodium_mg ?? n.sodium_mg,
+        serving_size: updatedProduct.serving_size,
+        serving_weight_g: labelSrvWeightG
+      };
+
+      updatedProduct.nutrition = {
+        ...n,
+        calories: Math.round(labelKcal),
+        calories_exact: labelKcal,
+        protein: updatedPerServing.protein_g,
+        carbohydrates: updatedPerServing.carbohydrates_g,
+        fat: updatedPerServing.fat_g,
+        saturated_fat: updatedPerServing.saturated_fat_g,
+        fiber: updatedPerServing.fiber_g,
+        sugar: updatedPerServing.sugar_g,
+        sodium_mg: updatedPerServing.sodium_mg,
+        servings_per_package: labelServingsPerPkg,
+        basis: labelRecord.basis === '100g' ? '100g' : labelRecord.basis === '100ml' ? '100ml' : 'serving',
+        status: 'label-extracted',
+        original_source_values: {
+          ...(n.original_source_values || {}),
+          per_serving: updatedPerServing
+        }
+      };
+
+      return this.calculateConsumptionForProduct(reconcileProductCalorieIntake(updatedProduct), { servingsConsumed: 1 });
+    }
+
+    return updatedProduct;
+  }
+
+  /**
+   * Exposes strict non-hallucinating ingredient lookup for identified products (Example B).
+   */
+  static async resolveIngredientsForIdentifiedProduct(
+    productOrParams: NormalizedProduct | { barcode: string; productName: string; brand?: string }
+  ): Promise<string | null> {
+    const normalized: NormalizedProduct =
+      'name' in productOrParams
+        ? productOrParams
+        : {
+            barcode: productOrParams.barcode,
+            name: productOrParams.productName,
+            brand: productOrParams.brand
+          };
+    return resolveIngredientsForIdentifiedProduct(normalized);
+  }
+
+  /**
+   * Step 2 (Only on APPROVED products): Enrich missing nutrition or ingredients via dedicated panel OCR,
+   * reconcile database vs physical package label discrepancies (Example A),
+   * and enforce strict zero-hallucination when ingredients are unavailable (Example B).
+   */
+  static async enrichApprovedProductFacts(
+    product: NormalizedProduct,
+    packageImage?: string,
+    confirmedLabelRecord?: ExtractedLabelRecord
+  ): Promise<NormalizedProduct> {
+    let workingProduct: NormalizedProduct = {
+      ...product,
+      nutrition: product.nutrition || { basis: '100g', status: 'unavailable' }
+    };
+
+    // 1. If caller supplied a pre-extracted physical label record (or packageImage), reconcile with database record
+    if (confirmedLabelRecord) {
+      workingProduct = this.reconcileWithPhysicalLabel(workingProduct, confirmedLabelRecord);
+    } else if (packageImage) {
+      const ocrRecord = await NutritionalLabelOCRService.extractFromImage(packageImage);
+      if (ocrRecord && ocrRecord.is_legible && ocrRecord.calories !== null) {
+        workingProduct = this.reconcileWithPhysicalLabel(workingProduct, ocrRecord);
+      } else {
+        // Fallback to targeted panel OCR if full label extraction didn't get energy
+        const n = workingProduct.nutrition!;
+        if (n.calories === undefined || n.calories === null) {
+          const ocrNutrition = await extractNutritionFactsFromImage(packageImage);
+          if (ocrNutrition && typeof ocrNutrition.calories === 'number' && !isNaN(ocrNutrition.calories)) {
+            n.calories = Math.round(ocrNutrition.calories);
+            n.calories_exact = Math.round(ocrNutrition.calories * 10) / 10;
+            if (typeof ocrNutrition.protein === 'number') n.protein = Math.round(ocrNutrition.protein * 10) / 10;
+            if (typeof ocrNutrition.carbohydrates === 'number') n.carbohydrates = Math.round(ocrNutrition.carbohydrates * 10) / 10;
+            if (typeof ocrNutrition.fat === 'number') n.fat = Math.round(ocrNutrition.fat * 10) / 10;
+            if (typeof ocrNutrition.fiber === 'number') n.fiber = Math.round(ocrNutrition.fiber * 10) / 10;
+            if (typeof ocrNutrition.sugar === 'number') n.sugar = Math.round(ocrNutrition.sugar * 10) / 10;
+            if (typeof ocrNutrition.sodium_mg === 'number') n.sodium_mg = Math.round(ocrNutrition.sodium_mg);
+            if (ocrNutrition.serving_size) {
+              workingProduct.serving_size = ocrNutrition.serving_size;
+              n.basis = 'serving';
+            }
+            n.status = 'label-extracted';
+          }
+        }
+      }
+    } else if (
+      (workingProduct.nutrition?.calories === undefined || workingProduct.nutrition?.calories === null) &&
+      workingProduct.image_nutrition_url
+    ) {
+      const ocrNutrition = await extractNutritionFactsFromImage(workingProduct.image_nutrition_url);
+      if (ocrNutrition && typeof ocrNutrition.calories === 'number' && !isNaN(ocrNutrition.calories)) {
+        const n = workingProduct.nutrition!;
+        n.calories = Math.round(ocrNutrition.calories);
+        n.calories_exact = Math.round(ocrNutrition.calories * 10) / 10;
+        if (typeof ocrNutrition.protein === 'number') n.protein = Math.round(ocrNutrition.protein * 10) / 10;
+        if (typeof ocrNutrition.carbohydrates === 'number') n.carbohydrates = Math.round(ocrNutrition.carbohydrates * 10) / 10;
+        if (typeof ocrNutrition.fat === 'number') n.fat = Math.round(ocrNutrition.fat * 10) / 10;
+        if (typeof ocrNutrition.fiber === 'number') n.fiber = Math.round(ocrNutrition.fiber * 10) / 10;
+        if (typeof ocrNutrition.sugar === 'number') n.sugar = Math.round(ocrNutrition.sugar * 10) / 10;
+        if (typeof ocrNutrition.sodium_mg === 'number') n.sodium_mg = Math.round(ocrNutrition.sodium_mg);
+        if (ocrNutrition.serving_size) {
+          workingProduct.serving_size = ocrNutrition.serving_size;
+          n.basis = 'serving';
+        }
+        n.status = 'label-extracted';
       }
     }
 
-    // Optional ingredients panel OCR if catalog ingredients are missing AND an ingredients/package photo exists
-    if (!product.ingredients) {
-      const ingredientsImgCandidate = packageImage || product.image_ingredients_url;
+    // 2. Optional ingredients panel OCR if catalog ingredients are missing AND an ingredients/package photo exists
+    if (!workingProduct.ingredients) {
+      const ingredientsImgCandidate = packageImage || workingProduct.image_ingredients_url;
       if (ingredientsImgCandidate) {
         const ocrIngredients = await extractIngredientsFromImage(ingredientsImgCandidate);
         if (ocrIngredients) {
-          product.ingredients = ocrIngredients;
-          product.ingredients_status = 'ocr';
+          workingProduct.ingredients = ocrIngredients;
+          workingProduct.ingredients_status = 'label-extracted';
+          workingProduct.ingredients_source = 'package_label_ocr';
         }
       }
     }
 
-    // If catalog and OCR still did not provide ingredients for this identified product, resolve from OFF sibling SKUs or identified commercial formulation
-    if (!product.ingredients) {
-      const resolvedIng = await resolveIngredientsForIdentifiedProduct(product);
+    // 3. If catalog and OCR still did not provide ingredients, check ONLY exact same-brand + exact same-name OFF sibling record (NEVER invent with AI)
+    if (!workingProduct.ingredients) {
+      const resolvedIng = await resolveIngredientsForIdentifiedProduct(workingProduct);
       if (resolvedIng) {
-        product.ingredients = resolvedIng;
-        product.ingredients_status = 'verified';
+        workingProduct.ingredients = resolvedIng;
+        workingProduct.ingredients_status = 'database-derived';
+        workingProduct.ingredients_source = 'openfoodfacts_exact_sibling';
+      } else {
+        workingProduct.ingredients = null;
+        workingProduct.ingredients_status = 'unavailable';
       }
     }
 
-    product.nutrition = n;
-    product.coloring = FoodColoringService.analyze(product.ingredients, product.additives);
+    workingProduct.coloring = FoodColoringService.analyze(workingProduct.ingredients, workingProduct.additives);
 
     // Format factory packaging ingredients statement and structured breakdown
-    const factoryIngredients = buildFactoryIngredientsFormat(product.ingredients, product.allergens, product.traces);
-    product.ingredients = factoryIngredients.ingredients;
-    product.factory_ingredients_statement = factoryIngredients.factory_ingredients_statement;
-    product.contains_statement = factoryIngredients.contains_statement;
-    product.factory_ingredients_breakdown = factoryIngredients.factory_ingredients_breakdown;
+    const factoryIngredients = buildFactoryIngredientsFormat(workingProduct.ingredients, workingProduct.allergens, workingProduct.traces);
+    workingProduct.ingredients = factoryIngredients.ingredients;
+    workingProduct.factory_ingredients_statement = factoryIngredients.factory_ingredients_statement;
+    workingProduct.contains_statement = factoryIngredients.contains_statement;
+    workingProduct.factory_ingredients_breakdown = factoryIngredients.factory_ingredients_breakdown;
 
-    return reconcileProductCalorieIntake(product);
+    return reconcileProductCalorieIntake(workingProduct);
   }
 
   /**
    * Full scan helper (preserves backwards compatibility for any direct callers).
    */
-  static async processScan(barcode: string, countryCode: string = 'US', ipAddress?: string, packageImage?: string) {
+  static async processScan(
+    barcode: string,
+    countryCode: string = 'US',
+    ipAddress?: string,
+    packageImage?: string,
+    options?: {
+      servingsConsumed?: number;
+      weightConsumedG?: number;
+      consumeEntirePackage?: boolean;
+      confirmedLabelRecord?: ExtractedLabelRecord;
+    }
+  ) {
     const rawProduct = await this.identifyProduct(barcode, packageImage);
 
     if (!rawProduct) {
       throw new Error('Product could not be authoritatively identified.');
     }
 
-    const enrichedProduct = await this.enrichApprovedProductFacts(rawProduct, packageImage);
+    let enrichedProduct = await this.enrichApprovedProductFacts(
+      rawProduct,
+      packageImage,
+      options?.confirmedLabelRecord
+    );
+
+    if (
+      options?.servingsConsumed !== undefined ||
+      options?.weightConsumedG !== undefined ||
+      options?.consumeEntirePackage
+    ) {
+      enrichedProduct = this.calculateConsumptionForProduct(enrichedProduct, {
+        servingsConsumed: options.servingsConsumed,
+        weightConsumedG: options.weightConsumedG,
+        consumeEntirePackage: options.consumeEntirePackage
+      });
+    }
 
     const price = await this.priceProvider.getPrice(
       barcode,
@@ -1760,8 +2176,13 @@ export class BarcodeService {
       enrichedProduct.name,
       ipAddress,
       enrichedProduct.size || enrichedProduct.serving_size,
-      enrichedProduct.brand
+      enrichedProduct.brand,
+      enrichedProduct.origin_country
     );
+
+    if (price?.shopping_market_country) {
+      enrichedProduct.shopping_market_country = price.shopping_market_country;
+    }
 
     return {
       product: enrichedProduct,

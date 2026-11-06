@@ -398,7 +398,7 @@ Explain the user's progress using only the supplied persisted measurements, food
 Supabase is the persistent source of truth. Use existing tables where they already correctly model the domain. Do not create parallel tables merely because it is easier than understanding the current schema.
 
 #### Canonical Key Tables Reference
-See [`prisma/schema.prisma`](file:///c:/Users/acer/Desktop/my%20apps/the-app-belong-to-vic--main/prisma/schema.prisma) and Supabase migrations for complete definitions:
+See [`prisma/schema.prisma`](file:///c:/Users/acer/Desktop/-vicalary-app-for-vic.-main/prisma/schema.prisma) and Supabase migrations for complete definitions:
 - **User & Onboarding**: `user_profiles`, `onboarding_responses`, `user_settings`
 - **Food, Scanner, Products, & Boycott**: `food_analysis_history`, `food_items`, `products`, `medications`, `companies`
 - **Progress & Metrics**: `daily_progress`, `progress_measurements`, `user_milestones`, `monthly_reports`
@@ -646,3 +646,205 @@ In every user communication, prompt preparation, walkthrough, and document gener
 - **Every implementation plan, prompt file, code artifact, diagnostic route, or touched file MUST be formatted as a clickable Markdown link using standard `file:///` URLs** (e.g. `[prompts/example.md](file:///c:/Users/acer/.../prompts/example.md)` or `[app/page.tsx](file:///c:/Users/acer/.../app/page.tsx)`).
 - Never output bare text or unlinked code-block paths when referring to prompts, plans, or files.
 - This rule applies permanently and continuously to all current and future development sessions on this project.
+
+---
+
+### 38. ANTIGRAVITY SESSIONS, CLI (`agy`), AND SLASH COMMANDS REFERENCE
+This project operates natively on **Google Antigravity** (**Antigravity 2.0**, **Antigravity IDE**, and the **Antigravity CLI `agy`**). For the full companion field guide, see [`docs/ANTIGRAVITY_PRACTICAL_GUIDE.md`](file:///c:/Users/acer/Desktop/-vicalary-app-for-vic.-main/docs/ANTIGRAVITY_PRACTICAL_GUIDE.md).
+
+#### Starting & Resuming Sessions
+- **Interactive CLI session**: `agy` (or start with an initial task via `agy "your task"`).
+- **Single-task non-interactive execution**: `agy -p "your task"` (runs one task, outputs the result, and exits — ideal for shell scripts, CI checks, automated validations, cron jobs, or piping logs such as `Get-Content -Tail 300 app.log | agy -p "find the likely cause of these errors"`).
+- **Continuing & resuming sessions**: Continue the latest session (`agy -c`) or resume a specific session (`agy -r` / `/resume`, or select/mention `@conversation` from the Antigravity 2.0 / IDE sidebar) rather than starting blind when returning to in-progress work.
+
+#### Core Antigravity Slash Commands & Controls
+| Command / Control | What It Does | When to Use / Recommend It |
+| :--- | :--- | :--- |
+| `/help` | Lists available slash commands and skills | Discovering active commands in the current environment |
+| **New Conversation** (`/clear`) | Starts a clean conversation context | Moving to an unrelated feature or bug |
+| `/compact` | Compresses and summarizes the current conversation | Continuing the same task when context becomes large |
+| `/plan` | Enters Planning Mode for step-by-step design | Before implementing any non-trivial or multi-file change |
+| `/grill-me` | Interactive design interview to resolve ambiguities | Aligning on architectural or product decisions before coding |
+| `/goal` | Thorough, long-running execution mode | Complex goals where the agent must verify end-to-end before stopping |
+| `/teamwork` | Coordinates multiple autonomous subagents in parallel | Large, genuinely separable repo-wide tasks or migrations |
+| `/boost` | Deep thinking, multiple perspectives, rigorous verification | Subtle debugging, complex architecture, or high-risk changes |
+| `/learn` | Persists a user correction or complex setup into rules/skills | When a correction or discovered pattern must be remembered permanently |
+| `/schedule` | Schedules a recurring cron job or one-time timer (`schedule` tool) | Periodic monitoring, timed checks, or recurring tasks |
+| `/browser` | Triggers browser automation and visual inspection workflows | Verifying `http://localhost:3000` flows and DOM state |
+
+---
+
+### 39. CONTEXT HYGIENE: NEW CONVERSATION (`/clear`) VS `/compact` VS BRANCHED SUBAGENTS (`/branch` & `/fork`)
+The context window holds conversation history, tool outputs, files read (`read_file`), [`AGENTS.md`](file:///c:/Users/acer/Desktop/-vicalary-app-for-vic.-main/AGENTS.md), terminal output, loaded skills, MCP schemas, and subagent reports. Context quality directly governs reasoning quality.
+
+#### 1. New Conversation (`/clear`) — Different Problem
+- **Rule**: Use when moving from one unrelated task to another (e.g., finishing Supabase Phone OTP debugging and moving to Cookbook UI cards). Do not carry stale authentication or unrelated file dumps into a new domain.
+
+#### 2. `/compact` — Same Problem + Too Much Context
+- **Rule**: Use when continuing on the **same problem**, but the session history has grown large.
+- Always specify what must be preserved during compaction (e.g., `/compact preserve all Prisma schema decisions, Supabase RLS findings, and unresolved scanner expenditure issues`).
+- **Formula**:
+  - `Same problem + too much context = /compact`
+  - `Different problem = New Conversation (/clear)`
+
+#### 3. Branched Execution (`/branch`) & Forked Subagents (`/fork`)
+- **Experimenting Safely (`Workspace: "branch"` / `"share"`)**: When testing an alternative schema or architectural approach without derailing the main conversation or dirtying the working tree, invoke a subagent (`invoke_subagent`) with `Workspace: "branch"` or `Workspace: "share"`.
+- **Focused Subagent vs Self Subagent**:
+  - **Normal / Research Subagent (`TypeName: "research"`)**: Starts with a clean, focused context supplied by the parent to read many files and return only distilled findings.
+  - **Forked / Self Subagent (`TypeName: "self"`)**: Inherits the parent agent's full capabilities, rules, and system configuration to execute a side task in the background (e.g., drafting unit tests or auditing edge cases) while the main session continues.
+
+---
+
+### 40. WHERE INSTRUCTIONS & CUSTOMIZATIONS MUST LIVE (ARCHITECTURE OF CONTROL)
+Never dump every instruction into one place. Keep project guidance modular according to what problem each mechanism solves:
+
+| Requirement Type | Authoritative Antigravity Location |
+| :--- | :--- |
+| **Something the agent must ALWAYS know** | [`AGENTS.md`](file:///c:/Users/acer/Desktop/-vicalary-app-for-vic.-main/AGENTS.md) / `GEMINI.md` / `.agents/rules/*.md` |
+| **A repeatable multi-step way of doing work** | **Skill** (`.agents/skills/<skill-name>/SKILL.md`) |
+| **Something that MUST happen automatically** | **Lifecycle Hook** (`.agents/hooks.json`) |
+| **Something the agent must NOT be allowed to do** | **Permissions & Terminal Sandbox** (`allow` / `ask` / `deny` + `PreToolUse` hooks) |
+| **A one-time feature or bugfix request** | **User Prompt** & [`prompts/<feature-name>.md`](file:///c:/Users/acer/Desktop/-vicalary-app-for-vic.-main/prompts) |
+| **External service, browser, or database tool** | **MCP Server** (`~/.gemini/config/mcp_config.json` or plugin `mcp_config.json`) |
+| **Separate focused investigation (context isolation)** | **Subagent** (`invoke_subagent` with `TypeName: "research"`) |
+| **Isolated files for parallel edits (filesystem isolation)** | **Branched Subagent Workspace** (`invoke_subagent` with `Workspace: "branch"` / `"share"`) |
+
+> [!IMPORTANT]
+> **Rule Budget Awareness**: Standalone rule files (`AGENTS.md` / `GEMINI.md`) have a per-file inline cap and share the global rules token budget, while **Skills** (`.agents/skills/<name>/SKILL.md`) use **progressive disclosure** (only their `name` and `description` are loaded until activated). Keep bulky runbooks or reference tables inside `.agents/skills/<name>/references/` or `docs/` and link to them cleanly.
+
+---
+
+### 41. PERMISSIONS, TERMINAL SANDBOX, AND SECRET DENYLISTS
+Antigravity can read, write, and edit files, execute PowerShell/shell commands, run Git operations, call MCP tools, and drive the browser. All actions must respect strict permission tiers (`allow`, `ask`, `deny`) and the **Terminal Sandbox**:
+
+1. **Freely Allowed in Standard Sandbox (`BypassSandbox: false` / `allow`)**:
+   - Read-only repository inspection (`git status`, `git diff`, `git log`).
+   - Deterministic verification checks (`npx tsc --noEmit`, `npm run lint`, `npm test`).
+   - Running `pnpm run`, `pnpm test`, and `pnpm exec` inside the sandbox.
+2. **Explicit Approval Required (`ask` / `BypassSandbox: true`)**:
+   - **Never push to GitHub (`git push`)** without completing the Section 34 CodeRabbit cycle and receiving explicit user approval.
+   - Any command requiring network access or unsandboxed execution (`BypassSandbox: true`, including `pnpm install` / `pnpm add` on Windows).
+   - Any destructive database or infrastructure command (`DROP TABLE`, `TRUNCATE`, `git push --force`, `prisma migrate reset`).
+3. **Strictly Denied (`deny`)**:
+   - Never expose, print, log, or overwrite `.env` or `.env.*` secret values (`SUPABASE_SERVICE_ROLE_KEY`, OpenAI/Gemini API keys, Daily.co keys) in client code, prompts, or public responses.
+4. **Execution Modes Awareness**:
+   - Always respect the active execution policy (**Strict/Manual**, **Request Review**, **Proceed in Sandbox**, **Planning Mode**, or **Always Proceed**) and never bypass sandbox or permission boundaries.
+
+---
+
+### 42. PLAN MODE DISCIPLINE & HIGH-LEVERAGE CHALLENGE QUESTIONS
+Before writing code for any non-trivial task, combine **Plan Mode (`/plan`)** with the **Section 3.2 Implementation Prompt Gate** (`prompts/<feature-name>.md`):
+
+1. **Think first. Inspect first. Do not jump straight into implementation.**
+2. **Mandatory Plan Mode Triggers**:
+   - Database / Prisma schema changes and Supabase migrations
+   - Authentication, session resolution, and RLS policy changes
+   - Permissions and security boundaries
+   - Cross-feature architecture and provider integrations
+   - Large refactors or unfamiliar legacy modules
+   - Decisions that are expensive to reverse
+3. **Challenge the Plan Before Execution**:
+   - Every plan in `prompts/<feature-name>.md` must explicitly answer:
+     - *Why is any new table, route, or component necessary instead of reusing existing ones?*
+     - *Can this version avoid unnecessary schema or contract complexity?*
+     - *What existing callers, routes, or UI states could break if implemented this way?*
+
+---
+
+### 43. MODEL SELECTION & REASONING EFFORT CALIBRATION
+Treat **Model Selection** (*which brain you are using*) and **Reasoning Effort** (*how hard the model thinks on the task*) as distinct engineering controls:
+
+- **Faster Models (`flash` / `flash_lite`) & Lower Effort**:
+  - Use for subagents performing high-volume read sweeps, simple text/translation adjustments, straightforward component wiring, or formatting checks.
+- **Stronger Reasoning Models (`pro` / Gemini Argon) & High Effort (`/boost`)**:
+  - Use for system architecture, subtle concurrency/state-machine bugs (such as `VoiceSessionController` turn locks or idempotent scanner-to-budget handoffs), database schema design, RLS security audits, deep code review, and complex multi-file refactors.
+- When invoking subagents via `invoke_subagent`, default `Model` to `'inherit'` unless a lightweight read-only sweep specifically warrants `'flash'` or `'flash_lite'`.
+
+---
+
+### 44. CUSTOM SKILLS (`.agents/skills/`), SUBAGENTS, WORKSPACE ISOLATION, AND PARALLEL BATCH WORK (`/teamwork`)
+
+#### 1. Custom Project Skills (`.agents/skills/<name>/SKILL.md`)
+Whenever a workflow requires a repeatable checklist (*"First inspect X, then check Y, then follow conventions Z, then verify with Chrome DevTools, then report with clickable links"*), encapsulate it as a Skill inside `.agents/skills/<skill-name>/SKILL.md` structured into three phases:
+- **Before Implementing**: Inspect existing page/route, search for reusable primitives/services, verify schema/tokens.
+- **During Implementation**: Reuse existing primitives, keep changes minimal, preserve protected UI surfaces.
+- **Before Finishing**: Verify `npm run dev` daemon logs, verify live page via `chrome-devtools-mcp`, run typecheck/lint, and report with clickable `file:///` links.
+
+#### 2. Context Isolation (Subagent) vs Filesystem Isolation (`Workspace: "branch"` / `"share"`)
+- **Subagent (`invoke_subagent`)** solves **context isolation**: a worker reads dozens of files in its own context window and returns a concise summary to the main agent.
+- **Workspace (`Workspace: "branch"` or `"share"`)** solves **filesystem isolation**: prevents two agents from editing the same working tree simultaneously and causing file conflicts.
+- Combine both whenever delegating code-writing tasks to a subagent.
+
+#### 3. Parallel Batch Work (`/teamwork`)
+- Only use parallel batch subagents (`/teamwork` or multiple branched subagents) when the work is **genuinely separable** into independent units (e.g., migrating independent test files or updating decoupled route handlers).
+- **Never** split tightly coupled feature design (e.g., building the core budget engine or voice state machine) into disconnected parallel edits that will conflict at integration time.
+
+#### 4. Background Tasks (`manage_task` & `manage_subagents`)
+- Monitor long-running daemons (`npm run dev` with `IsDaemon: true`) and asynchronous commands via `manage_task` (`list`, `status`, `send_input`, `kill`).
+- Monitor active delegated agents via `manage_subagents` (`list`, `kill`, `kill_all`). Do not poll in a busy loop; rely on reactive wakeup notifications.
+
+---
+
+### 45. LIFECYCLE HOOKS (`.agents/hooks.json`), MCP INTEGRATIONS (`mcp_config.json`), AND `@` MENTIONS
+
+#### 1. Deterministic Lifecycle Hooks (`.agents/hooks.json`)
+A Skill instructs the agent what workflow it *should* follow; a **Hook** executes deterministically and automatically whenever a lifecycle event occurs:
+- `SessionStart`: Inject workspace startup checks or environment context.
+- `PreInvocation`: Inject transient reminders before the model runs.
+- `PreToolUse`: Deterministically inspect and gate tool calls (`allow`, `deny`, `ask`, `force_ask`, or `overwrite` arguments) before `run_command`, `write_file`, or `edit_file` executes — e.g., hard-blocking `rm -rf /`, `DROP DATABASE`, or `git push --force`.
+- `PostToolUse`: Automatically run formatters or linters (e.g., Prettier/ESLint) immediately after `edit_file` or `write_file`.
+- `PostInvocation` & `Stop`: Verify completion gates before allowing the execution loop to terminate (`"decision": "continue"` if background checks or mandatory steps remain incomplete).
+
+#### 2. MCP (Model Context Protocol) Governance
+- Use configured MCP servers (`chrome-devtools-mcp`, `StitchMCP`, `netlify`, `data-agent-kit`, `notebooks`) instead of fragile manual workarounds or asking the user to copy-paste external state.
+- For lazy-loaded MCP tools, always read `<appDataDir>/mcp/<serverName>/<toolName>.json` first, then invoke via `call_mcp_tool`.
+
+#### 3. Precision Context Attachment (`@` Mentions)
+- Reference exact files (`@app/api/...`), directories, rules, previous conversations, or MCP tools directly rather than vague descriptions.
+
+---
+
+### 46. THE 15-STEP PRACTICAL EVERYDAY ANTIGRAVITY WORKFLOW
+Every normal feature or bugfix in VicCalary combines the Antigravity operational controls with Section 3 (`ANALYZE → PLAN → MODIFY → VERIFY → SUMMARIZE`):
+
+1. **Start Session** with [`AGENTS.md`](file:///c:/Users/acer/Desktop/-vicalary-app-for-vic.-main/AGENTS.md) loaded as the authoritative contract.
+2. **Verify Context**: Ensure project context and active rules are clean.
+3. **Single Focused Scope**: Tackle one well-scoped feature or defect at a time.
+4. **Enter Plan Mode (`/plan` + Prompt Gate)**: Audit existing code/schema and write [`prompts/<feature-name>.md`](file:///c:/Users/acer/Desktop/-vicalary-app-for-vic.-main/prompts).
+5. **Review & Challenge Plan**: Wait for explicit user approval (`"Good to execute?"` $\rightarrow$ `"yes"`).
+6. **Implement Minimally**: Reuse existing services, tables, hooks, and UI primitives.
+7. **Monitor Execution & Dev Server**: Watch touched files and monitor `npm run dev` running as a background daemon (`IsDaemon: true`).
+8. **Verify on Localhost via Chrome DevTools**: Exercise the real flow at `http://localhost:3000` with `chrome-devtools-mcp` (checking DOM, Console, Network, and Supabase persistence).
+9. **Inspect Diff**: Review exact line changes (`git diff` / IDE Visual Diff) for unintended edits.
+10. **Run Automated Checks**: Run typecheck (`npx tsc --noEmit`), lint, and relevant unit/integration tests.
+11. **Independent Review & CodeRabbit**: Run an independent review subagent when appropriate and execute the mandatory **Section 34 CodeRabbit review cycle** before any push.
+12. **Security & RLS Review**: Confirm server-side `user.id` session authority, RLS enforcement, and zero secret exposure.
+13. **Sync `AGENTS.md`**: Update [`AGENTS.md`](file:///c:/Users/acer/Desktop/-vicalary-app-for-vic.-main/AGENTS.md) if a permanent project rule or architectural contract changed.
+14. **Compact Context (`/compact`)**: If continuing work on the same feature with a large session.
+15. **Start Fresh (`New Conversation` / `/clear`)**: Before moving to unrelated work.
+
+---
+
+### 47. QUICK DECISION MATRIX & CORE MENTAL MODEL
+You do not get better engineering results by memorizing commands — you get better results by matching the **exact problem you are solving** to the right **Antigravity engineering control**:
+
+| Problem to Solve | Antigravity Control to Use |
+| :--- | :--- |
+| Permanent project architecture, rules, and domain contracts | [`AGENTS.md`](file:///c:/Users/acer/Desktop/-vicalary-app-for-vic.-main/AGENTS.md) / `GEMINI.md` / `.agents/rules/*.md` |
+| Persist a newly discovered lesson or user correction across sessions | `/learn` |
+| Same task, but conversation context is getting too large | `/compact` (specifying key decisions to preserve) |
+| Moving to a completely different, unrelated task | **New Conversation** (`/clear`) |
+| Need to inspect, architect, and align before touching code | `/plan` + `/grill-me` + [`prompts/<feature-name>.md`](file:///c:/Users/acer/Desktop/-vicalary-app-for-vic.-main/prompts) |
+| Experiment with another approach without risking the current checkout | `invoke_subagent` with `Workspace: "branch"` (or `"share"`) |
+| Delegate a background side task that needs full agent capabilities | `invoke_subagent` with `TypeName: "self"` |
+| Delegate a broad file/codebase investigation with isolated context | `invoke_subagent` with `TypeName: "research"` |
+| Encapsulate a repeatable multi-step workflow | **Skill** (`.agents/skills/<name>/SKILL.md`) |
+| Guarantee an action or safety check runs automatically every time | **Lifecycle Hook** (`.agents/hooks.json`) |
+| Enforce hard command/file access boundaries and protect `.env` | **Permissions & Terminal Sandbox** (`allow` / `ask` / `deny`) |
+| Connect to Chrome DevTools, Stitch, Netlify, or external data | **MCP** (`mcp_config.json` / `call_mcp_tool`) |
+| Split a large, genuinely separable migration across parallel workers | `/teamwork` + isolated subagent workspaces |
+| Solve a subtle race condition, security audit, or deep architectural problem | `/boost` / High Effort + Pro/Argon model |
+| Keep `npm run dev` or long tasks running and inspect their logs | `run_command` (`IsDaemon: true`) + `manage_task` |
+| Run a recurring check or delayed one-shot timer | `/schedule` (`schedule` tool) |
+| Ready to ship changes | Visual Diff $\rightarrow$ Localhost `chrome-devtools-mcp` $\rightarrow$ Section 34 CodeRabbit Review $\rightarrow$ User Push Approval |
+

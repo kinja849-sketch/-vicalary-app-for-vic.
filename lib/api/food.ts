@@ -253,6 +253,7 @@ export const scanProduct = async (userId: string, barcode: string, options?: any
 
 export const saveFoodAnalysis = async (userId: string, analysis: any, isPurchaseConfirmed: boolean = false, skipDailyProgressSync: boolean = false) => {
     if (analysis.is_already_saved && !isPurchaseConfirmed) return null;
+    const today = format(new Date(), 'yyyy-MM-dd');
 
     // 1. Save food item
     const { data: foodItemRows, error: foodError } = await (supabase
@@ -292,6 +293,7 @@ export const saveFoodAnalysis = async (userId: string, analysis: any, isPurchase
             protein: Number(analysis.protein || 0),
             carbs: Number(analysis.carbs || 0),
             fat: Number(analysis.fat || 0),
+            local_date: today,
             image_url: analysis.image_url || analysis.mealImage,
             analysis_data: {
                 origin_story: analysis.country_of_origin || analysis.origin_country,
@@ -523,11 +525,43 @@ export const updateDailyProgress = async (userId: string, calories: number, prot
         .eq('progress_date', today)
         .maybeSingle();
 
+    // Query authoritative meals ledger for today to guarantee accurate accumulation
+    let historyCal = 0;
+    let historyProtein = 0;
+    let historyCarbs = 0;
+    let historyFat = 0;
+    let historyMealsCount = 0;
+    try {
+        const { data: todayMeals } = await (supabase as any)
+            .from('food_analysis_history')
+            .select('calories, calories_consumed, protein, carbs, fat, local_date, created_at')
+            .eq('user_id', userId)
+            .or(`local_date.eq.${today},and(created_at.gte.${today}T00:00:00.000Z,created_at.lte.${today}T23:59:59.999Z)`);
+
+        if (todayMeals && todayMeals.length > 0) {
+            historyMealsCount = todayMeals.length;
+            for (const m of (todayMeals as any[])) {
+                historyCal += Number(m.calories ?? m.calories_consumed ?? 0);
+                historyProtein += Number(m.protein || 0);
+                historyCarbs += Number(m.carbs || 0);
+                historyFat += Number(m.fat || 0);
+            }
+        }
+    } catch (e) {
+        console.warn("[Food] Non-fatal meal history check error:", e);
+    }
+
     if (existingProgress) {
         const existingConsumed = Number(existingProgress.calories_consumed || 0);
         const goalCalories = Number(existingProgress.calories_goal || 2000);
 
-        const newConsumed = existingConsumed + calories;
+        // Cumulative floor protection: never allow calories to depreciate or be less than history
+        const newConsumed = Math.max(existingConsumed + calories, historyCal, calories);
+        const newMealsLogged = Math.max((existingProgress.meals_logged || 0) + 1, historyMealsCount);
+        const newProtein = Math.max(Number(existingProgress.protein_consumed || 0) + protein, historyProtein);
+        const newCarbs = Math.max(Number(existingProgress.carbs_consumed || 0) + carbs, historyCarbs);
+        const newFat = Math.max(Number(existingProgress.fat_consumed || 0) + fat, historyFat);
+
         const justAchieved = goalCalories > 0 && newConsumed >= goalCalories && existingConsumed < goalCalories;
         const exceededGoal = goalCalories > 0 && newConsumed > goalCalories;
 
@@ -535,12 +569,12 @@ export const updateDailyProgress = async (userId: string, calories: number, prot
             .from('daily_progress')
             .update({
                 calories_consumed: newConsumed,
-                protein_consumed: Number(existingProgress.protein_consumed || 0) + protein,
-                carbs_consumed: Number(existingProgress.carbs_consumed || 0) + carbs,
-                fat_consumed: Number(existingProgress.fat_consumed || 0) + fat,
+                protein_consumed: newProtein,
+                carbs_consumed: newCarbs,
+                fat_consumed: newFat,
                 fiber_consumed: Number(existingProgress.fiber_consumed || 0) + fiber,
                 sugar_consumed: Number(existingProgress.sugar_consumed || 0) + sugar,
-                meals_logged: (existingProgress.meals_logged || 0) + 1,
+                meals_logged: newMealsLogged,
                 updated_at: new Date().toISOString()
             })
             .eq('id', existingProgress.id);
@@ -572,24 +606,38 @@ export const updateDailyProgress = async (userId: string, calories: number, prot
             .maybeSingle();
 
         const goalCalories = Number(onboarding?.daily_calorie_goal || 2000);
-        const justAchieved = goalCalories > 0 && calories >= goalCalories;
+        const effectiveCalories = Math.max(calories, historyCal);
+        const effectiveMeals = Math.max(1, historyMealsCount);
+        const effectiveProtein = Math.max(protein, historyProtein);
+        const effectiveCarbs = Math.max(carbs, historyCarbs);
+        const effectiveFat = Math.max(fat, historyFat);
+
+        const justAchieved = goalCalories > 0 && effectiveCalories >= goalCalories;
 
         await supabase
             .from('daily_progress')
             .insert({
                 user_id: userId,
                 progress_date: today,
-                calories_consumed: calories,
-                protein_consumed: protein,
-                carbs_consumed: carbs,
-                fat_consumed: fat,
+                calories_consumed: effectiveCalories,
+                protein_consumed: effectiveProtein,
+                carbs_consumed: effectiveCarbs,
+                fat_consumed: effectiveFat,
                 fiber_consumed: fiber,
                 sugar_consumed: sugar,
                 calories_goal: onboarding?.daily_calorie_goal || 2000,
                 protein_goal: Number(onboarding?.protein_goal || 50),
                 carbs_goal: Number(onboarding?.carbs_goal || 250),
                 fat_goal: Number(onboarding?.fat_goal || 70),
-                meals_logged: 1,
+                meals_logged: effectiveMeals,
             });
+
+        return {
+            capReached: justAchieved,
+            justAchieved,
+            exceededGoal: effectiveCalories > goalCalories,
+            caloriesConsumed: effectiveCalories,
+            caloriesGoal: goalCalories
+        };
     }
 }

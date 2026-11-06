@@ -9,21 +9,102 @@ const KNOWN_FOOD_ITEM_IMAGES: Record<string, string> = {
   // Eggs & Dairy
   'egg': 'https://www.themealdb.com/images/ingredients/Egg.png',
   'eggs': 'https://www.themealdb.com/images/ingredients/Egg.png',
+  'whole egg': 'https://www.themealdb.com/images/ingredients/Egg.png',
+  'whole eggs': 'https://www.themealdb.com/images/ingredients/Egg.png',
   'boiled egg': 'https://www.themealdb.com/images/ingredients/Egg.png',
+  'boiled eggs': 'https://www.themealdb.com/images/ingredients/Egg.png',
   'poached egg': 'https://www.themealdb.com/images/ingredients/Egg.png',
   'fried egg': 'https://www.themealdb.com/images/ingredients/Egg.png',
+  'fried eggs': 'https://www.themealdb.com/images/ingredients/Egg.png',
   'omelette': 'https://www.themealdb.com/images/ingredients/Egg.png',
   'telur': 'https://www.themealdb.com/images/ingredients/Egg.png',
   'telur dadar': 'https://www.themealdb.com/images/ingredients/Egg.png',
   'telur mata sapi': 'https://www.themealdb.com/images/ingredients/Egg.png',
   'cheese': 'https://www.themealdb.com/images/ingredients/Cheddar%20Cheese.png',
+  'cheddar': 'https://www.themealdb.com/images/ingredients/Cheddar%20Cheese.png',
+  'cheddar cheese': 'https://www.themealdb.com/images/ingredients/Cheddar%20Cheese.png',
+  'mozzarella': 'https://www.themealdb.com/images/ingredients/Mozzarella.png',
+  'keju': 'https://www.themealdb.com/images/ingredients/Cheddar%20Cheese.png',
   'butter': 'https://www.themealdb.com/images/ingredients/Butter.png',
+  'melted butter': 'https://www.themealdb.com/images/ingredients/Butter.png',
+  'unsalted butter': 'https://www.themealdb.com/images/ingredients/Butter.png',
+  'salted butter': 'https://www.themealdb.com/images/ingredients/Butter.png',
+  'mentega': 'https://www.themealdb.com/images/ingredients/Butter.png',
   'milk': 'https://www.themealdb.com/images/ingredients/Milk.png',
+  'whole milk': 'https://www.themealdb.com/images/ingredients/Milk.png',
+  'fresh milk': 'https://www.themealdb.com/images/ingredients/Milk.png',
+  'susu': 'https://www.themealdb.com/images/ingredients/Milk.png',
+  'susu cair': 'https://www.themealdb.com/images/ingredients/Milk.png',
+  'cream': 'https://www.themealdb.com/images/ingredients/Double%20Cream.png',
+  'heavy cream': 'https://www.themealdb.com/images/ingredients/Double%20Cream.png',
+  'whipped cream': 'https://www.themealdb.com/images/ingredients/Double%20Cream.png',
   'yogurt': 'https://www.themealdb.com/images/ingredients/Yogurt.png',
+
+  // Core Baking & Culinary Building Blocks
+  'flour': 'https://www.themealdb.com/images/ingredients/Flour.png',
+  'wheat flour': 'https://www.themealdb.com/images/ingredients/Flour.png',
+  'all-purpose flour': 'https://www.themealdb.com/images/ingredients/Flour.png',
+  'all purpose flour': 'https://www.themealdb.com/images/ingredients/Flour.png',
+  'cake flour': 'https://www.themealdb.com/images/ingredients/Flour.png',
+  'plain flour': 'https://www.themealdb.com/images/ingredients/Flour.png',
+  'tepung': 'https://www.themealdb.com/images/ingredients/Flour.png',
+  'tepung terigu': 'https://www.themealdb.com/images/ingredients/Flour.png',
+  'sugar': 'https://www.themealdb.com/images/ingredients/Sugar.png',
+  'granulated sugar': 'https://www.themealdb.com/images/ingredients/Sugar.png',
+  'white sugar': 'https://www.themealdb.com/images/ingredients/Sugar.png',
+  'caster sugar': 'https://www.themealdb.com/images/ingredients/Caster%20Sugar.png',
+  'brown sugar': 'https://www.themealdb.com/images/ingredients/Brown%20Sugar.png',
+  'powdered sugar': 'https://www.themealdb.com/images/ingredients/Icing%20Sugar.png',
+  'gula': 'https://www.themealdb.com/images/ingredients/Sugar.png',
+  'gula pasir': 'https://www.themealdb.com/images/ingredients/Sugar.png',
+  'cocoa powder': 'https://www.themealdb.com/images/ingredients/Cocoa%20Powder.png',
+  'cocoa': 'https://www.themealdb.com/images/ingredients/Cocoa%20Powder.png',
+  'unsweetened cocoa powder': 'https://www.themealdb.com/images/ingredients/Cocoa%20Powder.png',
+  'cokelat bubuk': 'https://www.themealdb.com/images/ingredients/Cocoa%20Powder.png',
+  'bubuk kakao': 'https://www.themealdb.com/images/ingredients/Cocoa%20Powder.png',
+  'chocolate': 'https://www.themealdb.com/images/ingredients/Dark%20Chocolate.png',
+  'dark chocolate': 'https://www.themealdb.com/images/ingredients/Dark%20Chocolate.png',
+  'milk chocolate': 'https://www.themealdb.com/images/ingredients/Dark%20Chocolate.png',
+  'chocolate chips': 'https://www.themealdb.com/images/ingredients/Dark%20Chocolate.png',
+  'cokelat': 'https://www.themealdb.com/images/ingredients/Dark%20Chocolate.png',
+  'baking powder': 'https://www.themealdb.com/images/ingredients/Baking%20Powder.png',
+  'yeast': 'https://www.themealdb.com/images/ingredients/Yeast.png',
+  'vanilla': 'https://www.themealdb.com/images/ingredients/Vanilla%20Extract.png',
+  'vanilla extract': 'https://www.themealdb.com/images/ingredients/Vanilla%20Extract.png',
+  'honey': 'https://www.themealdb.com/images/ingredients/Honey.png',
+  'madu': 'https://www.themealdb.com/images/ingredients/Honey.png',
+  'maple syrup': 'https://www.themealdb.com/images/ingredients/Maple%20Syrup.png',
+  'syrup': 'https://www.themealdb.com/images/ingredients/Maple%20Syrup.png',
+  'vegetable oil': 'https://www.themealdb.com/images/ingredients/Vegetable%20Oil.png',
+  'canola oil': 'https://www.themealdb.com/images/ingredients/Vegetable%20Oil.png',
+  'sunflower oil': 'https://www.themealdb.com/images/ingredients/Sunflower%20Oil.png',
+  'cooking oil': 'https://www.themealdb.com/images/ingredients/Vegetable%20Oil.png',
+  'minyak sayur': 'https://www.themealdb.com/images/ingredients/Vegetable%20Oil.png',
+  'minyak goreng': 'https://www.themealdb.com/images/ingredients/Vegetable%20Oil.png',
+
+  // Fruits
+  'apple': 'https://www.themealdb.com/images/ingredients/Apples.png',
+  'apples': 'https://www.themealdb.com/images/ingredients/Apples.png',
+  'banana': 'https://www.themealdb.com/images/ingredients/Bananas.png',
+  'bananas': 'https://www.themealdb.com/images/ingredients/Bananas.png',
+  'pisang': 'https://www.themealdb.com/images/ingredients/Bananas.png',
+  'orange': 'https://www.themealdb.com/images/ingredients/Orange.png',
+  'oranges': 'https://www.themealdb.com/images/ingredients/Orange.png',
+  'jeruk': 'https://www.themealdb.com/images/ingredients/Orange.png',
+  'strawberry': 'https://www.themealdb.com/images/ingredients/Strawberries.png',
+  'strawberries': 'https://www.themealdb.com/images/ingredients/Strawberries.png',
+  'blueberry': 'https://www.themealdb.com/images/ingredients/Blueberries.png',
+  'blueberries': 'https://www.themealdb.com/images/ingredients/Blueberries.png',
+  'lemon': 'https://www.themealdb.com/images/ingredients/Lemon.png',
+  'lime': 'https://www.themealdb.com/images/ingredients/Lime.png',
 
   // Produce & Vegetables
   'tomato': 'https://www.themealdb.com/images/ingredients/Tomato.png',
   'tomatoes': 'https://www.themealdb.com/images/ingredients/Tomato.png',
+  'stewed tomato': 'https://www.themealdb.com/images/ingredients/Tomato.png',
+  'stewed tomatoes': 'https://www.themealdb.com/images/ingredients/Tomato.png',
+  'cooked tomatoes': 'https://www.themealdb.com/images/ingredients/Tomato.png',
+  'simmered tomatoes': 'https://www.themealdb.com/images/ingredients/Tomato.png',
   'sliced tomato': 'https://www.themealdb.com/images/ingredients/Tomato.png',
   'cherry tomato': 'https://www.themealdb.com/images/ingredients/Cherry%20Tomatoes.png',
   'cucumber': 'https://www.themealdb.com/images/ingredients/Cucumber.png',
@@ -38,6 +119,12 @@ const KNOWN_FOOD_ITEM_IMAGES: Record<string, string> = {
   'carrots': 'https://www.themealdb.com/images/ingredients/Carrots.png',
   'avocado': 'https://www.themealdb.com/images/ingredients/Avocado.png',
   'onion': 'https://www.themealdb.com/images/ingredients/Onion.png',
+  'onions': 'https://www.themealdb.com/images/ingredients/Onion.png',
+  'cooked onion': 'https://www.themealdb.com/images/ingredients/Onion.png',
+  'cooked onions': 'https://www.themealdb.com/images/ingredients/Onion.png',
+  'sauteed onions': 'https://www.themealdb.com/images/ingredients/Onion.png',
+  'sautéed onions': 'https://www.themealdb.com/images/ingredients/Onion.png',
+  'stewed onions': 'https://www.themealdb.com/images/ingredients/Onion.png',
   'garlic': 'https://www.themealdb.com/images/ingredients/Garlic.png',
   'mushroom': 'https://www.themealdb.com/images/ingredients/Mushrooms.png',
   'mushrooms': 'https://www.themealdb.com/images/ingredients/Mushrooms.png',
@@ -74,12 +161,30 @@ const KNOWN_FOOD_ITEM_IMAGES: Record<string, string> = {
   'pancakes': 'https://images.unsplash.com/photo-1528207776546-365bb710ee93?auto=format&fit=crop&w=300&q=80',
   'waffle': 'https://images.unsplash.com/photo-1562376552-0d160a2f238d?auto=format&fit=crop&w=300&q=80',
   'waffles': 'https://images.unsplash.com/photo-1562376552-0d160a2f238d?auto=format&fit=crop&w=300&q=80',
+  'cake': 'https://images.unsplash.com/photo-1578985545062-69928b1d9587?auto=format&fit=crop&w=300&q=80',
+  'chiffon cake': 'https://images.unsplash.com/photo-1578985545062-69928b1d9587?auto=format&fit=crop&w=300&q=80',
+  'chocolate cake': 'https://images.unsplash.com/photo-1578985545062-69928b1d9587?auto=format&fit=crop&w=300&q=80',
+  'sponge cake': 'https://images.unsplash.com/photo-1578985545062-69928b1d9587?auto=format&fit=crop&w=300&q=80',
+  'kue': 'https://images.unsplash.com/photo-1578985545062-69928b1d9587?auto=format&fit=crop&w=300&q=80',
+  'brownie': 'https://images.unsplash.com/photo-1606313564200-e75d5e30476c?auto=format&fit=crop&w=300&q=80',
+  'brownies': 'https://images.unsplash.com/photo-1606313564200-e75d5e30476c?auto=format&fit=crop&w=300&q=80',
+  'muffin': 'https://images.unsplash.com/photo-1607958996333-41aef7caefaa?auto=format&fit=crop&w=300&q=80',
+  'cupcake': 'https://images.unsplash.com/photo-1576618148400-f54bed99fcfd?auto=format&fit=crop&w=300&q=80',
+  'cookie': 'https://images.unsplash.com/photo-1499636136210-6f4ee915583e?auto=format&fit=crop&w=300&q=80',
+  'cookies': 'https://images.unsplash.com/photo-1499636136210-6f4ee915583e?auto=format&fit=crop&w=300&q=80',
+  'donut': 'https://images.unsplash.com/photo-1551024601-bec78aea704b?auto=format&fit=crop&w=300&q=80',
+  'doughnut': 'https://images.unsplash.com/photo-1551024601-bec78aea704b?auto=format&fit=crop&w=300&q=80',
+  'croissant': 'https://images.unsplash.com/photo-1555507036-ab1f4038808a?auto=format&fit=crop&w=300&q=80',
+  'pastry': 'https://images.unsplash.com/photo-1555507036-ab1f4038808a?auto=format&fit=crop&w=300&q=80',
 
   // Potatoes & Tubers
   'potato': 'https://www.themealdb.com/images/ingredients/Potatoes.png',
   'potatoes': 'https://www.themealdb.com/images/ingredients/Potatoes.png',
   'boiled potato': 'https://www.themealdb.com/images/ingredients/Potatoes.png',
   'boiled potatoes': 'https://www.themealdb.com/images/ingredients/Potatoes.png',
+  'stewed potato': 'https://www.themealdb.com/images/ingredients/Potatoes.png',
+  'stewed potatoes': 'https://www.themealdb.com/images/ingredients/Potatoes.png',
+  'cooked potatoes': 'https://www.themealdb.com/images/ingredients/Potatoes.png',
   'roasted potatoes': 'https://images.unsplash.com/photo-1573080496219-bb080dd4f877?auto=format&fit=crop&w=300&q=80',
   'baked potato': 'https://images.unsplash.com/photo-1573080496219-bb080dd4f877?auto=format&fit=crop&w=300&q=80',
   'potato wedges': 'https://images.unsplash.com/photo-1573080496219-bb080dd4f877?auto=format&fit=crop&w=300&q=80',
@@ -148,24 +253,72 @@ export class FoodItemImageResolver {
       return KNOWN_FOOD_ITEM_IMAGES[rawName];
     }
 
-    // 3. Keyword / partial matching
-    for (const [key, url] of Object.entries(KNOWN_FOOD_ITEM_IMAGES)) {
+    // 3. Keyword / partial matching (longest key first to avoid premature short matches)
+    const sortedEntries = Object.entries(KNOWN_FOOD_ITEM_IMAGES).sort((a, b) => b[0].length - a[0].length);
+    for (const [key, url] of sortedEntries) {
       if (rawName.includes(key) || (composite && composite.includes(key))) {
         return url;
       }
     }
 
-    // 4. Fallback to TheMealDB ingredient CDN capitalized query
-    const cleanWord = rawName
-      .replace(/[^a-zA-Z\s]/g, '')
-      .split(/\s+/)
-      .filter(w => w.length > 2 && !['cooked', 'fried', 'baked', 'roasted', 'sliced', 'steamed'].includes(w))[0];
+    // 4. Verified TheMealDB ingredient whitelist (never blindly guess invalid URLs like Chiffon.png)
+    const VERIFIED_MEALDB_INGREDIENTS: Record<string, string> = {
+      flour: 'Flour.png',
+      sugar: 'Sugar.png',
+      egg: 'Egg.png',
+      eggs: 'Egg.png',
+      butter: 'Butter.png',
+      milk: 'Milk.png',
+      cheese: 'Cheddar%20Cheese.png',
+      honey: 'Honey.png',
+      cocoa: 'Cocoa%20Powder.png',
+      chocolate: 'Dark%20Chocolate.png',
+      salt: 'Salt.png',
+      pepper: 'Black%20Pepper.png',
+      garlic: 'Garlic.png',
+      ginger: 'Ginger.png',
+      lemon: 'Lemon.png',
+      lime: 'Lime.png',
+      apple: 'Apples.png',
+      banana: 'Bananas.png',
+      strawberry: 'Strawberries.png',
+      blueberry: 'Blueberries.png',
+      avocado: 'Avocado.png',
+      broccoli: 'Broccoli.png',
+      carrot: 'Carrots.png',
+      cucumber: 'Cucumber.png',
+      lettuce: 'Lettuce.png',
+      mushroom: 'Mushrooms.png',
+      onion: 'Onion.png',
+      peas: 'Peas.png',
+      potato: 'Potatoes.png',
+      spinach: 'Spinach.png',
+      tomato: 'Tomato.png',
+      zucchini: 'Courgettes.png',
+      beef: 'Beef.png',
+      chicken: 'Chicken%20Breast.png',
+      pork: 'Pork.png',
+      lamb: 'Lamb.png',
+      bacon: 'Bacon.png',
+      sausage: 'Sausages.png',
+      sausages: 'Sausages.png',
+      salmon: 'Salmon.png',
+      tuna: 'Tuna.png',
+      prawn: 'Prawns.png',
+      prawns: 'Prawns.png',
+      shrimp: 'Prawns.png',
+      tofu: 'Tofu.png',
+      bread: 'Bread.png',
+      oats: 'Rolled%20Oats.png'
+    };
 
-    if (cleanWord) {
-      const cap = cleanWord.charAt(0).toUpperCase() + cleanWord.slice(1);
-      return `https://www.themealdb.com/images/ingredients/${encodeURIComponent(cap)}.png`;
+    const words = rawName.replace(/[^a-zA-Z\s]/g, '').split(/\s+/);
+    for (const w of words) {
+      if (VERIFIED_MEALDB_INGREDIENTS[w]) {
+        return `https://www.themealdb.com/images/ingredients/${VERIFIED_MEALDB_INGREDIENTS[w]}`;
+      }
     }
 
-    return 'https://images.unsplash.com/photo-1516684732162-798a0062be99?auto=format&fit=crop&w=300&q=80';
+    return 'https://www.themealdb.com/images/ingredients/Flour.png';
   }
 }

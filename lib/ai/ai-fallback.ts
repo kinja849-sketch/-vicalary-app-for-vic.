@@ -11,6 +11,51 @@
  * - Network timeouts or connection resets
  */
 
+import dns from 'dns';
+import tls from 'tls';
+import axios from 'axios';
+
+try {
+  if (typeof dns.setDefaultResultOrder === 'function') {
+    dns.setDefaultResultOrder('ipv4first');
+  }
+  if (typeof (tls as any).getCACertificates === 'function' && typeof (tls as any).setDefaultCACertificates === 'function') {
+    const defaultCAs = (tls as any).getCACertificates('default') || [];
+    const systemCAs = (tls as any).getCACertificates('system') || [];
+    (tls as any).setDefaultCACertificates(Array.from(new Set([...defaultCAs, ...systemCAs])));
+  }
+} catch (_e) {}
+
+async function resilientPostJson(
+  url: string,
+  headers: Record<string, string>,
+  payload: any,
+  signal?: AbortSignal
+): Promise<{ ok: boolean; status: number; json: () => Promise<any>; text: () => Promise<string> }> {
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      signal,
+    });
+    return res;
+  } catch (fetchErr: any) {
+    const axiosRes = await axios.post(url, payload, {
+      headers,
+      timeout: 35000,
+      validateStatus: () => true,
+      signal: signal as any,
+    });
+    return {
+      ok: axiosRes.status >= 200 && axiosRes.status < 300,
+      status: axiosRes.status,
+      json: async () => axiosRes.data,
+      text: async () => (typeof axiosRes.data === 'string' ? axiosRes.data : JSON.stringify(axiosRes.data)),
+    };
+  }
+}
+
 export interface AIMessageContentPart {
   type: 'text' | 'image_url';
   text?: string;
@@ -124,12 +169,23 @@ export function getBackupApiKey(): string | null {
  */
 export function mapModelForBackup(model?: string): string {
   const configuredBackup = process.env.BACKUP_AI_MODEL;
-  if (configuredBackup && configuredBackup !== 'gemini-3.8-flash') return configuredBackup;
+  if (
+    configuredBackup &&
+    !['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.7-flash', 'gemini-3.1-flash-lite'].includes(configuredBackup)
+  ) {
+    return configuredBackup;
+  }
 
-  if (model && model.startsWith('gemini-') && model !== 'gemini-3.8-flash') return model;
+  if (
+    model &&
+    model.startsWith('gemini-') &&
+    !['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.7-flash', 'gemini-3.1-flash-lite'].includes(model)
+  ) {
+    return model;
+  }
 
-  // Prioritize active, healthy models with available quota
-  return 'gemini-3.5-flash-lite';
+  // Prioritize active, healthy Gemini models with multimodal + JSON support
+  return 'gemini-2.5-flash';
 }
 
 /**
@@ -148,7 +204,13 @@ function preparePayload(request: AIChatRequest, isBackup: boolean) {
   }
 
   if (request.temperature !== undefined) payload.temperature = request.temperature;
-  if (request.max_tokens !== undefined) payload.max_tokens = request.max_tokens;
+  if (isBackup) {
+    // Gemini 2.5 Flash counts internal reasoning/thinking tokens toward max_tokens;
+    // ensure at least 4096 tokens so structured JSON outputs are never truncated mid-stream.
+    payload.max_tokens = Math.max(request.max_tokens || 2048, 4096);
+  } else if (request.max_tokens !== undefined) {
+    payload.max_tokens = request.max_tokens;
+  }
   if (request.response_format) payload.response_format = request.response_format;
   if (!isBackup) {
     if (request.frequency_penalty !== undefined) payload.frequency_penalty = request.frequency_penalty;
@@ -175,15 +237,15 @@ export async function callChatCompletionWithFallback(
   if (primaryKey && isOpenAIAvailable()) {
     try {
       const primaryPayload = preparePayload(request, false);
-      const res = await fetch(PRIMARY_OPENAI_URL, {
-        method: 'POST',
-        headers: {
+      const res = await resilientPostJson(
+        PRIMARY_OPENAI_URL,
+        {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${primaryKey}`,
         },
-        body: JSON.stringify(primaryPayload),
-        signal: request.signal,
-      });
+        primaryPayload,
+        request.signal
+      );
 
       if (res.ok) {
         const data = await res.json();
@@ -214,11 +276,11 @@ export async function callChatCompletionWithFallback(
   }
 
   const fallbackModels = Array.from(new Set([
-    'gemini-3.5-flash-lite',
     'gemini-2.5-flash',
+    'gemini-3-flash-preview',
+    'gemini-3.1-flash-lite-preview',
+    'gemini-3.1-pro-preview',
     mapModelForBackup(request.model),
-    'gemini-3.7-flash',
-    'gemini-3.1-flash-lite',
   ]));
 
   let lastBackupErr = '';
@@ -231,15 +293,15 @@ export async function callChatCompletionWithFallback(
       };
       console.info(`[AI Fallback] Executing request on backup provider with model: ${m}`);
 
-      const backupRes = await fetch(BACKUP_GEMINI_URL, {
-        method: 'POST',
-        headers: {
+      const backupRes = await resilientPostJson(
+        BACKUP_GEMINI_URL,
+        {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${backupKey}`,
         },
-        body: JSON.stringify(backupPayload),
-        signal: request.signal,
-      });
+        backupPayload,
+        request.signal
+      );
 
       if (backupRes.ok) {
         const backupData = await backupRes.json();
@@ -251,6 +313,9 @@ export async function callChatCompletionWithFallback(
 
       lastBackupErr = await backupRes.text();
       console.warn(`[AI Fallback] Backup model ${m} returned HTTP ${backupRes.status}: ${lastBackupErr.substring(0, 150)}`);
+      if (backupRes.status === 429) {
+        await new Promise(r => setTimeout(r, 2000));
+      }
     } catch (e: any) {
       lastBackupErr = e?.message || String(e);
       console.warn(`[AI Fallback] Backup model ${m} exception:`, lastBackupErr);
@@ -315,11 +380,10 @@ export async function streamChatCompletionWithFallback(
   }
 
   const fallbackModels = Array.from(new Set([
-    'gemini-3.5-flash-lite',
-    'gemini-3.1-flash-lite',
-    mapModelForBackup(request.model),
     'gemini-2.5-flash',
-    'gemini-3.7-flash',
+    'gemini-2.0-flash',
+    mapModelForBackup(request.model),
+    'gemini-1.5-flash',
   ]));
 
   let lastBackupErr = '';

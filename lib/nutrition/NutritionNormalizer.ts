@@ -1,13 +1,27 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import { FoodItemImageResolver } from '@/lib/services/FoodItemImageResolver';
+import {
+  DeterministicCalculationEngine,
+  DataVerificationStatus,
+  QuantitySourcePriority,
+  ComponentObservationType
+} from './DeterministicCalculationEngine';
+import { USDAFoodDataService } from './USDAFoodDataService';
+import { TKPIDatasetService } from './TKPIDatasetService';
 
 export interface IdentifiedFoodItem {
   name: string;
   count?: string | number;
   variant_or_method?: string;
+  preparation_state?: 'raw' | 'cooked' | 'fried' | 'boiled' | 'steamed' | 'grilled' | 'roasted' | 'stewed' | 'baked';
   estimated_portion_g?: number;
+  user_confirmed_weight_g?: number;
+  user_confirmed_count?: number;
+  validated_portion_g?: number;
   portion_description?: string;
   confidence?: number;
+  observation_type?: ComponentObservationType;
+  is_cooked_ingredient?: boolean;
   notes?: string;
 }
 
@@ -23,8 +37,53 @@ export interface NormalizedNutrientData {
   minerals: string[];
 }
 
+export interface NormalizedMealItemResult {
+  name: string;
+  count?: string | number;
+  numeric_count?: number;
+  variant_or_method?: string;
+  preparation_state?: string;
+  portion_g: number;
+  portion_description: string;
+  uncertainty_range_g?: {
+    min_g: number;
+    max_g: number;
+  };
+  calories: number;
+  calories_exact: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  fiber: number;
+  sugar: number;
+  sodium_mg: number;
+  vitamins: string[];
+  minerals: string[];
+  image_url: string;
+  is_exact_match: boolean;
+  source: 'usda_fdc' | 'tkpi_indonesia' | 'supabase_food_items' | 'reference_catalog' | 'ai_estimate';
+  source_id?: string;
+  source_description?: string;
+  per_100g: {
+    calories_kcal: number;
+    protein_g: number;
+    carbs_g: number;
+    fat_g: number;
+    fiber_g: number;
+    sugar_g: number;
+    sodium_mg: number;
+  };
+  observation_type: ComponentObservationType;
+  quantity_source: QuantitySourcePriority;
+  verification_status: DataVerificationStatus;
+  requires_confirmation: boolean;
+  is_cooked_ingredient?: boolean;
+  formula_audit: string;
+}
+
 export interface MealNutritionCalculation {
   total_calories: number;
+  total_calories_exact: number;
   calorie_range: {
     min: number;
     max: number;
@@ -37,24 +96,9 @@ export interface MealNutritionCalculation {
   total_sodium_mg: number;
   prominent_vitamins: string[];
   prominent_minerals: string[];
-  normalized_items: Array<{
-    name: string;
-    count?: string | number;
-    variant_or_method?: string;
-    portion_g: number;
-    portion_description: string;
-    calories: number;
-    protein: number;
-    carbs: number;
-    fat: number;
-    fiber: number;
-    sugar: number;
-    sodium_mg: number;
-    vitamins: string[];
-    minerals: string[];
-    image_url: string;
-    is_exact_match: boolean;
-  }>;
+  verification_status?: DataVerificationStatus;
+  requires_confirmation?: boolean;
+  normalized_items: NormalizedMealItemResult[];
 }
 
 // Authoritative nutritional reference database for common meal components (per 100g)
@@ -354,6 +398,182 @@ const COMMON_FOOD_NUTRITION: Record<string, {
     sodium_mg: 6,
     vitamins: ['Vitamin C', 'Vitamin B6'],
     minerals: ['Potassium', 'Manganese']
+  },
+  'wheat flour': {
+    calories: 364,
+    protein: 10.3,
+    carbs: 76.3,
+    fat: 1.0,
+    fiber: 2.7,
+    sugar: 0.3,
+    sodium_mg: 2,
+    vitamins: ['Thiamin (B1)', 'Riboflavin (B2)', 'Niacin (B3)', 'Folate (B9)'],
+    minerals: ['Iron', 'Selenium', 'Manganese']
+  },
+  'flour': {
+    calories: 364,
+    protein: 10.3,
+    carbs: 76.3,
+    fat: 1.0,
+    fiber: 2.7,
+    sugar: 0.3,
+    sodium_mg: 2,
+    vitamins: ['Thiamin (B1)', 'Riboflavin (B2)', 'Niacin (B3)', 'Folate (B9)'],
+    minerals: ['Iron', 'Selenium', 'Manganese']
+  },
+  'sugar': {
+    calories: 387,
+    protein: 0.0,
+    carbs: 100.0,
+    fat: 0.0,
+    fiber: 0.0,
+    sugar: 100.0,
+    sodium_mg: 1,
+    vitamins: ['Riboflavin (B2)'],
+    minerals: ['Calcium', 'Potassium']
+  },
+  'granulated sugar': {
+    calories: 387,
+    protein: 0.0,
+    carbs: 100.0,
+    fat: 0.0,
+    fiber: 0.0,
+    sugar: 100.0,
+    sodium_mg: 1,
+    vitamins: ['Riboflavin (B2)'],
+    minerals: ['Calcium', 'Potassium']
+  },
+  'cocoa powder': {
+    calories: 228,
+    protein: 19.6,
+    carbs: 57.9,
+    fat: 13.7,
+    fiber: 33.2,
+    sugar: 1.8,
+    sodium_mg: 21,
+    vitamins: ['Niacin (B3)', 'Vitamin K', 'Vitamin B6'],
+    minerals: ['Iron', 'Magnesium', 'Potassium', 'Zinc']
+  },
+  'butter': {
+    calories: 717,
+    protein: 0.9,
+    carbs: 0.1,
+    fat: 81.1,
+    fiber: 0.0,
+    sugar: 0.1,
+    sodium_mg: 643,
+    vitamins: ['Vitamin A', 'Vitamin D', 'Vitamin E'],
+    minerals: ['Calcium', 'Phosphorus']
+  },
+  'vegetable oil': {
+    calories: 884,
+    protein: 0.0,
+    carbs: 0.0,
+    fat: 100.0,
+    fiber: 0.0,
+    sugar: 0.0,
+    sodium_mg: 0,
+    vitamins: ['Vitamin E', 'Vitamin K'],
+    minerals: ['Choline']
+  },
+  'whole milk': {
+    calories: 61,
+    protein: 3.2,
+    carbs: 4.8,
+    fat: 3.3,
+    fiber: 0.0,
+    sugar: 5.1,
+    sodium_mg: 43,
+    vitamins: ['Vitamin D', 'Vitamin B12', 'Riboflavin (B2)', 'Vitamin A'],
+    minerals: ['Calcium', 'Phosphorus', 'Potassium']
+  },
+  'chocolate': {
+    calories: 546,
+    protein: 4.9,
+    carbs: 61.2,
+    fat: 31.3,
+    fiber: 7.0,
+    sugar: 47.9,
+    sodium_mg: 24,
+    vitamins: ['Vitamin B12', 'Vitamin K'],
+    minerals: ['Iron', 'Magnesium', 'Copper']
+  },
+  'honey': {
+    calories: 304,
+    protein: 0.3,
+    carbs: 82.4,
+    fat: 0.0,
+    fiber: 0.2,
+    sugar: 82.1,
+    sodium_mg: 4,
+    vitamins: ['Vitamin C', 'Riboflavin (B2)'],
+    minerals: ['Potassium', 'Calcium']
+  },
+  'chiffon cake': {
+    calories: 297,
+    protein: 7.3,
+    carbs: 53.6,
+    fat: 6.1,
+    fiber: 0.6,
+    sugar: 32.4,
+    sodium_mg: 228,
+    vitamins: ['Riboflavin (B2)', 'Thiamin (B1)', 'Folate (B9)', 'Vitamin A'],
+    minerals: ['Selenium', 'Phosphorus', 'Iron']
+  },
+  'chocolate chiffon cake': {
+    calories: 324,
+    protein: 6.8,
+    carbs: 51.4,
+    fat: 10.6,
+    fiber: 1.8,
+    sugar: 31.0,
+    sodium_mg: 235,
+    vitamins: ['Riboflavin (B2)', 'Niacin (B3)', 'Folate (B9)'],
+    minerals: ['Iron', 'Magnesium', 'Phosphorus', 'Potassium']
+  },
+  'chocolate cake': {
+    calories: 324,
+    protein: 6.8,
+    carbs: 51.4,
+    fat: 10.6,
+    fiber: 1.8,
+    sugar: 31.0,
+    sodium_mg: 235,
+    vitamins: ['Riboflavin (B2)', 'Niacin (B3)', 'Folate (B9)'],
+    minerals: ['Iron', 'Magnesium', 'Phosphorus', 'Potassium']
+  },
+  'sponge cake': {
+    calories: 297,
+    protein: 7.3,
+    carbs: 53.6,
+    fat: 6.1,
+    fiber: 0.6,
+    sugar: 32.4,
+    sodium_mg: 228,
+    vitamins: ['Riboflavin (B2)', 'Thiamin (B1)', 'Folate (B9)'],
+    minerals: ['Selenium', 'Phosphorus', 'Iron']
+  },
+  'potato and tomato stew': {
+    calories: 78,
+    protein: 1.8,
+    carbs: 16.2,
+    fat: 0.9,
+    fiber: 1.9,
+    sugar: 2.1,
+    sodium_mg: 145,
+    vitamins: ['Vitamin C', 'Vitamin B6', 'Vitamin A', 'Folate (B9)'],
+    minerals: ['Potassium', 'Phosphorus', 'Manganese']
+  },
+  'potato stew': {
+    calories: 78,
+    protein: 1.8,
+    carbs: 16.2,
+    fat: 0.9,
+    fiber: 1.9,
+    sugar: 2.1,
+    sodium_mg: 145,
+    vitamins: ['Vitamin C', 'Vitamin B6', 'Vitamin A'],
+    minerals: ['Potassium', 'Phosphorus']
   },
   'plain bao bun': {
     calories: 235,
@@ -980,8 +1200,9 @@ export class NutritionNormalizer {
     return null;
   }
   /**
-   * Normalizes an array of identified foods against database / reference records,
-   * calculates deterministic macro totals and honest calorie uncertainty ranges.
+   * Normalizes an array of identified foods against authoritative USDA FoodData Central,
+   * Indonesian TKPI 2020, and reference records, and calculates deterministic macro totals
+   * with full provenance and quantity source priority.
    */
   static async calculateMealNutrition(
     items: IdentifiedFoodItem[],
@@ -990,6 +1211,7 @@ export class NutritionNormalizer {
     if (!items || items.length === 0) {
       return {
         total_calories: 0,
+        total_calories_exact: 0,
         calorie_range: { min: 0, max: 0 },
         total_protein: 0,
         total_carbs: 0,
@@ -999,125 +1221,194 @@ export class NutritionNormalizer {
         total_sodium_mg: 0,
         prominent_vitamins: [],
         prominent_minerals: [],
+        verification_status: 'unavailable',
+        requires_confirmation: false,
         normalized_items: []
       };
     }
 
-    const normalizedItems = [];
-    let sumCalories = 0;
+    const normalizedItems: NormalizedMealItemResult[] = [];
+    let sumCaloriesExact = 0;
     let sumProtein = 0;
     let sumCarbs = 0;
     let sumFat = 0;
     let sumFiber = 0;
     let sumSugar = 0;
     let sumSodium = 0;
+    let anyRequiresConfirmation = false;
     const allVitamins = new Set<string>();
     const allMinerals = new Set<string>();
 
     for (const item of items) {
       const lowerName = item.name.toLowerCase().trim();
-      const lowerMethod = (item.variant_or_method || '').toLowerCase().trim();
+      const lowerMethod = (item.variant_or_method || item.preparation_state || '').toLowerCase().trim();
       const compositeKey = `${lowerMethod} ${lowerName}`.trim();
 
-      // Parse item count (e.g. "4x", "(4x)", or explicit count field)
+      // Determine preparation state deterministically
+      let prepState: 'raw' | 'cooked' | 'fried' | 'boiled' | 'steamed' | 'grilled' | 'roasted' | 'stewed' | 'baked' =
+        item.preparation_state || 'cooked';
+      if (!item.preparation_state) {
+        if (lowerMethod.includes('raw') || lowerMethod.includes('fresh') || lowerName.includes('raw ') || lowerName.includes('fresh ') || lowerName.includes('mentah')) {
+          prepState = 'raw';
+        } else if (lowerMethod.includes('fry') || lowerMethod.includes('fried') || lowerMethod.includes('goreng') || lowerName.includes('goreng') || lowerName.includes('fried')) {
+          prepState = 'fried';
+        } else if (lowerMethod.includes('boil') || lowerMethod.includes('rebus') || lowerName.includes('rebus') || lowerName.includes('boiled')) {
+          prepState = 'boiled';
+        } else if (lowerMethod.includes('steam') || lowerMethod.includes('kukus')) {
+          prepState = 'steamed';
+        } else if (lowerMethod.includes('grill') || lowerMethod.includes('bakar') || lowerName.includes('bakar')) {
+          prepState = 'grilled';
+        } else if (lowerMethod.includes('roast') || lowerMethod.includes('panggang')) {
+          prepState = 'roasted';
+        } else if (lowerMethod.includes('stew')) {
+          prepState = 'stewed';
+        }
+      }
+
+      // Parse item count (e.g. "4x", "(4x)", or explicit count / user_confirmed_count field)
+      // while preserving household culinary volume measures (e.g. "2 cups", "3/4 cup", "1/3 cup", "2 tbsp")
       let parsedCount: number | null = null;
-      if (item.count !== undefined && item.count !== null && item.count !== '') {
-        const num = parseInt(String(item.count).replace(/[^0-9]/g, ''), 10);
-        if (!isNaN(num) && num > 0) parsedCount = num;
+      let householdMeasure: string | undefined = undefined;
+      const rawCountStr = item.count !== undefined && item.count !== null ? String(item.count).trim() : '';
+      const isHouseholdVolumeMeasure = /\b(cup|cups|tbsp|tablespoon|tablespoons|tsp|teaspoon|teaspoons|oz|ml)\b/i.test(rawCountStr);
+
+      if (typeof item.user_confirmed_count === 'number' && item.user_confirmed_count > 0) {
+        parsedCount = item.user_confirmed_count;
+      } else if (isHouseholdVolumeMeasure) {
+        householdMeasure = rawCountStr;
+        parsedCount = null;
+      } else if (rawCountStr !== '') {
+        const discreteMatch = rawCountStr.match(/^(\d+)\s*x?$/i) || rawCountStr.match(/^(\d+)\s+(?:items?|pieces?|slices?|eggs?|whole)\b/i);
+        if (discreteMatch && discreteMatch[1]) {
+          const num = parseInt(discreteMatch[1], 10);
+          if (!isNaN(num) && num > 0) parsedCount = num;
+        }
       } else {
-        const countMatch = lowerName.match(/\((\d+)x\)/i) || lowerName.match(/(\d+)x/i);
+        const countMatch = lowerName.match(/\((\d+)x\)/i) || lowerName.match(/\b(\d+)x\b/i) || lowerName.match(/^(\d+)\s+/);
         if (countMatch && countMatch[1]) {
           parsedCount = parseInt(countMatch[1], 10);
         }
       }
 
-      // Ground realistic portion grams considering unit counts
-      let portionG = item.estimated_portion_g && item.estimated_portion_g > 0 ? item.estimated_portion_g : 150;
-      if (parsedCount && parsedCount > 0) {
-        if (lowerName.includes('egg')) {
-          portionG = parsedCount * 49; // ~49g per egg -> ~70 kcal/egg (4 eggs = 280 kcal)
-        } else if (lowerName.includes('bun') || lowerName.includes('bao')) {
-          portionG = parsedCount * 45; // ~45g per bao bun -> ~105 kcal
-        } else if (lowerName.includes('tomato') && parsedCount === 1 && portionG > 50) {
-          portionG = 30; // small slice / half tomato -> ~5 kcal
-        }
-      } else if (lowerName === 'tomato' || lowerName === 'fresh tomato' || lowerName === 'sliced tomato') {
-        if (!item.estimated_portion_g || item.estimated_portion_g > 60) {
-          portionG = 30; // standard plate garnish/slice ~5-8 kcal
-        }
-      } else if (lowerName.includes('potato')) {
-        if (!item.estimated_portion_g || item.estimated_portion_g < 80) {
-          portionG = 150; // standard potato portion ~130 kcal
-        }
-      } else if (lowerName.includes('onion')) {
-        if (!item.estimated_portion_g || item.estimated_portion_g > 80) {
-          portionG = 40; // standard sautéed/cooked onion portion ~16 kcal
-        }
-      } else if (lowerName.includes('cucumber') && (!item.estimated_portion_g || item.estimated_portion_g > 100)) {
-        portionG = 65; // ~10 kcal for cucumber sticks
-      } else if ((lowerName.includes('soup') || lowerName.includes('broth')) && (!item.estimated_portion_g || item.estimated_portion_g > 150)) {
-        portionG = 100; // small broth cup ~20 kcal
-      }
-
-      // Clamp portion to realistic bounds (15g to 600g)
-      portionG = Math.max(15, Math.min(600, portionG));
-      const scale = portionG / 100;
-
-      // 1. Authoritative reference catalog lookup (prefer method-specific key)
-      let matchedData: typeof COMMON_FOOD_NUTRITION[string] | null = null;
+      // 1. Authoritative nutrition per-100g resolution:
+      // Priority A: Indonesian TKPI 2020 for Indonesian/regional terms or explicit TKPI matches
+      // Priority B: Official USDA FoodData Central (Foundation / SR Legacy / Survey FNDDS) for fresh produce & whole foods
+      // Priority C: Reference catalog COMMON_FOOD_NUTRITION
+      // Priority D: Supabase food_items
+      let matchedData: NormalizedNutrientData | null = null;
       let isExact = false;
+      let sourceType: 'usda_fdc' | 'tkpi_indonesia' | 'supabase_food_items' | 'reference_catalog' | 'ai_estimate' = 'reference_catalog';
+      let sourceId: string | undefined = undefined;
+      let sourceDescription: string | undefined = undefined;
+      let defaultUnitWeightG: number | undefined = undefined;
 
-      // Priority 1: Check composite key first (e.g. "grilled chicken breast", "roasted potatoes", "boiled egg")
-      if (compositeKey && COMMON_FOOD_NUTRITION[compositeKey]) {
-        matchedData = COMMON_FOOD_NUTRITION[compositeKey];
-        isExact = true;
-      }
+      const isIndonesianTerm =
+        /\b(nasi|mie|ayam|tempe|tahu|sambal|kerupuk|krupuk|telur|minyak|sayur|lalapan|bakso|soto|rendang|gado|pecel|capcay|kangkung|bayam|pisang|pepaya|jeruk|mangga|semangka|alpukat|tomat|kentang|wortel|mentimun|timun)\b/i.test(
+          compositeKey
+        );
 
-      // Priority 2: Check direct name match in COMMON_FOOD_NUTRITION
-      if (!matchedData && COMMON_FOOD_NUTRITION[lowerName]) {
-        matchedData = COMMON_FOOD_NUTRITION[lowerName];
-        isExact = true;
-      }
-
-      // Priority 3: Check primary food noun directly (prevents "potato and tomato" matching "tomato")
-      if (!matchedData) {
-        if (lowerName.includes('potato')) {
-          matchedData = lowerMethod.includes('roast') ? COMMON_FOOD_NUTRITION['roasted potatoes']
-                      : lowerMethod.includes('frie') ? COMMON_FOOD_NUTRITION['french fries']
-                      : COMMON_FOOD_NUTRITION['potatoes'];
+      if (isIndonesianTerm) {
+        const tkpiMatch = TKPIDatasetService.lookupFood(compositeKey, prepState) || TKPIDatasetService.lookupFood(lowerName, prepState);
+        if (tkpiMatch) {
+          matchedData = {
+            calories: tkpiMatch.per_100g.calories_kcal,
+            protein: tkpiMatch.per_100g.protein_g,
+            carbs: tkpiMatch.per_100g.carbs_g,
+            fat: tkpiMatch.per_100g.fat_g,
+            fiber: tkpiMatch.per_100g.fiber_g,
+            sugar: tkpiMatch.per_100g.sugar_g,
+            sodium_mg: tkpiMatch.per_100g.sodium_mg,
+            vitamins: tkpiMatch.vitamins,
+            minerals: tkpiMatch.minerals
+          };
           isExact = true;
-        } else if (lowerName.includes('onion')) {
-          matchedData = COMMON_FOOD_NUTRITION['cooked onions'] || COMMON_FOOD_NUTRITION['onions'];
-          isExact = true;
-        } else if (lowerName.includes('rice')) {
-          matchedData = lowerMethod.includes('brown') ? COMMON_FOOD_NUTRITION['brown rice']
-                      : lowerMethod.includes('frie') ? COMMON_FOOD_NUTRITION['fried rice']
-                      : COMMON_FOOD_NUTRITION['white rice'];
-          isExact = true;
-        } else if (lowerName.includes('tomato')) {
-          matchedData = lowerMethod.includes('stew') ? COMMON_FOOD_NUTRITION['stewed tomatoes']
-                      : COMMON_FOOD_NUTRITION['tomatoes'];
-          isExact = true;
+          sourceType = 'tkpi_indonesia';
+          sourceId = tkpiMatch.tkpi_code;
+          sourceDescription = `${tkpiMatch.name_id} (${tkpiMatch.name_en}) [TKPI ${tkpiMatch.tkpi_code}]`;
+          defaultUnitWeightG = tkpiMatch.standard_serving_g;
         }
       }
 
-      // Priority 4: Check substring match in COMMON_FOOD_NUTRITION
+      // Check USDA FoodData Central for fresh foods and single whole ingredients (Examples C & D)
       if (!matchedData) {
-        for (const [key, ref] of Object.entries(COMMON_FOOD_NUTRITION)) {
-          if (compositeKey && (compositeKey.includes(key) || key.includes(compositeKey))) {
-            matchedData = ref;
-            isExact = true;
-            break;
-          }
-          if (lowerName.includes(key) || key.includes(lowerName)) {
-            matchedData = ref;
-            isExact = lowerName === key;
-            break;
+        const usdaMatch = await USDAFoodDataService.lookupFreshFood(lowerName, prepState);
+        if (usdaMatch) {
+          matchedData = {
+            calories: usdaMatch.per_100g.calories_kcal,
+            protein: usdaMatch.per_100g.protein_g,
+            carbs: usdaMatch.per_100g.carbs_g,
+            fat: usdaMatch.per_100g.fat_g,
+            fiber: usdaMatch.per_100g.fiber_g,
+            sugar: usdaMatch.per_100g.sugar_g,
+            sodium_mg: usdaMatch.per_100g.sodium_mg,
+            vitamins: usdaMatch.vitamins,
+            minerals: usdaMatch.minerals
+          };
+          isExact = true;
+          sourceType = 'usda_fdc';
+          sourceId = String(usdaMatch.fdc_id);
+          sourceDescription = `${usdaMatch.description} [USDA FDC #${usdaMatch.fdc_id} - ${usdaMatch.data_type}]`;
+          defaultUnitWeightG = usdaMatch.default_unit_weight_g;
+          prepState = usdaMatch.preparation_state;
+        }
+      }
+
+      // Check TKPI if USDA didn't match
+      if (!matchedData && !isIndonesianTerm) {
+        const tkpiMatch = TKPIDatasetService.lookupFood(compositeKey, prepState) || TKPIDatasetService.lookupFood(lowerName, prepState);
+        if (tkpiMatch) {
+          matchedData = {
+            calories: tkpiMatch.per_100g.calories_kcal,
+            protein: tkpiMatch.per_100g.protein_g,
+            carbs: tkpiMatch.per_100g.carbs_g,
+            fat: tkpiMatch.per_100g.fat_g,
+            fiber: tkpiMatch.per_100g.fiber_g,
+            sugar: tkpiMatch.per_100g.sugar_g,
+            sodium_mg: tkpiMatch.per_100g.sodium_mg,
+            vitamins: tkpiMatch.vitamins,
+            minerals: tkpiMatch.minerals
+          };
+          isExact = true;
+          sourceType = 'tkpi_indonesia';
+          sourceId = tkpiMatch.tkpi_code;
+          sourceDescription = `${tkpiMatch.name_id} (${tkpiMatch.name_en}) [TKPI ${tkpiMatch.tkpi_code}]`;
+          defaultUnitWeightG = tkpiMatch.standard_serving_g;
+        }
+      }
+
+      // Check COMMON_FOOD_NUTRITION reference catalog
+      if (!matchedData) {
+        if (compositeKey && COMMON_FOOD_NUTRITION[compositeKey]) {
+          matchedData = COMMON_FOOD_NUTRITION[compositeKey];
+          isExact = true;
+          sourceType = 'reference_catalog';
+          sourceDescription = `Reference Nutrition Catalog (${compositeKey})`;
+        } else if (COMMON_FOOD_NUTRITION[lowerName]) {
+          matchedData = COMMON_FOOD_NUTRITION[lowerName];
+          isExact = true;
+          sourceType = 'reference_catalog';
+          sourceDescription = `Reference Nutrition Catalog (${lowerName})`;
+        } else {
+          for (const [key, ref] of Object.entries(COMMON_FOOD_NUTRITION)) {
+            if (compositeKey && (compositeKey.includes(key) || key.includes(compositeKey))) {
+              matchedData = ref;
+              isExact = true;
+              sourceType = 'reference_catalog';
+              sourceDescription = `Reference Nutrition Catalog (${key})`;
+              break;
+            }
+            if (lowerName.includes(key) || key.includes(lowerName)) {
+              matchedData = ref;
+              isExact = lowerName === key;
+              sourceType = 'reference_catalog';
+              sourceDescription = `Reference Nutrition Catalog (${key})`;
+              break;
+            }
           }
         }
       }
 
-      // 2. Try Supabase food_items lookup if client available and not matched
+      // Check Supabase food_items table
       if (!matchedData && supabase) {
         try {
           const { data: dbItem } = await supabase
@@ -1140,13 +1431,16 @@ export class NutritionNormalizer {
               minerals: Array.isArray(dbItem.minerals) ? dbItem.minerals : ['Potassium', 'Iron']
             };
             isExact = true;
+            sourceType = 'supabase_food_items';
+            sourceId = String(dbItem.id);
+            sourceDescription = `Supabase Food Catalog (${dbItem.name})`;
           }
         } catch (e) {
-          console.warn("[NutritionNormalizer] Supabase lookup error:", e);
+          console.warn('[NutritionNormalizer] Supabase lookup error:', e);
         }
       }
 
-      // 3. Fallback generic profile if completely unknown
+      // Fallback generic profile if completely unknown (explicitly marked as 'estimated' & requires_confirmation)
       if (!matchedData) {
         matchedData = {
           calories: 160,
@@ -1159,59 +1453,189 @@ export class NutritionNormalizer {
           vitamins: ['Vitamin C', 'B Vitamins'],
           minerals: ['Potassium', 'Iron']
         };
+        isExact = false;
+        sourceType = 'ai_estimate';
+        sourceDescription = 'Fallback Nutritional Estimate (Unverified Food Entry)';
       }
 
-      const itemCalories = Math.round(matchedData.calories * scale);
-      const itemProtein = Math.round(matchedData.protein * scale * 10) / 10;
-      const itemCarbs = Math.round(matchedData.carbs * scale * 10) / 10;
-      const itemFat = Math.round(matchedData.fat * scale * 10) / 10;
-      const itemFiber = Math.round(matchedData.fiber * scale * 10) / 10;
-      const itemSugar = Math.round(matchedData.sugar * scale * 10) / 10;
-      const itemSodium = Math.round(matchedData.sodium_mg * scale);
+      // 2. Resolve Portion Weight using Section 7 Priority Order:
+      // Priority 1: user_confirmed_weight_g or user_confirmed_count
+      // Priority 2: validated_portion_g
+      // Priority 3: ai_visual_estimate (respecting unit count for multi-item fresh foods like 5 tomatoes)
+      const isExplicitGarnishSlice =
+        lowerName.includes('slice') ||
+        lowerName.includes('garnish') ||
+        lowerMethod.includes('slice') ||
+        lowerMethod.includes('garnish');
+
+      let unitRefWeightG = defaultUnitWeightG || 120;
+      if (lowerName.includes('egg') || lowerName.includes('telur')) {
+        unitRefWeightG = 50;
+      } else if (lowerName.includes('bun') || lowerName.includes('bao')) {
+        unitRefWeightG = 45;
+      } else if (lowerName.includes('tomato') || lowerName.includes('tomat')) {
+        unitRefWeightG = isExplicitGarnishSlice ? 30 : 120; // Whole medium tomato = 120g (Example C & D)
+      }
+
+      let aiEstimatedTotalG = item.estimated_portion_g && item.estimated_portion_g > 0 ? item.estimated_portion_g : undefined;
+
+      // If multiple countable items are detected (e.g., 5 raw tomatoes in Example D), ensure total weight scales by count
+      // if the caller supplied a single-unit weight or omitted total weight.
+      if (parsedCount && parsedCount > 1 && !item.user_confirmed_weight_g) {
+        if (!aiEstimatedTotalG || aiEstimatedTotalG <= unitRefWeightG * 1.4) {
+          aiEstimatedTotalG = parsedCount * unitRefWeightG;
+        }
+      } else if (!aiEstimatedTotalG) {
+        if (isExplicitGarnishSlice && (lowerName.includes('tomato') || lowerName.includes('cucumber'))) {
+          aiEstimatedTotalG = 30;
+        } else {
+          aiEstimatedTotalG = defaultUnitWeightG || 150;
+        }
+      }
+
+      const portionResolution = DeterministicCalculationEngine.resolvePortionWeight({
+        userConfirmedWeightG: item.user_confirmed_weight_g,
+        userConfirmedCount: item.user_confirmed_count,
+        validatedPortionWeightG: item.validated_portion_g,
+        aiEstimatedWeightG: aiEstimatedTotalG,
+        aiEstimatedCount: parsedCount ?? undefined,
+        standardUnitWeightG: unitRefWeightG,
+        confidence: item.confidence
+      });
+
+      // Clamp portion between 2g (e.g. cooking oil / spices) and 2500g (multi-item produce)
+      const portionG = Math.max(2, Math.min(2500, portionResolution.weight_g));
+
+      // 3. Deterministic Calculation from per-100g record (1-decimal exact precision preserved)
+      const calcResult = DeterministicCalculationEngine.calculateComponentFromPer100g(
+        {
+          calories_kcal: matchedData.calories,
+          protein_g: matchedData.protein,
+          carbs_g: matchedData.carbs,
+          fat_g: matchedData.fat,
+          fiber_g: matchedData.fiber,
+          sugar_g: matchedData.sugar,
+          sodium_mg: matchedData.sodium_mg
+        },
+        portionG
+      );
+
+      const observationType: ComponentObservationType =
+        item.user_confirmed_weight_g !== undefined || item.user_confirmed_count !== undefined
+          ? 'user_confirmed'
+          : item.observation_type || 'directly_observed';
+
+      const requiresConfirmation =
+        sourceType === 'ai_estimate' ||
+        portionResolution.requires_confirmation ||
+        (parsedCount !== null && parsedCount >= 3 && item.user_confirmed_weight_g === undefined && item.user_confirmed_count === undefined);
+
+      if (requiresConfirmation) {
+        anyRequiresConfirmation = true;
+      }
+
+      const verificationStatus: DataVerificationStatus =
+        sourceType === 'ai_estimate'
+          ? 'estimated'
+          : requiresConfirmation
+            ? 'requires-confirmation'
+            : portionResolution.quantity_source === 'user_confirmed'
+              ? 'verified'
+              : 'database-derived';
 
       matchedData.vitamins.forEach(v => allVitamins.add(v));
       matchedData.minerals.forEach(m => allMinerals.add(m));
 
-      sumCalories += itemCalories;
-      sumProtein += itemProtein;
-      sumCarbs += itemCarbs;
-      sumFat += itemFat;
-      sumFiber += itemFiber;
-      sumSugar += itemSugar;
-      sumSodium += itemSodium;
+      sumCaloriesExact = Math.round((sumCaloriesExact + calcResult.calories_exact) * 10) / 10;
+      sumProtein = Math.round((sumProtein + calcResult.protein_g) * 10) / 10;
+      sumCarbs = Math.round((sumCarbs + calcResult.carbs_g) * 10) / 10;
+      sumFat = Math.round((sumFat + calcResult.fat_g) * 10) / 10;
+      sumFiber = Math.round((sumFiber + calcResult.fiber_g) * 10) / 10;
+      sumSugar = Math.round((sumSugar + calcResult.sugar_g) * 10) / 10;
+      sumSodium += calcResult.sodium_mg;
 
       // Deterministically resolve authentic clean food image
-      const itemImage = FoodItemImageResolver.resolveImageUrl(item.name, item.variant_or_method);
+      const itemImage = FoodItemImageResolver.resolveImageUrl(item.name, item.variant_or_method || prepState);
 
-      // Clean display name if count is present
-      const displayCount = parsedCount && parsedCount > 1 ? `${parsedCount}x` : (item.count ? String(item.count) : undefined);
+      // Clean display count badge (e.g. "4x" for discrete multi-items, or "2 cups" / "3/4 cup" for culinary volume measures)
+      const displayCount = householdMeasure
+        ? householdMeasure
+        : parsedCount && parsedCount > 1
+          ? `${parsedCount}x`
+          : (item.count ? String(item.count) : undefined);
+
+      // Preserve exact decimal calories (e.g., 21.6 kcal for 120g raw tomato)
+      const displayItemCalories =
+        calcResult.calories_exact % 1 !== 0 ? calcResult.calories_exact : calcResult.calories;
+
+      // Build explicit per-unit or culinary-measure portion description so every tile shows authentic math
+      const singleUnitKcal = parsedCount && parsedCount > 1
+        ? Math.round(calcResult.calories_exact / parsedCount)
+        : Math.round(calcResult.calories_exact);
+
+      const resolvedPortionDescription = item.is_cooked_ingredient
+        ? (item.portion_description || 'Used in dish')
+        : parsedCount && parsedCount > 1
+          ? `${parsedCount} × ${singleUnitKcal} kcal (~${portionG}g)`
+          : householdMeasure
+            ? `${householdMeasure} (~${portionG}g)`
+            : item.portion_description || `~${portionG}g`;
 
       normalizedItems.push({
         name: item.name,
-        count: displayCount,
-        variant_or_method: item.variant_or_method,
+        count: item.is_cooked_ingredient ? undefined : displayCount,
+        numeric_count: parsedCount ?? 1,
+        variant_or_method: item.variant_or_method || prepState,
+        preparation_state: prepState,
         portion_g: portionG,
-        portion_description: item.portion_description || (parsedCount ? `${parsedCount} items (~${portionG}g)` : `~${portionG}g`),
-        calories: itemCalories,
-        protein: itemProtein,
-        carbs: itemCarbs,
-        fat: itemFat,
-        fiber: itemFiber,
-        sugar: itemSugar,
-        sodium_mg: itemSodium,
+        portion_description: resolvedPortionDescription,
+        uncertainty_range_g: portionResolution.uncertainty_range_g,
+        calories: displayItemCalories,
+        calories_exact: calcResult.calories_exact,
+        protein: calcResult.protein_g,
+        carbs: calcResult.carbs_g,
+        fat: calcResult.fat_g,
+        fiber: calcResult.fiber_g,
+        sugar: calcResult.sugar_g,
+        sodium_mg: calcResult.sodium_mg,
         vitamins: matchedData.vitamins,
         minerals: matchedData.minerals,
         image_url: itemImage,
-        is_exact_match: isExact
+        is_exact_match: isExact,
+        source: sourceType,
+        source_id: sourceId,
+        source_description: sourceDescription,
+        per_100g: {
+          calories_kcal: matchedData.calories,
+          protein_g: matchedData.protein,
+          carbs_g: matchedData.carbs,
+          fat_g: matchedData.fat,
+          fiber_g: matchedData.fiber,
+          sugar_g: matchedData.sugar,
+          sodium_mg: matchedData.sodium_mg
+        },
+        observation_type: observationType,
+        quantity_source: portionResolution.quantity_source,
+        verification_status: verificationStatus,
+        requires_confirmation: requiresConfirmation,
+        is_cooked_ingredient: item.is_cooked_ingredient || false,
+        formula_audit: calcResult.formula_audit
       });
     }
 
     // Honest uncertainty range: +/- 12% to account for visual portion variance
-    const minCalories = Math.round(sumCalories * 0.88);
-    const maxCalories = Math.round(sumCalories * 1.12);
+    const minCalories = Math.round(sumCaloriesExact * 0.88);
+    const maxCalories = Math.round(sumCaloriesExact * 1.12);
+
+    // If single item has exact decimal (e.g., 21.6 kcal for 120g raw tomato), preserve it in total_calories as well
+    const totalCaloriesDisplay =
+      normalizedItems.length === 1 && sumCaloriesExact % 1 !== 0
+        ? sumCaloriesExact
+        : Math.round(sumCaloriesExact);
 
     return {
-      total_calories: sumCalories,
+      total_calories: totalCaloriesDisplay,
+      total_calories_exact: sumCaloriesExact,
       calorie_range: {
         min: minCalories,
         max: maxCalories
@@ -1224,7 +1648,128 @@ export class NutritionNormalizer {
       total_sodium_mg: sumSodium,
       prominent_vitamins: Array.from(allVitamins),
       prominent_minerals: Array.from(allMinerals),
+      verification_status: anyRequiresConfirmation ? 'requires-confirmation' : 'database-derived',
+      requires_confirmation: anyRequiresConfirmation,
       normalized_items: normalizedItems
     };
   }
+
+  /**
+   * Mixed Meal & Recipe-Level Decomposition (Section 6 & Example E):
+   * Decomposes a mixed meal (such as Nasi Goreng, Ayam Penyet, Soto Ayam, Mie Goreng)
+   * into its constituent directly-observed and inferred components (such as cooking oil),
+   * retrieves per-100g nutritional profiles from TKPI / USDA, and calculates deterministic totals.
+   */
+  static async decomposeAndCalculateMixedMeal(
+    dishName: string,
+    observedItems?: IdentifiedFoodItem[],
+    supabase?: SupabaseClient
+  ): Promise<{
+    is_decomposed_template: boolean;
+    dish_name: string;
+    calculation: MealNutritionCalculation;
+  }> {
+    const template = TKPIDatasetService.getMixedMealTemplate(dishName);
+
+    if (template) {
+      let componentList: IdentifiedFoodItem[] = [];
+
+      if (observedItems && observedItems.length > 1) {
+        // Use observed items and append any missing inferred ingredients (e.g., cooking oil) from the template
+        componentList = observedItems.map(item => ({
+          ...item,
+          observation_type: item.observation_type || 'directly_observed'
+        }));
+
+        for (const tplComp of template.components) {
+          if (tplComp.observation_type === 'inferred_ingredient') {
+            const alreadyPresent = componentList.some(c =>
+              c.name.toLowerCase().includes('oil') ||
+              c.name.toLowerCase().includes('minyak') ||
+              c.name.toLowerCase().includes('santan') ||
+              c.name.toLowerCase().includes('coconut milk')
+            );
+            if (!alreadyPresent) {
+              componentList.push({
+                name: tplComp.component_name,
+                variant_or_method: tplComp.preparation_state,
+                preparation_state: tplComp.preparation_state,
+                estimated_portion_g: tplComp.default_weight_g,
+                observation_type: 'inferred_ingredient',
+                notes: tplComp.notes
+              });
+            }
+          }
+        }
+      } else {
+        // Decompose single dish label (e.g., "Nasi Goreng") into full component breakdown
+        componentList = template.components.map(c => ({
+          name: c.component_name,
+          variant_or_method: c.preparation_state,
+          preparation_state: c.preparation_state,
+          estimated_portion_g: c.default_weight_g,
+          observation_type: c.observation_type,
+          notes: c.notes
+        }));
+      }
+
+      const calculation = await this.calculateMealNutrition(componentList, supabase);
+      return {
+        is_decomposed_template: true,
+        dish_name: template.dish_name_id,
+        calculation
+      };
+    }
+
+    // Non-template mixed meal: ensure if fried dish lacks explicit cooking oil component, add inferred cooking oil
+    const workingItems: IdentifiedFoodItem[] = (observedItems || []).map(item => ({
+      ...item,
+      observation_type: item.observation_type || 'directly_observed'
+    }));
+
+    const lowerDish = (dishName || '').toLowerCase();
+    const isFriedMixedDish =
+      lowerDish.includes('fried rice') ||
+      lowerDish.includes('nasi goreng') ||
+      lowerDish.includes('mie goreng') ||
+      lowerDish.includes('kwetiau goreng') ||
+      lowerDish.includes('bihun goreng') ||
+      lowerDish.includes('stir fry') ||
+      lowerDish.includes('tumis');
+
+    if (isFriedMixedDish && workingItems.length > 0) {
+      const hasOil = workingItems.some(
+        i => i.name.toLowerCase().includes('oil') || i.name.toLowerCase().includes('minyak')
+      );
+      if (!hasOil) {
+        workingItems.push({
+          name: 'Cooking Oil (Minyak Goreng)',
+          variant_or_method: 'fried',
+          preparation_state: 'fried',
+          estimated_portion_g: 10,
+          observation_type: 'inferred_ingredient',
+          notes: 'Inferred cooking oil absorbed during stir-frying'
+        });
+      }
+    }
+
+    const calculation = await this.calculateMealNutrition(workingItems, supabase);
+    return {
+      is_decomposed_template: false,
+      dish_name: dishName,
+      calculation
+    };
+  }
 }
+
+export const normalizeMealNutrition = (
+  items: IdentifiedFoodItem[],
+  supabase?: SupabaseClient
+) => NutritionNormalizer.calculateMealNutrition(items, supabase);
+
+export const decomposeAndCalculateMixedMeal = (
+  dishName: string,
+  observedItems?: IdentifiedFoodItem[],
+  supabase?: SupabaseClient
+) => NutritionNormalizer.decomposeAndCalculateMixedMeal(dishName, observedItems, supabase);
+

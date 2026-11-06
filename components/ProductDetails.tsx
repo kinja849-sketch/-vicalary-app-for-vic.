@@ -73,8 +73,55 @@ export interface ProductDetailsProps {
   vitamins?: string[];
   minerals?: string[];
   serving_basis?: string;
-  nutrition_status?: 'verified' | 'ocr' | 'unavailable' | string;
+  servings_per_package?: number | null;
+  serving_quantity_g?: number | null;
+  package_quantity_g?: number | null;
+  nutrition_status?: 'verified' | 'database-derived' | 'label-extracted' | 'ocr' | 'unavailable' | string;
   origin_country?: string;
+  origin_country_code?: string;
+  shopping_market_country?: string;
+  original_source_values?: {
+    per_100g?: {
+      calories_kcal?: number;
+      energy_kj?: number;
+      protein_g?: number;
+      carbohydrates_g?: number;
+      fat_g?: number;
+    };
+    per_100ml?: {
+      calories_kcal?: number;
+      energy_kj?: number;
+      protein_g?: number;
+      carbohydrates_g?: number;
+      fat_g?: number;
+    };
+    per_serving?: {
+      calories_kcal?: number;
+      energy_kj?: number;
+      protein_g?: number;
+      carbohydrates_g?: number;
+      fat_g?: number;
+      serving_size?: string;
+      serving_weight_g?: number;
+    };
+  } | null;
+  discrepancy?: {
+    discrepancy_detected: boolean;
+    database_record?: {
+      calories_per_serving?: number;
+      calories_per_100g?: number;
+      serving_size?: string;
+      source?: string;
+    };
+    label_record?: {
+      calories_per_serving?: number;
+      calories_per_100g?: number;
+      serving_size?: string;
+      source?: string;
+    };
+    prioritized_source: 'physical_package_label' | 'database_record';
+    explanation: string;
+  } | null;
   brand?: string;
   manufacturer?: string;
   price?: number | null;
@@ -85,10 +132,12 @@ export interface ProductDetailsProps {
     price_max?: number | null;
     price_range?: string | null;
     currency?: string;
-    status?: 'verified' | 'estimated' | 'needs_user_price';
+    status?: 'verified' | 'database-derived' | 'estimated' | 'needs_user_price' | 'unavailable';
     source?: string;
     retrievedAt?: string;
     retailer?: string;
+    origin_country?: string;
+    shopping_market_country?: string;
     ip_country_name?: string;
     ip_address?: string;
     needs_user_price?: boolean;
@@ -173,7 +222,15 @@ export function ProductDetails({
   vitamins = [],
   minerals = [],
   serving_basis = "100g",
+  servings_per_package,
+  serving_quantity_g,
+  package_quantity_g,
+  nutrition_status,
   origin_country,
+  origin_country_code,
+  shopping_market_country,
+  original_source_values,
+  discrepancy,
   brand,
   manufacturer,
   price,
@@ -202,10 +259,11 @@ export function ProductDetails({
   const setNavbarHidden = useAnalysisStore(state => state.setNavbarHidden);
   const [isLogging, setIsLogging] = useState(false);
   const [isNavigatingCoach, setIsNavigatingCoach] = useState(false);
+  const [manualPriceInput, setManualPriceInput] = useState<string>('');
 
   const effectiveServingSize = servingSize || serving_size || size;
 
-  // Automatic IP-based price resolution
+  // Automatic IP-based price resolution (or user-entered manual price when local price is unavailable)
   const initialNumericPrice = (typeof price === 'number' && !isNaN(price) && price > 0)
     ? price
     : (typeof price_metadata?.amount === 'number' && !isNaN(price_metadata.amount) && price_metadata.amount > 0)
@@ -213,7 +271,8 @@ export function ProductDetails({
       : (typeof price_metadata?.reference_estimate?.amount === 'number' && price_metadata.reference_estimate.amount > 0)
         ? price_metadata.reference_estimate.amount
         : 0;
-  const userEnteredPrice = initialNumericPrice;
+  const parsedManualPrice = parseFloat(manualPriceInput.replace(/[^0-9.]/g, ''));
+  const userEnteredPrice = initialNumericPrice > 0 ? initialNumericPrice : (!isNaN(parsedManualPrice) && parsedManualPrice > 0 ? parsedManualPrice : 0);
 
   // Split ingredients cleanly into distinct items respecting parentheses
   const ingredientList = React.useMemo(() => {
@@ -661,15 +720,31 @@ export function ProductDetails({
                       <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block">
                         Factory Ingredients Statement
                       </span>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                        Packaging Label
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                        !ingredients
+                          ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
+                          : ingredients_status === 'label-extracted' || ingredients_status === 'ocr'
+                          ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20'
+                          : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                      }`}>
+                        {!ingredients
+                          ? 'Unavailable in Catalog'
+                          : ingredients_status === 'label-extracted' || ingredients_status === 'ocr'
+                          ? 'Label Extracted (OCR)'
+                          : 'Verified Packaging Label'}
                       </span>
                     </div>
 
                     <div className="p-3.5 bg-slate-50 dark:bg-white/5 rounded-xl border border-slate-200 dark:border-white/5 space-y-2">
-                      <p className="text-xs sm:text-[13px] font-bold text-slate-900 dark:text-slate-100 leading-relaxed font-mono">
-                        {factory_ingredients_statement || (ingredients ? `INGREDIENTS: ${ingredients.toUpperCase()}.` : `INGREDIENTS: ${productName.toUpperCase()} STANDARD COMMERCIAL FORMULATION.`)}
-                      </p>
+                      {factory_ingredients_statement || ingredients ? (
+                        <p className="text-xs sm:text-[13px] font-bold text-slate-900 dark:text-slate-100 leading-relaxed font-mono">
+                          {factory_ingredients_statement || `INGREDIENTS: ${ingredients!.toUpperCase()}.`}
+                        </p>
+                      ) : (
+                        <p className="text-xs sm:text-[13px] font-medium text-amber-700 dark:text-amber-300 leading-relaxed">
+                          Ingredient declaration is unavailable in the barcode database. In accordance with strict nutritional accuracy rules, ingredients are never guessed or AI-generated. Photograph the physical packaging ingredients panel to extract verbatim ingredients.
+                        </p>
+                      )}
                       {contains_statement && (
                         <p className="text-xs sm:text-[13px] font-black text-rose-600 dark:text-rose-400 font-mono tracking-wide">
                           {contains_statement}
@@ -788,8 +863,10 @@ export function ProductDetails({
                       )}
                     </div>
                     {calories !== null && calories !== undefined && (
-                      <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                        Amount Per Serving {effectiveServingSize ? `(${effectiveServingSize})` : ''}
+                      <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-1">
+                        {serving_basis === 'serving'
+                          ? `Amount Per Serving ${effectiveServingSize ? `(${effectiveServingSize})` : ''}`
+                          : 'Amount Per 100g'}
                       </p>
                     )}
                   </div>
@@ -1070,16 +1147,22 @@ export function ProductDetails({
                   </div>
                 </section>
 
-                {/* SECTION 4: AUTOMATIC IP-BASED LOCAL RETAIL PRICE RANGE */}
-                <section className="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
+                {/* SECTION 4: AUTOMATIC IP-BASED LOCAL RETAIL PRICE RANGE (HONEST UNAVAILABLE WHEN UNVERIFIED) */}
+                <section className="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-3">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <span className="text-xs font-black uppercase tracking-wider text-slate-900 dark:text-white block">
                         {t('verified_local_price') || 'Local Retail Price Range'}
                       </span>
+                      {(origin_country || price_metadata?.origin_country) && (
+                        <span className="text-[11px] text-slate-600 dark:text-slate-300 font-semibold block mt-0.5">
+                          Product Origin: {origin_country || price_metadata?.origin_country}
+                          {origin_country_code ? ` (${origin_country_code})` : ''}
+                        </span>
+                      )}
                       {price_metadata?.ip_country_name && (
                         <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold block mt-0.5">
-                          Detected Region: {price_metadata.ip_country_name} ({price_metadata.currency || '$'})
+                          Shopping Market: {price_metadata.ip_country_name} ({price_metadata.currency || '$'})
                         </span>
                       )}
                       {price_metadata?.source && (
@@ -1089,20 +1172,42 @@ export function ProductDetails({
                       )}
                     </div>
                     <div className="text-right shrink-0">
-                      <span className="text-lg sm:text-xl font-black text-emerald-600 dark:text-[#21ff64] block">
-                        {price_metadata?.price_range ||
-                          estimated_price ||
-                          (initialNumericPrice > 0
-                            ? `${price_metadata?.currency === 'IDR' ? 'Rp' : (price_metadata?.currency || '$')} ${initialNumericPrice.toLocaleString()}`
-                            : 'Local Market Rate')}
-                      </span>
-                      {initialNumericPrice > 0 && (
-                        <span className="text-[11px] text-slate-500 dark:text-slate-400 font-semibold block mt-0.5">
-                          Avg Retail: {price_metadata?.currency === 'IDR' ? 'Rp' : (price_metadata?.currency || '$')} {initialNumericPrice.toLocaleString()}
+                      {initialNumericPrice > 0 && price_metadata?.status !== 'unavailable' ? (
+                        <>
+                          <span className="text-lg sm:text-xl font-black text-emerald-600 dark:text-[#21ff64] block">
+                            {price_metadata?.price_range ||
+                              estimated_price ||
+                              `${price_metadata?.currency === 'IDR' ? 'Rp' : (price_metadata?.currency || '$')} ${initialNumericPrice.toLocaleString()}`}
+                          </span>
+                          <span className="text-[11px] text-slate-500 dark:text-slate-400 font-semibold block mt-0.5">
+                            Avg Retail: {price_metadata?.currency === 'IDR' ? 'Rp' : (price_metadata?.currency || '$')} {initialNumericPrice.toLocaleString()}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-xs sm:text-sm font-bold text-amber-600 dark:text-amber-400 block">
+                          Price unavailable in local market
                         </span>
                       )}
                     </div>
                   </div>
+
+                  {/* Optional user price input when no verified local retail price listing exists */}
+                  {initialNumericPrice === 0 && (
+                    <div className="pt-2 border-t border-slate-200 dark:border-white/10 flex items-center justify-between gap-3">
+                      <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+                        Enter shelf price ({price_metadata?.currency || 'IDR'}) to deduct from budget:
+                      </span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={manualPriceInput}
+                        onChange={(e) => setManualPriceInput(e.target.value)}
+                        placeholder={`e.g. ${price_metadata?.currency === 'IDR' ? '12500' : '2.99'}`}
+                        className="w-32 px-3 py-1.5 rounded-xl bg-white dark:bg-black/40 border border-slate-300 dark:border-white/15 text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                  )}
                 </section>
               </>
             )}

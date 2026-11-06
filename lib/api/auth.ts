@@ -377,14 +377,28 @@ export const saveOnboardingResponses = async (userId: string, responses: any) =>
     try {
         const today = new Date().toISOString().split('T')[0];
         
-        // 1. Initialize daily progress
-        await supabase.from('daily_progress').upsert({
-            user_id: userId,
-            progress_date: today,
-            calories_goal: dailyCalorieGoal,
-            calories_consumed: 0,
-            meals_logged: 0
-        }, { onConflict: 'user_id,progress_date' });
+        // 1. Safely initialize or update daily progress without zeroing out consumed calories or meals
+        const { data: existingProg } = await supabase
+            .from('daily_progress')
+            .select('id, calories_consumed, meals_logged')
+            .eq('user_id', userId)
+            .eq('progress_date', today)
+            .maybeSingle();
+
+        if (existingProg) {
+            await supabase.from('daily_progress').update({
+                calories_goal: dailyCalorieGoal,
+                updated_at: new Date().toISOString()
+            }).eq('id', existingProg.id);
+        } else {
+            await supabase.from('daily_progress').insert({
+                user_id: userId,
+                progress_date: today,
+                calories_goal: dailyCalorieGoal,
+                calories_consumed: 0,
+                meals_logged: 0
+            });
+        }
 
         // 2. Detect location to save settings
         const loc = await detectLocation();

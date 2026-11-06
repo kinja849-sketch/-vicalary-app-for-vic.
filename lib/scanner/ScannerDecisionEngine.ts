@@ -1,5 +1,6 @@
 import { BoycottScreeningService } from './BoycottScreeningService';
 import { BarcodeService } from '../products/BarcodeService';
+import { ExtractedLabelRecord } from '../ocr/NutritionalLabelOCRService';
 
 export class ScannerDecisionEngine {
   static async processScan(
@@ -7,10 +8,16 @@ export class ScannerDecisionEngine {
     userId: string,
     countryCode: string = 'US',
     ipAddress?: string,
-    packageImage?: string
+    packageImage?: string,
+    options?: {
+      servingsConsumed?: number;
+      weightConsumedG?: number;
+      consumeEntirePackage?: boolean;
+      confirmedLabelRecord?: ExtractedLabelRecord;
+    }
   ) {
     try {
-      // 1. Identify Product Authoritatively from Catalog
+      // 1. Identify Product Authoritatively from Catalog (Open Food Facts API v3 -> v2 -> v0)
       const product = await BarcodeService.identifyProduct(barcode, packageImage);
 
       if (!product) {
@@ -35,8 +42,25 @@ export class ScannerDecisionEngine {
         }
       }
 
-      // 3. APPROVED Gate: Enrich product facts (panel OCR if catalog empty, food coloring analysis) & resolve local price
-      const enrichedProduct = await BarcodeService.enrichApprovedProductFacts(product, packageImage);
+      // 3. APPROVED Gate: Enrich product facts (panel OCR, physical label discrepancy check, food coloring) & resolve local price
+      let enrichedProduct = await BarcodeService.enrichApprovedProductFacts(
+        product,
+        packageImage,
+        options?.confirmedLabelRecord
+      );
+
+      if (
+        options?.servingsConsumed !== undefined ||
+        options?.weightConsumedG !== undefined ||
+        options?.consumeEntirePackage
+      ) {
+        enrichedProduct = BarcodeService.calculateConsumptionForProduct(enrichedProduct, {
+          servingsConsumed: options.servingsConsumed,
+          weightConsumedG: options.weightConsumedG,
+          consumeEntirePackage: options.consumeEntirePackage
+        });
+      }
+
       const pricing = await BarcodeService.priceProvider.getPrice(
         barcode,
         countryCode,
@@ -44,8 +68,13 @@ export class ScannerDecisionEngine {
         enrichedProduct.name,
         ipAddress,
         enrichedProduct.size || enrichedProduct.serving_size,
-        enrichedProduct.brand
+        enrichedProduct.brand,
+        enrichedProduct.origin_country
       );
+
+      if (pricing?.shopping_market_country) {
+        enrichedProduct.shopping_market_country = pricing.shopping_market_country;
+      }
 
       return {
         status: 'APPROVED',

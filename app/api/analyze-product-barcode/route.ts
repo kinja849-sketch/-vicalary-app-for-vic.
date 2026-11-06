@@ -9,7 +9,17 @@ import { resolveUserLanguage } from '@/lib/api/serverLanguage';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { barcode, userId, locationContext, imageUrl, imageBase64 } = body;
+    const {
+      barcode,
+      userId,
+      locationContext,
+      imageUrl,
+      imageBase64,
+      servingsConsumed,
+      weightConsumedG,
+      consumeEntirePackage,
+      confirmedLabelRecord
+    } = body;
 
     if (!barcode || typeof barcode !== 'string') {
       return NextResponse.json({ error: 'Valid barcode string required' }, { status: 400 });
@@ -30,10 +40,10 @@ export async function POST(req: NextRequest) {
     const hasValidUser = isValidUUID(userId);
     const [{ data: userSettings }, { data: onboarding }, { data: profile }] = hasValidUser
       ? await Promise.all([
-          supabase.from('user_settings').select('language, country_code, currency, is_language_auto').eq('user_id', userId).maybeSingle(),
-          supabase.from('onboarding_responses').select('*').eq('user_id', userId).maybeSingle(),
-          supabase.from('user_profiles').select('*').eq('id', userId).maybeSingle()
-        ])
+        supabase.from('user_settings').select('language, country_code, currency, is_language_auto').eq('user_id', userId).maybeSingle(),
+        supabase.from('onboarding_responses').select('*').eq('user_id', userId).maybeSingle(),
+        supabase.from('user_profiles').select('*').eq('id', userId).maybeSingle()
+      ])
       : [{ data: null }, { data: null }, { data: null }];
 
     const lang = await resolveUserLanguage({
@@ -73,7 +83,19 @@ export async function POST(req: NextRequest) {
 
     // 2. Strict Gateway Decision - No AI hallucination of unknown barcodes
     const packageImage = imageBase64 ? `data:image/jpeg;base64,${imageBase64}` : imageUrl;
-    const decision = await ScannerDecisionEngine.processScan(barcode, userId, country, clientIp, packageImage);
+    const decision = await ScannerDecisionEngine.processScan(
+      barcode,
+      userId,
+      country,
+      clientIp,
+      packageImage,
+      {
+        servingsConsumed: typeof servingsConsumed === 'number' ? servingsConsumed : undefined,
+        weightConsumedG: typeof weightConsumedG === 'number' ? weightConsumedG : undefined,
+        consumeEntirePackage: Boolean(consumeEntirePackage),
+        confirmedLabelRecord
+      }
+    );
 
     if (decision.status === 'PRODUCT_NOT_FOUND') {
       const notFoundMsgs: Record<string, string> = {
@@ -205,7 +227,7 @@ export async function POST(req: NextRequest) {
       finalHealthStatus = safetyEval.goalFit.status;
     }
 
-    // 8. AUTOMATIC IP-BASED LOCAL RETAIL PRICE & PRICE RANGE
+    // 8. AUTOMATIC IP-BASED LOCAL RETAIL PRICE & PRICE RANGE (HONEST UNAVAILABLE WHEN UNVERIFIED)
     let formattedPrice: string | null = null;
     let numericPrice: number | null = null;
     let priceMetadata: any = null;
@@ -223,10 +245,12 @@ export async function POST(req: NextRequest) {
         price_max: decision.pricing.price_max ?? decision.pricing.price,
         price_range: decision.pricing.price_range || singleFormatted,
         currency: decision.pricing.currency || curr,
-        status: 'verified',
-        source: decision.pricing.source || 'Regional Retail Market Index',
+        status: decision.pricing.status || 'verified',
+        source: decision.pricing.source || 'Verified Retail Market Record',
         retrievedAt: decision.pricing.retrievedAt,
-        retailer: decision.pricing.retailer || 'Local Retail Market',
+        retailer: decision.pricing.retailer || undefined,
+        origin_country: decision.pricing.origin_country || p.origin_country,
+        shopping_market_country: decision.pricing.shopping_market_country || decision.pricing.country,
         ip_country_name: decision.pricing.ip_country_name,
         ip_address: decision.pricing.ip_address || clientIp,
         needs_user_price: false,
@@ -236,14 +260,16 @@ export async function POST(req: NextRequest) {
       priceMetadata = {
         amount: null,
         currency: curr,
-        status: 'verified',
-        source: decision.pricing?.source || 'Regional Retail Market Index',
+        status: 'unavailable',
+        source: decision.pricing?.source || 'No verified retail listing found in local market',
         retrievedAt: decision.pricing?.retrievedAt || new Date().toISOString(),
-        retailer: decision.pricing?.retailer || 'Local Retail Market',
+        retailer: undefined,
+        origin_country: decision.pricing?.origin_country || p.origin_country,
+        shopping_market_country: decision.pricing?.shopping_market_country || decision.pricing?.country || country,
         ip_country_name: decision.pricing?.ip_country_name,
         ip_address: decision.pricing?.ip_address || clientIp,
-        needs_user_price: false,
-        confidence: 0.85
+        needs_user_price: true,
+        confidence: 0
       };
     }
 
@@ -252,8 +278,27 @@ export async function POST(req: NextRequest) {
       p.ingredients.trim().length > 0 &&
       !p.ingredients.toLowerCase().includes('not listed in database');
 
+    const activeConsumption = n.calculated_consumption;
+    const displayCalories =
+      activeConsumption && activeConsumption.servings_consumed !== 1
+        ? activeConsumption.calories
+        : calcCalories;
+    const displayProtein =
+      activeConsumption && activeConsumption.servings_consumed !== 1
+        ? activeConsumption.protein_g
+        : calcProtein;
+    const displayCarbs =
+      activeConsumption && activeConsumption.servings_consumed !== 1
+        ? activeConsumption.carbohydrates_g
+        : calcCarbs;
+    const displayFat =
+      activeConsumption && activeConsumption.servings_consumed !== 1
+        ? activeConsumption.fat_g
+        : calcFat;
+
     return NextResponse.json({
       found: true,
+      workflow: 'packaged_product',
       barcode,
       type: 'food',
       is_verified: calcCalories !== null && hasRealIngredients,
@@ -262,19 +307,25 @@ export async function POST(req: NextRequest) {
       brand: p.brand || null,
       manufacturer: p.manufacturer || p.brand || null,
       origin_country: p.origin_country || null,
+      origin_country_code: p.origin_country_code || null,
+      shopping_market_country: p.shopping_market_country || decision.pricing?.shopping_market_country || decision.pricing?.country || country || null,
       category: p.category || null,
       size: p.size || null,
+      package_quantity_g: p.package_quantity_g || null,
+      servings_per_package: p.servings_per_package || n.servings_per_package || null,
       serving_size: p.serving_size || (n.basis === '100g' ? '100g' : null),
+      serving_quantity_g: p.serving_quantity_g || null,
       image_url: p.image,
       nutriscore_grade: p.nutriscore_grade || null,
       nova_group: p.nova_group || null,
 
-      // Factory Ingredients of the Product
+      // Factory Ingredients of the Product (Zero Hallucination)
       ingredients: hasRealIngredients ? p.ingredients : null,
       factory_ingredients_statement: p.factory_ingredients_statement || (hasRealIngredients ? `INGREDIENTS: ${p.ingredients?.toUpperCase()}.` : null),
       contains_statement: p.contains_statement || null,
       factory_ingredients_breakdown: p.factory_ingredients_breakdown || null,
       ingredients_status: hasRealIngredients ? (p.ingredients_status || 'verified') : 'unavailable',
+      ingredients_source: p.ingredients_source || null,
       allergens: p.allergens || [],
       traces: p.traces || [],
       coloring,
@@ -291,10 +342,12 @@ export async function POST(req: NextRequest) {
       goal_fit: safetyEval.goalFit || null,
 
       // Authoritative Packaging Nutrition & Factory Nutrition Facts Breakdown
-      calories: calcCalories,
-      protein: calcProtein,
-      carbs: calcCarbs,
-      fat: calcFat,
+      calories: displayCalories,
+      calories_exact: n.calories_exact ?? displayCalories,
+      energy_kj: n.energy_kj ?? null,
+      protein: displayProtein,
+      carbs: displayCarbs,
+      fat: displayFat,
       saturated_fat: calcSatFat,
       trans_fat: n.trans_fat ?? null,
       cholesterol_mg: n.cholesterol_mg ?? null,
@@ -308,6 +361,21 @@ export async function POST(req: NextRequest) {
       minerals: n.minerals ?? [],
       serving_basis: n.basis || '100g',
       nutrition_status: calcCalories !== null ? (n.status || 'verified') : 'unavailable',
+
+      // Standardized Source Values, Calculated Consumption, Completeness & Discrepancy (Sections 3, 4, 9)
+      original_source_values: n.original_source_values || null,
+      calculated_consumption: n.calculated_consumption || null,
+      completeness: p.completeness || null,
+      discrepancy: p.discrepancy || null,
+      provenance: {
+        workflow: 'packaged_product',
+        source_api: n.source_api || 'openfoodfacts_v3',
+        retrieved_at: n.retrieved_at || new Date().toISOString(),
+        origin_country: p.origin_country || null,
+        origin_country_code: p.origin_country_code || null,
+        shopping_market_country: p.shopping_market_country || decision.pricing?.shopping_market_country || decision.pricing?.country || country || null,
+        verification_status: calcCalories !== null ? (n.status || 'verified') : 'unavailable'
+      },
 
       // Grounded Narrative Advice
       description: advice?.description || ProductAdvisor.buildDeterministicDescription(p, n),
