@@ -1645,10 +1645,24 @@ export class RetailPriceProvider implements PriceProvider {
           .maybeSingle();
 
         if (cached && Number(cached.price) > 0) {
+          const basePrice = Number(cached.price);
           const ageMs = Date.now() - new Date(cached.retrieved_at).getTime();
+          const sourceLower = String(cached.source || '').toLowerCase();
+          const isHeuristic = sourceLower.includes('index') || sourceLower.includes('estimated');
 
-          if (ageMs < 30 * 24 * 60 * 60 * 1000) {
-            const basePrice = Number(cached.price);
+          // Invalidate exaggerated old unadjusted heuristics from cache (e.g. snack > Rp 14,000 in ID)
+          const isExaggeratedHeuristic =
+            normCountry === 'ID' &&
+            isHeuristic &&
+            basePrice > 13000 &&
+            !productCategory?.toLowerCase().includes('meat') &&
+            !productCategory?.toLowerCase().includes('oil');
+
+          // Invalidate currency mismatches where non-zero-decimal prices leaked into zero-decimal currencies (e.g. < 500 IDR)
+          const isAbsurdlyLow =
+            ['IDR', 'VND', 'KRW'].includes(currency) && basePrice < 500;
+
+          if (!isExaggeratedHeuristic && !isAbsurdlyLow && ageMs < 30 * 24 * 60 * 60 * 1000) {
             const isZeroDecimal = ['IDR', 'JPY', 'KRW', 'VND'].includes(currency);
             const pMin = isZeroDecimal ? Math.round((basePrice * 0.9) / 100) * 100 : Math.round(basePrice * 0.9 * 100) / 100;
             const pMax = isZeroDecimal ? Math.round((basePrice * 1.1) / 100) * 100 : Math.round(basePrice * 1.1 * 100) / 100;
@@ -1833,22 +1847,80 @@ export class RetailPriceProvider implements PriceProvider {
         const items = Array.isArray(data?.items) ? data.items : [];
         const validItems = items.filter((it: any) => typeof it.price === 'number' && it.price > 0);
         if (validItems.length > 0) {
-          const matched = validItems.filter((it: any) =>
-            (it.currency && it.currency.toUpperCase() === targetCurrency.toUpperCase()) ||
-            (it.location_osm_address?.country_code && it.location_osm_address.country_code.toUpperCase() === targetCountry.toUpperCase())
-          );
-          const pool = matched.length > 0 ? matched : validItems;
-          const prices = pool.map((it: any) => Number(it.price)).sort((a: number, b: number) => a - b);
-          const pMin = prices[0];
-          const pMax = prices[prices.length - 1];
-          const pMid = prices[Math.floor(prices.length / 2)];
+          // FX conversion rates relative to USD (1 unit of currency in USD)
+          const fxRateToUsd: Record<string, number> = {
+            'USD': 1.0,
+            'EUR': 1.08,
+            'GBP': 1.28,
+            'IDR': 1 / 16000,
+            'MYR': 1 / 4.45,
+            'SGD': 1 / 1.34,
+            'AUD': 1 / 1.52,
+            'CAD': 1 / 1.39,
+            'JPY': 1 / 152.0,
+            'KRW': 1 / 1380.0,
+            'VND': 1 / 25400,
+            'PHP': 1 / 58.0,
+            'THB': 1 / 34.0,
+            'INR': 1 / 84.0,
+            'SAR': 1 / 3.75,
+            'AED': 1 / 3.67,
+            'TRY': 1 / 34.5,
+            'BRL': 1 / 5.75,
+            'MXN': 1 / 20.0
+          };
+
+          const targetFx = fxRateToUsd[targetCurrency.toUpperCase()] || 1.0;
+
+          // Convert each valid item price to target currency
+          const convertedItems = validItems.map((it: any) => {
+            const itemCurr = String(it.currency || 'USD').toUpperCase();
+            let convertedPrice = Number(it.price);
+            if (itemCurr !== targetCurrency.toUpperCase()) {
+              const srcFx = fxRateToUsd[itemCurr] || 1.0;
+              // srcPrice * srcFx gives USD, divided by targetFx gives targetCurrency
+              convertedPrice = (Number(it.price) * srcFx) / targetFx;
+            }
+            return {
+              ...it,
+              convertedPrice,
+              isExactCurrency: itemCurr === targetCurrency.toUpperCase(),
+              isExactCountry: String(it.location_osm_address?.country_code || '').toUpperCase() === targetCountry.toUpperCase()
+            };
+          });
+
+          // Prioritize exact country or exact currency matches
+          const exactMatches = convertedItems.filter((it: any) => it.isExactCurrency || it.isExactCountry);
+          const pool = exactMatches.length > 0 ? exactMatches : convertedItems;
+
+          const prices = pool.map((it: any) => it.convertedPrice).sort((a: number, b: number) => a - b);
+          let pMid = prices[Math.floor(prices.length / 2)];
+          // Clamp range around median to eliminate bulk or single-cent crowdsourced receipt outliers
+          let pMin = Math.max(prices[0], pMid * 0.85);
+          let pMax = Math.min(prices[prices.length - 1], pMid * 1.25);
+
+          const isZeroDecimal = ['IDR', 'JPY', 'KRW', 'VND'].includes(targetCurrency);
+          if (targetCurrency === 'IDR') {
+            pMid = Math.round(pMid / 500) * 500;
+            pMin = Math.round(pMin / 500) * 500;
+            pMax = Math.round(pMax / 500) * 500;
+          } else if (isZeroDecimal) {
+            pMid = Math.round(pMid / 10) * 10;
+            pMin = Math.round(pMin / 10) * 10;
+            pMax = Math.round(pMax / 10) * 10;
+          } else {
+            pMid = Math.round(pMid * 100) / 100;
+            pMin = Math.round(pMin * 100) / 100;
+            pMax = Math.round(pMax * 100) / 100;
+          }
+
           const store = pool[0]?.location_osm_name || pool[0]?.location_name || 'Open Prices Retailer';
           return {
             price: pMid,
             price_min: pMin,
             price_max: pMax,
             retailer: store,
-            source: `Open Prices (${store})`
+            source: exactMatches.length > 0 ? `Open Prices (${store})` : `Open Prices (Converted from ${pool[0]?.currency || 'Global'})`
           };
         }
       }
@@ -1886,7 +1958,23 @@ export class RetailPriceProvider implements PriceProvider {
       if (res.ok) {
         const data = await res.json();
         const results = Array.isArray(data.shopping_results)
-          ? data.shopping_results.filter((r: any) => typeof r.extracted_price === 'number' && r.extracted_price > 0)
+          ? data.shopping_results.filter((r: any) => {
+              if (typeof r.extracted_price !== 'number' || r.extracted_price <= 0) return false;
+              const titleLower = String(r.title || '').toLowerCase();
+              return !(
+                titleLower.includes('karton') ||
+                titleLower.includes('dus') ||
+                titleLower.includes('box of') ||
+                titleLower.includes('pack of') ||
+                titleLower.includes('case of') ||
+                titleLower.includes('isi 12') ||
+                titleLower.includes('isi 24') ||
+                titleLower.includes('isi 40') ||
+                titleLower.includes('multipack') ||
+                titleLower.includes('bundle') ||
+                titleLower.includes('grosir')
+              );
+            })
           : [];
         if (results.length > 0) {
           clearTimeout(timeoutId);
@@ -1917,7 +2005,23 @@ export class RetailPriceProvider implements PriceProvider {
       if (res.ok) {
         const data = await res.json();
         const results = Array.isArray(data.shopping_results)
-          ? data.shopping_results.filter((r: any) => typeof r.extracted_price === 'number' && r.extracted_price > 0)
+          ? data.shopping_results.filter((r: any) => {
+              if (typeof r.extracted_price !== 'number' || r.extracted_price <= 0) return false;
+              const titleLower = String(r.title || '').toLowerCase();
+              return !(
+                titleLower.includes('karton') ||
+                titleLower.includes('dus') ||
+                titleLower.includes('box of') ||
+                titleLower.includes('pack of') ||
+                titleLower.includes('case of') ||
+                titleLower.includes('isi 12') ||
+                titleLower.includes('isi 24') ||
+                titleLower.includes('isi 40') ||
+                titleLower.includes('multipack') ||
+                titleLower.includes('bundle') ||
+                titleLower.includes('grosir')
+              );
+            })
           : [];
         if (results.length > 0) {
           const prices = results.slice(0, 6).map((r: any) => Number(r.extracted_price)).sort((a: number, b: number) => a - b);
@@ -1956,27 +2060,27 @@ export class RetailPriceProvider implements PriceProvider {
     let baseUsd = 1.40;
 
     if (catLower.includes('noodle') || catLower.includes('mie') || catLower.includes('pasta') || catLower.includes('ramen')) {
-      baseUsd = 0.40;
-    } else if (catLower.includes('milk') || catLower.includes('susu') || catLower.includes('dairy') || catLower.includes('yogurt')) {
-      baseUsd = 1.60;
+      baseUsd = 0.70;
     } else if (catLower.includes('water') || catLower.includes('air mineral') || catLower.includes('aqua')) {
-      baseUsd = 0.40;
-    } else if (catLower.includes('soft drink') || catLower.includes('soda') || catLower.includes('cola') || catLower.includes('carbonated')) {
-      baseUsd = 0.85;
+      baseUsd = 0.75;
     } else if (catLower.includes('tea') || catLower.includes('teh') || catLower.includes('coffee') || catLower.includes('kopi')) {
       baseUsd = 0.90;
-    } else if (catLower.includes('juice') || catLower.includes('jus')) {
-      baseUsd = 1.25;
-    } else if (catLower.includes('snack') || catLower.includes('chip') || catLower.includes('keripik') || catLower.includes('crisp')) {
-      baseUsd = 1.10;
-    } else if (catLower.includes('biscuit') || catLower.includes('cookie') || catLower.includes('biskuit') || catLower.includes('wafer')) {
-      baseUsd = 0.95;
-    } else if (catLower.includes('chocolate') || catLower.includes('cokelat') || catLower.includes('candy') || catLower.includes('permen')) {
+    } else if (catLower.includes('milk') || catLower.includes('susu') || catLower.includes('dairy') || catLower.includes('yogurt')) {
+      baseUsd = 1.35;
+    } else if (catLower.includes('soft drink') || catLower.includes('soda') || catLower.includes('cola') || catLower.includes('carbonated')) {
       baseUsd = 1.30;
+    } else if (catLower.includes('juice') || catLower.includes('jus')) {
+      baseUsd = 1.30;
+    } else if (catLower.includes('snack') || catLower.includes('chip') || catLower.includes('keripik') || catLower.includes('crisp')) {
+      baseUsd = 1.25;
+    } else if (catLower.includes('biscuit') || catLower.includes('cookie') || catLower.includes('biskuit') || catLower.includes('wafer')) {
+      baseUsd = 1.00;
+    } else if (catLower.includes('chocolate') || catLower.includes('cokelat') || catLower.includes('candy') || catLower.includes('permen')) {
+      baseUsd = 1.15;
     } else if (catLower.includes('bread') || catLower.includes('roti') || catLower.includes('bakery')) {
       baseUsd = 1.50;
     } else if (catLower.includes('cereal') || catLower.includes('oats') || catLower.includes('sereal')) {
-      baseUsd = 2.80;
+      baseUsd = 2.40;
     } else if (catLower.includes('oil') || catLower.includes('minyak') || catLower.includes('butter')) {
       baseUsd = 2.50;
     } else if (catLower.includes('sauce') || catLower.includes('sauces') || catLower.includes('kecap') || catLower.includes('sambal') || catLower.includes('condiment')) {
@@ -1984,7 +2088,7 @@ export class RetailPriceProvider implements PriceProvider {
     } else if (catLower.includes('canned') || catLower.includes('kaleng') || catLower.includes('tuna') || catLower.includes('sardine')) {
       baseUsd = 1.75;
     } else if (catLower.includes('meat') || catLower.includes('chicken') || catLower.includes('beef') || catLower.includes('daging')) {
-      baseUsd = 4.50;
+      baseUsd = 3.50;
     }
 
     let sizeScale = 1.0;
@@ -1994,19 +2098,21 @@ export class RetailPriceProvider implements PriceProvider {
       const matchKg = sizeStr.match(/(\d+(?:\.\d+)?)\s*(?:kg|kilogram)/i);
       const matchL = sizeStr.match(/(\d+(?:\.\d+)?)\s*(?:l|liter)/i);
       if (matchKg) {
-        sizeScale = Math.min(4.0, Math.max(0.6, parseFloat(matchKg[1]) * 3.5));
+        sizeScale = Math.min(3.5, Math.max(0.7, parseFloat(matchKg[1]) * 1.8));
       } else if (matchL) {
-        sizeScale = Math.min(4.0, Math.max(0.6, parseFloat(matchL[1]) * 2.8));
+        sizeScale = Math.min(3.5, Math.max(0.7, parseFloat(matchL[1]) * 1.6));
       } else if (matchG) {
         const grams = parseFloat(matchG[1]);
-        if (grams >= 500) sizeScale = 2.0;
-        else if (grams >= 250) sizeScale = 1.4;
-        else if (grams <= 40) sizeScale = 0.7;
+        if (grams >= 800) sizeScale = 2.5;
+        else if (grams >= 400) sizeScale = 1.8;
+        else if (grams >= 180) sizeScale = 1.3;
+        else if (grams <= 40) sizeScale = 0.75;
       } else if (matchMl) {
         const mls = parseFloat(matchMl[1]);
-        if (mls >= 1000) sizeScale = 2.2;
-        else if (mls >= 500) sizeScale = 1.5;
-        else if (mls <= 150) sizeScale = 0.7;
+        if (mls >= 1500) sizeScale = 2.2;
+        else if (mls >= 800) sizeScale = 1.6;
+        else if (mls >= 450) sizeScale = 1.2;
+        else if (mls <= 150) sizeScale = 0.75;
       }
     }
 
@@ -2046,8 +2152,8 @@ export class RetailPriceProvider implements PriceProvider {
     };
 
     const cCode = normCountry.toUpperCase();
-    const config = pppMap[cCode] || { ppp: 0.50, fx: 1.0 };
-    const rawLocalPrice = baseUsd * config.fx * sizeScale;
+    const config = pppMap[cCode] || (currency === 'USD' ? { ppp: 1.0, fx: 1.0 } : { ppp: 0.70, fx: 1.0 });
+    const rawLocalPrice = baseUsd * config.ppp * config.fx * sizeScale;
 
     const isZeroDecimal = ['IDR', 'JPY', 'KRW', 'VND'].includes(currency);
     let finalMid = 0;
@@ -2056,16 +2162,16 @@ export class RetailPriceProvider implements PriceProvider {
 
     if (currency === 'IDR') {
       finalMid = Math.round(rawLocalPrice / 500) * 500;
-      if (finalMid < 2000) finalMid = 3000;
-      pMin = Math.round((finalMid * 0.9) / 500) * 500;
+      if (finalMid < 2000) finalMid = 2500;
+      pMin = Math.round((finalMid * 0.88) / 500) * 500;
       pMax = Math.round((finalMid * 1.15) / 500) * 500;
     } else if (isZeroDecimal) {
       finalMid = Math.round(rawLocalPrice / 10) * 10;
-      pMin = Math.round((finalMid * 0.9) / 10) * 10;
+      pMin = Math.round((finalMid * 0.88) / 10) * 10;
       pMax = Math.round((finalMid * 1.15) / 10) * 10;
     } else {
       finalMid = Math.round(rawLocalPrice * 100) / 100;
-      pMin = Math.round(finalMid * 0.9 * 100) / 100;
+      pMin = Math.round(finalMid * 0.88 * 100) / 100;
       pMax = Math.round(finalMid * 1.15 * 100) / 100;
     }
 
