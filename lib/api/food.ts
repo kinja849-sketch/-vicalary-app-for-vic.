@@ -308,6 +308,8 @@ export const saveFoodAnalysis = async (userId: string, analysis: any, isPurchase
 
     if (!foodItem) throw new Error("Failed to create food item");
 
+    const isScannerProduct = Boolean(analysis.is_scanner_product);
+
     // 2. Save to history
     const { data: historyRows, error: historyError } = await supabase
         .from('food_analysis_history')
@@ -315,12 +317,14 @@ export const saveFoodAnalysis = async (userId: string, analysis: any, isPurchase
             user_id: userId,
             food_item_id: foodItem.id,
             food_name: analysis.name,
-            meal_type: analysis.meal_type || 'snack',
-            calories_consumed: Number(analysis.calories || 0),
+            meal_type: isScannerProduct ? 'product_budget' : (analysis.meal_type || 'snack'),
+            analysis_type: isScannerProduct ? 'scanner_product' : (analysis.analysis_type || 'meal'),
+            calories_consumed: isScannerProduct ? 0 : Number(analysis.calories || 0),
             calories: Number(analysis.calories || 0),
-            protein: Number(analysis.protein || 0),
-            carbs: Number(analysis.carbs || 0),
-            fat: Number(analysis.fat || 0),
+            protein: isScannerProduct ? 0 : Number(analysis.protein || 0),
+            carbs: isScannerProduct ? 0 : Number(analysis.carbs || 0),
+            fat: isScannerProduct ? 0 : Number(analysis.fat || 0),
+            is_logged: false,
             local_date: today,
             image_url: analysis.image_url || analysis.mealImage,
             analysis_data: {
@@ -333,7 +337,8 @@ export const saveFoodAnalysis = async (userId: string, analysis: any, isPurchase
                 brand: analysis.brand,
                 manufacturer: analysis.manufacturer,
                 price: analysis.price || analysis.estimated_price,
-                political_warning: analysis.political_warning
+                political_warning: analysis.political_warning,
+                is_scanner_product: isScannerProduct
             },
             notes: String(analysis.political_warning || analysis.description || analysis.advice || analysis.verdict || '').substring(0, 1000)
         })
@@ -562,13 +567,18 @@ export const updateDailyProgress = async (userId: string, calories: number, prot
     try {
         const { data: todayMeals } = await (supabase as any)
             .from('food_analysis_history')
-            .select('calories, calories_consumed, protein, carbs, fat, local_date, created_at')
+            .select('calories, calories_consumed, protein, carbs, fat, local_date, created_at, analysis_type, analysis_data')
             .eq('user_id', userId)
             .or(`local_date.eq.${today},and(created_at.gte.${today}T00:00:00.000Z,created_at.lte.${today}T23:59:59.999Z)`);
 
         if (todayMeals && todayMeals.length > 0) {
-            historyMealsCount = todayMeals.length;
-            for (const m of (todayMeals as any[])) {
+            const validMeals = (todayMeals as any[]).filter(m => 
+                m.analysis_type !== 'scanner_product' && 
+                !m.analysis_data?.is_scanner_product && 
+                (m.calories_consumed === undefined || m.calories_consumed === null || Number(m.calories_consumed) > 0)
+            );
+            historyMealsCount = validMeals.length;
+            for (const m of validMeals) {
                 historyCal += Number(m.calories ?? m.calories_consumed ?? 0);
                 historyProtein += Number(m.protein || 0);
                 historyCarbs += Number(m.carbs || 0);

@@ -59,17 +59,24 @@ export const getDailyProgress = async (userId: string, date: string) => {
     try {
         const { data: meals } = await (supabase as any)
             .from('food_analysis_history')
-            .select('calories, calories_consumed, protein, carbs, fat, local_date, created_at')
+            .select('calories, calories_consumed, protein, carbs, fat, local_date, created_at, analysis_type, analysis_data')
             .eq('user_id', userId)
             .or(`local_date.eq.${date},and(created_at.gte.${date}T00:00:00.000Z,created_at.lte.${date}T23:59:59.999Z)`);
 
         if (meals && meals.length > 0) {
+            // Filter strictly for valid logged meals (exclude scanner/budgeted products)
+            const validMeals = (meals as any[]).filter(m => 
+                m.analysis_type !== 'scanner_product' && 
+                !m.analysis_data?.is_scanner_product && 
+                (m.calories_consumed === undefined || m.calories_consumed === null || Number(m.calories_consumed) > 0)
+            );
+
             let totalCal = 0;
             let totalProtein = 0;
             let totalCarbs = 0;
             let totalFat = 0;
 
-            for (const m of (meals as any[])) {
+            for (const m of validMeals) {
                 totalCal += Number(m.calories ?? m.calories_consumed ?? 0);
                 totalProtein += Number(m.protein || 0);
                 totalCarbs += Number(m.carbs || 0);
@@ -80,7 +87,7 @@ export const getDailyProgress = async (userId: string, date: string) => {
             const currentMeals = Number(prog?.meals_logged || 0);
 
             // If daily_progress is missing or has less calories/meals than the authoritative meal ledger, heal it immediately
-            if (!prog || currentCal < totalCal || currentMeals < meals.length) {
+            if (!prog || currentCal < totalCal || currentMeals < validMeals.length) {
                 let effectiveGoal = Number(prog?.calories_goal || 0);
                 if (!effectiveGoal) {
                     const { data: prof } = await supabase.from('user_profiles').select('goal_calories').eq('id', userId).maybeSingle();
@@ -88,7 +95,7 @@ export const getDailyProgress = async (userId: string, date: string) => {
                 }
 
                 const healedCal = Math.max(currentCal, totalCal);
-                const healedMeals = Math.max(currentMeals, meals.length);
+                const healedMeals = Math.max(currentMeals, validMeals.length);
                 const healedProtein = Math.max(Number(prog?.protein_consumed || 0), totalProtein);
                 const healedCarbs = Math.max(Number(prog?.carbs_consumed || 0), totalCarbs);
                 const healedFat = Math.max(Number(prog?.fat_consumed || 0), totalFat);
@@ -357,13 +364,18 @@ export const logMeal = async (userId: string, mealData: any) => {
     try {
         const { data: todayMeals } = await (supabase as any)
             .from('food_analysis_history')
-            .select('calories, calories_consumed, protein, carbs, fat, local_date, created_at')
+            .select('calories, calories_consumed, protein, carbs, fat, local_date, created_at, analysis_type, analysis_data')
             .eq('user_id', userId)
             .or(`local_date.eq.${today},and(created_at.gte.${today}T00:00:00.000Z,created_at.lte.${today}T23:59:59.999Z)`);
 
         if (todayMeals && todayMeals.length > 0) {
-            historyMealsCount = todayMeals.length;
-            for (const m of (todayMeals as any[])) {
+            const validMeals = (todayMeals as any[]).filter(m => 
+                m.analysis_type !== 'scanner_product' && 
+                !m.analysis_data?.is_scanner_product && 
+                (m.calories_consumed === undefined || m.calories_consumed === null || Number(m.calories_consumed) > 0)
+            );
+            historyMealsCount = validMeals.length;
+            for (const m of validMeals) {
                 historyCal += Number(m.calories ?? m.calories_consumed ?? 0);
                 historyProtein += Number(m.protein || 0);
                 historyCarbs += Number(m.carbs || 0);

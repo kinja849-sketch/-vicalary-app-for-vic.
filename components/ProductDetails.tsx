@@ -367,8 +367,6 @@ export function ProductDetails({
       await queryClient.resetQueries({ queryKey: ['active-budget'] });
       await queryClient.invalidateQueries({ queryKey: ['budget'], refetchType: 'all' });
       await queryClient.invalidateQueries({ queryKey: ['financial-transactions'], refetchType: 'all' });
-      await queryClient.invalidateQueries({ queryKey: ['daily-progress'] });
-      await queryClient.invalidateQueries({ queryKey: ['progress'] });
       await queryClient.invalidateQueries({ queryKey: ['food-history'] });
 
       toast.success(`${productName} logged! Deducted from your daily food budget.`);

@@ -134,13 +134,17 @@ export async function generateDailySummaryForUser(
     reflection = (progress.progress_data as any).reflection
   }
 
-  const { data: mealHistory } = await supabase
+  const { data: rawMealHistory } = await supabase
     .from('food_analysis_history')
-    .select('food_name, calories, meal_type, analysis_type, created_at, local_date, food_items(*)')
+    .select('food_name, calories, meal_type, analysis_type, created_at, local_date, analysis_data, food_items(*)')
     .eq('user_id', targetUserId)
     .or(`local_date.eq.${queryDate},analyzed_at.gte.${queryDate}T00:00:00.000Z`)
     .order('created_at', { ascending: false })
     .limit(10)
+
+  const mealHistory = (rawMealHistory || []).filter((m: any) => 
+    m.analysis_type !== 'scanner_product' && !m.analysis_data?.is_scanner_product
+  )
 
   const { data: transactions } = await supabase
     .from('budget_transactions')
