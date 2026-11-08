@@ -2,15 +2,16 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter, useParams, usePathname, useSearchParams } from 'next/navigation';
 import { requestMicrophoneAccess } from "@/lib/api/permissions";
-import { AlertCircle, MapPin, Navigation, Plus, Link as LinkIcon, FileText, ArrowLeft, Bookmark, Video, VideoOff, Phone, PhoneOff, Trash2, MoreVertical, Smile, Paperclip, Mic, Send, Check, CheckCheck, Clock, RotateCcw, Lock, Image, Headphones, User, BarChart, ChevronLeft, TriangleAlert, X, Brain } from 'lucide-react';
+import { AlertCircle, MapPin, Navigation, Plus, Link as LinkIcon, FileText, ArrowLeft, Bookmark, Video, VideoOff, Phone, PhoneOff, Trash2, MoreVertical, Smile, Paperclip, Mic, Send, Check, CheckCheck, Clock, RotateCcw, Lock, Image, Headphones, User, BarChart, ChevronLeft, TriangleAlert, X, Brain, Languages } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { saveFoodAnalysis } from '@/lib/api/food';
-import { getConversationById, getMessages, sendMessage, uploadChatMedia, markAsRead, sendTypingIndicator, initiateCallV2, updateCallStatus, softDeleteConversation, findUserByIdSecure, provisionAndSendMessage, findConversationByParticipants, archiveConversation, muteConversation, clearChatHistory, getOrCreateDirectConversation, markMessageDelivered, getOrCreateCoachConversation, deleteMessageForMe, deleteMessageForEveryone, toggleMessageReaction } from '@/lib/api/chat';
+import { getConversationById, getMessages, sendMessage, uploadChatMedia, markAsRead, sendTypingIndicator, initiateCallV2, updateCallStatus, softDeleteConversation, findUserByIdSecure, provisionAndSendMessage, findConversationByParticipants, archiveConversation, muteConversation, clearChatHistory, getOrCreateDirectConversation, markMessageDelivered, getOrCreateCoachConversation, deleteMessageForMe, deleteMessageForEveryone, toggleMessageReaction, translateChatMessage } from '@/lib/api/chat';
 import { useAuth } from '@/lib/AuthContext';
 import { useLastSeenHeartbeat } from '@/hooks/useLastSeenHeartbeat';
 import { playInboundMessageSound } from '@/lib/utils/chatSound';
+import { isForeignMessage } from '@/lib/utils/languageDetector';
 import { getUserProfile } from '@/lib/api/auth';
 import { toast } from 'sonner';
 import EmojiPicker, { Theme, EmojiStyle } from 'emoji-picker-react';
@@ -272,7 +273,7 @@ const isValidUUID = (id: string | undefined): boolean => {
 export default function ChatConversation() {
     const router = useRouter();
     const pathname = usePathname();
-    const { t } = useTranslation();
+    const { t, lang } = useTranslation();
     const queryClient = useQueryClient();
     const { id: activeId } = useParams() as { id: string };
     const searchParams = useSearchParams();
@@ -381,6 +382,61 @@ export default function ChatConversation() {
     const [showLastSeen, setShowLastSeen] = useState(true);
     const [selectedMessageForDelete, setSelectedMessageForDelete] = useState<any | null>(null);
     const [activeReactionMsgId, setActiveReactionMsgId] = useState<string | null>(null);
+
+    // 1-on-1 human chat message translations cache & loading state (Strictly non-coach)
+    const [translations, setTranslations] = useState<Record<string, {
+        translatedText: string;
+        detectedSourceLang: string;
+        showOriginal: boolean;
+        isLoading: boolean;
+    }>>({});
+
+    const handleTranslateMessage = async (msg: any) => {
+        if (!msg?.id || !msg?.content || isAI || msg.sender_id === COACH_ID) return;
+
+        const existing = translations[msg.id];
+        if (existing?.translatedText) {
+            setTranslations(prev => ({
+                ...prev,
+                [msg.id]: {
+                    ...existing,
+                    showOriginal: !existing.showOriginal
+                }
+            }));
+            return;
+        }
+
+        setTranslations(prev => ({
+            ...prev,
+            [msg.id]: {
+                translatedText: '',
+                detectedSourceLang: '',
+                showOriginal: false,
+                isLoading: true
+            }
+        }));
+
+        try {
+            const result = await translateChatMessage(msg.content, lang || 'en');
+            setTranslations(prev => ({
+                ...prev,
+                [msg.id]: {
+                    translatedText: result.translatedText,
+                    detectedSourceLang: result.detectedSourceLang,
+                    showOriginal: false,
+                    isLoading: false
+                }
+            }));
+        } catch (err: any) {
+            console.error('[Translation Error]:', err);
+            toast.error(err?.message || 'Failed to translate message');
+            setTranslations(prev => {
+                const next = { ...prev };
+                delete next[msg.id];
+                return next;
+            });
+        }
+    };
 
     const [isSubmitting, setIsSubmitting] = useState(false);
     const shouldSendOnStopRef = useRef(false);
@@ -794,7 +850,16 @@ export default function ChatConversation() {
     const { data: peerLastSeen } = useQuery<string | null>({
         queryKey: ['peer-last-seen', resolvedOtherUserId],
         queryFn: async () => {
-            const res = await fetch(`/api/presence/last-seen?user_id=${resolvedOtherUserId}`, { credentials: 'same-origin' });
+            const { data } = await supabase.auth.getSession();
+            const token = data.session?.access_token;
+            if (!token) return null;
+
+            const res = await fetch(`/api/presence/last-seen?user_id=${resolvedOtherUserId}`, {
+                credentials: 'same-origin',
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                },
+            });
             if (!res.ok) return null;
             const json = await res.json();
             return json.last_seen ?? null;
@@ -2417,7 +2482,60 @@ export default function ChatConversation() {
                         .replace(/,\s*,/g, ', ')
                         .trim()
                     : msg.content;
-                return <p className="text-[14.2px] leading-[19px] whitespace-pre-wrap">{cleanContent}</p>;
+
+                const translation = translations[msg.id];
+                const isTranslatedActive = !!(translation && !translation.showOriginal && translation.translatedText);
+                const displayBody = isTranslatedActive ? translation.translatedText : cleanContent;
+
+                const isMe = msg.sender_id === user?.id;
+                const isForeign = isForeignMessage(cleanContent, lang || 'en', isMe);
+                const shouldShowTranslation = !isAI && msg.sender_id !== COACH_ID && msg.content && (translation?.translatedText || isForeign);
+
+                return (
+                    <div className="flex flex-col">
+                        <p className="text-[14.2px] leading-[19px] whitespace-pre-wrap">{displayBody}</p>
+
+                        {/* Translation Toggle & Metadata - Strictly for 1-on-1 human text messages when foreign */}
+                        {shouldShowTranslation && (
+                            <div className="mt-1 select-none">
+                                {translation?.isLoading ? (
+                                    <div className="inline-flex items-center gap-1.5 text-[11px] text-[#027EB5] dark:text-[#53bdeb] font-medium py-0.5">
+                                        <div className="size-2.5 rounded-full border-2 border-[#027EB5] dark:border-[#53bdeb] border-t-transparent animate-spin shrink-0" />
+                                        <span>{t('translating') || 'Translating...'}</span>
+                                    </div>
+                                ) : translation?.translatedText ? (
+                                    <div className="inline-flex items-center gap-1.5 text-[10.5px] text-[#667781] dark:text-white/60 py-0.5">
+                                        <span className="italic">
+                                            {(t('translated_from') || 'Translated from %s').replace('%s', translation.detectedSourceLang || 'detected')}
+                                        </span>
+                                        <span>·</span>
+                                        <button
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleTranslateMessage(msg);
+                                            }}
+                                            className="text-[#027EB5] dark:text-[#53bdeb] hover:underline font-semibold"
+                                        >
+                                            {translation.showOriginal ? (t('see_translation') || 'See translation') : (t('see_original') || 'See original')}
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleTranslateMessage(msg);
+                                        }}
+                                        className="text-[11px] text-[#027EB5] dark:text-[#53bdeb] hover:underline font-medium py-0.5 inline-flex items-center gap-1"
+                                    >
+                                        <span>{t('see_translation') || 'See translation'}</span>
+                                    </button>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                );
         }
     };
 
@@ -2783,7 +2901,7 @@ export default function ChatConversation() {
                                                 )}
                                             </div>
 
-                                            {/* WhatsApp-Style Action Buttons Bar (React & Delete) */}
+                                            {/* WhatsApp-Style Action Buttons Bar (React, Translate & Delete) */}
                                             {!isDeletedForEveryone && !isAI && (
                                                 <div className={`opacity-0 group-hover:opacity-100 transition-opacity duration-150 flex items-center gap-1 mt-1 ${isMe ? 'justify-end' : 'justify-start'} px-1`}>
                                                     <button
@@ -2797,6 +2915,27 @@ export default function ChatConversation() {
                                                     >
                                                         <Smile size={14} />
                                                     </button>
+                                                    {msg.message_type === 'text' && msg.content && (translations[msg.id]?.translatedText || isForeignMessage(msg.content, lang || 'en', isMe)) && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                handleTranslateMessage(msg);
+                                                            }}
+                                                            className={`p-1 rounded-full transition-colors ${
+                                                                translations[msg.id]?.translatedText && !translations[msg.id]?.showOriginal
+                                                                    ? 'text-[#027EB5] dark:text-[#53bdeb] bg-[#027EB5]/10'
+                                                                    : 'text-[#8696A0] hover:text-[#027EB5] dark:hover:text-[#53bdeb] hover:bg-black/5 dark:hover:bg-white/10'
+                                                            }`}
+                                                            title={
+                                                                translations[msg.id]?.translatedText && !translations[msg.id]?.showOriginal
+                                                                    ? (t('see_original') || "See original")
+                                                                    : (t('see_translation') || "See translation")
+                                                            }
+                                                        >
+                                                            <Languages size={14} />
+                                                        </button>
+                                                    )}
                                                     <button
                                                         type="button"
                                                         onClick={(e) => {

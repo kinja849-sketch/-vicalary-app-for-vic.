@@ -1201,3 +1201,31 @@ export const getChatParticipants = async (conversationId: string) => {
         return [];
     }
 };
+
+export interface ChatTranslationResult {
+    translatedText: string;
+    detectedSourceLang: string;
+    targetLang: string;
+    isSameLanguage: boolean;
+}
+
+export const translateChatMessage = async (text: string, targetLang: string = 'en'): Promise<ChatTranslationResult> => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+
+    const res = await fetch('/api/chat/translate', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ text, targetLang })
+    });
+
+    const result = await res.json();
+    if (!res.ok) {
+        throw new Error(result?.error || 'Translation failed');
+    }
+    return result as ChatTranslationResult;
+};
+

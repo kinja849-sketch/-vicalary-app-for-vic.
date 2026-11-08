@@ -395,5 +395,9 @@ export const en = {
     delete_for_everyone: "Delete for everyone",
     delete_for_me: "Delete for me",
     this_message_was_deleted: "This message was deleted",
-    you_deleted_this_message: "You deleted this message"
+    you_deleted_this_message: "You deleted this message",
+    see_translation: "See translation",
+    see_original: "See original",
+    translating: "Translating...",
+    translated_from: "Translated from %s"
 };

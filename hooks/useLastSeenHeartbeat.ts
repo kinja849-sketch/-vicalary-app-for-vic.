@@ -1,15 +1,23 @@
 import { useEffect } from 'react';
+import { supabase } from '@/lib/supabase';
 
 const HEARTBEAT_MS = 60_000;
 
-function stampLastSeen() {
-    // keepalive lets the request survive tab close / navigation. Cookies carry the session.
+async function stampLastSeen() {
+    // keepalive lets the request survive tab close / navigation. Authorization header carries the session JWT.
     try {
-        fetch('/api/presence/last-seen', {
+        const { data } = await supabase.auth.getSession();
+        const token = data.session?.access_token;
+        if (!token) return;
+
+        await fetch('/api/presence/last-seen', {
             method: 'POST',
             keepalive: true,
             credentials: 'same-origin',
-        }).catch(() => {});
+            headers: {
+                Authorization: `Bearer ${token}`,
+            },
+        });
     } catch {
         /* non-blocking */
     }
@@ -23,15 +31,17 @@ export function useLastSeenHeartbeat(userId?: string | null) {
     useEffect(() => {
         if (!userId) return;
 
-        stampLastSeen();
+        void stampLastSeen();
         const interval = setInterval(() => {
-            if (document.visibilityState === 'visible') stampLastSeen();
+            if (document.visibilityState === 'visible') void stampLastSeen();
         }, HEARTBEAT_MS);
 
         const onVisibility = () => {
-            stampLastSeen();
+            void stampLastSeen();
         };
-        const onPageHide = () => stampLastSeen();
+        const onPageHide = () => {
+            void stampLastSeen();
+        };
 
         document.addEventListener('visibilitychange', onVisibility);
         window.addEventListener('pagehide', onPageHide);
@@ -40,7 +50,7 @@ export function useLastSeenHeartbeat(userId?: string | null) {
             clearInterval(interval);
             document.removeEventListener('visibilitychange', onVisibility);
             window.removeEventListener('pagehide', onPageHide);
-            stampLastSeen();
+            void stampLastSeen();
         };
     }, [userId]);
 }
