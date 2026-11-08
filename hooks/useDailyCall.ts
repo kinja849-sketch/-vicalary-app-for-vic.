@@ -2,6 +2,22 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { DailyCall } from '@daily-co/daily-js';
 
+// Cached client-only reference to DailyIframe to prevent SSR evaluation failures
+let dailyIframeInstance: any = null;
+
+async function getDailyIframe(): Promise<any> {
+    if (typeof window === 'undefined') return null;
+    if (dailyIframeInstance) return dailyIframeInstance;
+    try {
+        const mod = await import('@daily-co/daily-js');
+        dailyIframeInstance = mod.default || mod;
+        return dailyIframeInstance;
+    } catch (err) {
+        console.warn('[useDailyCall] Error loading @daily-co/daily-js:', err);
+        return null;
+    }
+}
+
 export type DailyConnectionState = 'idle' | 'joining' | 'waiting_peer' | 'connected' | 'leaving' | 'error';
 
 export function useDailyCall() {
@@ -26,8 +42,52 @@ export function useDailyCall() {
     const [speakerActive, setSpeakerActive] = useState(false);
     const [activeVideoDeviceId, setActiveVideoDeviceId] = useState<string | null>(null);
 
+    // Proactively preload daily-js on client mount so it is instantly ready before any call
+    useEffect(() => {
+        if (typeof window !== 'undefined') {
+            getDailyIframe().catch(() => {});
+        }
+    }, []);
+
     const callTypeRef = useRef<'voice' | 'video'>('voice');
     const callObjectRef = useRef<DailyCall | null>(null);
+    const directAudioElementsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+
+    const cleanupDirectAudio = useCallback(() => {
+        directAudioElementsRef.current.forEach((audioEl) => {
+            try {
+                audioEl.pause();
+                audioEl.srcObject = null;
+                audioEl.remove();
+            } catch (_) {}
+        });
+        directAudioElementsRef.current.clear();
+    }, []);
+
+    const attachDirectAudio = useCallback((track: MediaStreamTrack, sessionId: string) => {
+        if (typeof document === 'undefined') return;
+        try {
+            let audioEl = directAudioElementsRef.current.get(sessionId);
+            if (!audioEl || !document.body.contains(audioEl)) {
+                audioEl = document.createElement('audio');
+                audioEl.id = `daily-audio-${sessionId}`;
+                audioEl.autoplay = true;
+                (audioEl as any).playsInline = true;
+                audioEl.className = 'fixed -left-[9999px] -top-[9999px] w-1 h-1 opacity-0 pointer-events-none';
+                document.body.appendChild(audioEl);
+                directAudioElementsRef.current.set(sessionId, audioEl);
+            }
+            const currentStream = audioEl.srcObject as MediaStream | null;
+            if (currentStream?.getTracks()[0] !== track) {
+                audioEl.srcObject = new MediaStream([track]);
+                audioEl.volume = 1.0;
+                audioEl.muted = false;
+                audioEl.play().catch(e => console.warn('[Daily direct audio] play error:', e));
+            }
+        } catch (e) {
+            console.warn('[Daily] attachDirectAudio error:', e);
+        }
+    }, []);
 
     // Check device capabilities
     const checkDevices = useCallback(async (co?: DailyCall) => {
@@ -71,7 +131,14 @@ export function useDailyCall() {
 
         setLocalVideoTrack(lvt);
         setRemoteVideoTrack(rvt);
-        setRemoteAudioTrack(rat);
+        setRemoteAudioTrack(prev => {
+            if (rat) return rat;
+            // Preserve existing live remote track if still active and participant not explicitly muted
+            if (prev && prev.readyState !== 'ended' && remoteP && remoteP.tracks?.audio?.state !== 'off') {
+                return prev;
+            }
+            return rat;
+        });
         setParticipants(Object.values(parts));
 
         // Derive confirmed media states directly from Daily's reported participant tracks
@@ -84,13 +151,6 @@ export function useDailyCall() {
         if (remoteP) {
             setPeerJoined(true);
             setConnectionState('connected');
-
-            // Explicitly ensure remote tracks are actively subscribed
-            try {
-                co.updateParticipant(remoteP.session_id, {
-                    setSubscribedTracks: { audio: true, video: true } as any
-                });
-            } catch (_) {}
 
             const remoteMicState = remoteP?.tracks?.audio?.state;
             setIsRemoteAudioMuted(remoteMicState === 'off' || remoteMicState === 'blocked');
@@ -124,13 +184,6 @@ export function useDailyCall() {
             if (ev?.participant && !ev.participant.local) {
                 setPeerJoined(true);
                 setConnectionState('connected');
-                try {
-                    co.updateParticipant(ev.participant.session_id, {
-                        setSubscribedTracks: { audio: true, video: true } as any
-                    });
-                } catch (subErr) {
-                    console.warn('[Daily] Failed to setSubscribedTracks on participant-joined:', subErr);
-                }
             }
             refreshTracks(co);
         };
@@ -143,30 +196,46 @@ export function useDailyCall() {
         };
 
         const handleTrackStarted = (ev?: any) => {
-            console.log('[Daily] track-started event:', ev?.type, ev?.participant?.session_id);
+            console.log('[Daily] track-started event:', ev?.type, ev?.track?.kind, ev?.participant?.session_id);
             if (ev?.participant && !ev.participant.local) {
                 setPeerJoined(true);
                 setConnectionState('connected');
-                if (ev.type === 'video' && ev.track) {
+                const isVideoTrack = ev.type === 'video' || ev?.track?.kind === 'video';
+                const isAudioTrack = ev.type === 'audio' || ev?.track?.kind === 'audio';
+
+                if (isVideoTrack && ev.track) {
                     setRemoteVideoTrack(ev.track);
                     setIsRemoteVideoOff(false);
-                } else if (ev.type === 'audio' && ev.track) {
+                } else if (isAudioTrack && ev.track) {
                     setRemoteAudioTrack(ev.track);
                     setIsRemoteAudioMuted(false);
+                    attachDirectAudio(ev.track, ev.participant.session_id);
                 }
-            } else if (ev?.participant?.local && ev.type === 'video' && ev.track) {
+            } else if (ev?.participant?.local && (ev.type === 'video' || ev?.track?.kind === 'video') && ev.track) {
                 setLocalVideoTrack(ev.track);
                 setIsLocalVideoOff(false);
             }
             refreshTracks(co);
         };
 
-        const handleTrackStopped = (_ev?: any) => {
+        const handleTrackStopped = (ev?: any) => {
+            if (ev?.participant && !ev.participant.local) {
+                if (ev?.track?.kind === 'audio' || ev?.type === 'audio') {
+                    setRemoteAudioTrack(null);
+                }
+            }
             refreshTracks(co);
         };
 
         const handleParticipantLeft = (ev?: any) => {
             console.log('[Daily] participant-left event:', ev?.participant?.session_id);
+            if (ev?.participant?.session_id) {
+                const el = directAudioElementsRef.current.get(ev.participant.session_id);
+                if (el) {
+                    try { el.pause(); el.srcObject = null; el.remove(); } catch (_) {}
+                    directAudioElementsRef.current.delete(ev.participant.session_id);
+                }
+            }
             refreshTracks(co);
         };
 
@@ -178,6 +247,7 @@ export function useDailyCall() {
 
         const handleLeft = () => {
             console.log('[Daily] Left meeting');
+            cleanupDirectAudio();
             setStatus('idle');
             setConnectionState('idle');
             setParticipants([]);
@@ -202,26 +272,32 @@ export function useDailyCall() {
         co.on('track-stopped', handleTrackStopped);
         co.on('available-devices-updated', handleDeviceChange);
         co.on('selected-devices-updated', handleDeviceChange);
-    }, [refreshTracks, checkDevices]);
+    }, [refreshTracks, checkDevices, attachDirectAudio, cleanupDirectAudio]);
 
     // Unmount cleanup to prevent leaking Daily call instances across page transitions
     useEffect(() => {
         return () => {
             try {
+                cleanupDirectAudio();
                 if (callObjectRef.current) {
                     callObjectRef.current.destroy().catch(() => {});
                     callObjectRef.current = null;
                 }
             } catch (_) {}
         };
-    }, []);
+    }, [cleanupDirectAudio]);
 
     const joinCall = useCallback(async (url: string, isVideo: boolean = false, userName?: string) => {
         if (typeof window === 'undefined') return;
         callTypeRef.current = isVideo ? 'video' : 'voice';
 
-        const DailyModule = await import('@daily-co/daily-js');
-        const DailyIframe = DailyModule.default || (DailyModule as any);
+        const DailyIframe = await getDailyIframe();
+        if (!DailyIframe) {
+            console.error('[Daily] DailyIframe is not available');
+            setStatus('error');
+            setConnectionState('error');
+            return;
+        }
 
         try {
             const existing = DailyIframe.getCallInstance();
@@ -267,28 +343,40 @@ export function useDailyCall() {
                 startVideoOff: !isVideo,
                 userName: userName || 'Vicalary User'
             });
+            // Guarantee local microphone is immediately unmuted and publishing
+            try {
+                co.setLocalAudio(true);
+                setIsLocalAudioMuted(false);
+            } catch (micErr) {
+                console.warn('[Daily] Explicit setLocalAudio warning on join:', micErr);
+            }
             await checkDevices(co);
             refreshTracks(co);
         } catch (err) {
             console.error('[Daily] Failed to join call room:', err);
             setStatus('error');
             setConnectionState('error');
+            cleanupDirectAudio();
             try { await co.destroy(); } catch (_) {}
             callObjectRef.current = null;
             setCallObject(null);
         }
-    }, [setupCallListeners, checkDevices, refreshTracks]);
+    }, [setupCallListeners, checkDevices, refreshTracks, cleanupDirectAudio]);
 
     const leaveCall = useCallback(async () => {
+        cleanupDirectAudio();
         const co = callObjectRef.current || callObject;
         if (!co) {
             try {
-                const DailyModule = await import('@daily-co/daily-js');
-                const DailyIframe = DailyModule.default || (DailyModule as any);
-                const ex = DailyIframe.getCallInstance();
-                if (ex) {
-                    try { await ex.leave(); } catch (_) {}
-                    try { await ex.destroy(); } catch (_) {}
+                if (typeof window !== 'undefined') {
+                    const DailyIframe = await getDailyIframe();
+                    if (DailyIframe) {
+                        const ex = DailyIframe.getCallInstance();
+                        if (ex) {
+                            try { await ex.leave(); } catch (_) {}
+                            try { await ex.destroy(); } catch (_) {}
+                        }
+                    }
                 }
             } catch (_) {}
             setStatus('idle');

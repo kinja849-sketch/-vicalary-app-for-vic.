@@ -323,56 +323,51 @@ export default function CallOverlay({
         setIsDragging(false);
     };
 
-    // Dedicated single-instance audio playback element for remote audio
-    const AudioElement = <DailyAudioTrack track={remoteAudioTrack} />;
-
-    // ===== 1. CALL ENDED STATE =====
-    if (status === 'ended') {
-        return (
-            <div className="fixed inset-0 z-[100] bg-[#0b141a]/95 flex flex-col items-center justify-center text-white animate-in fade-in duration-300">
-                {AudioElement}
-                <div className="text-center">
-                    <h2 className="text-2xl font-light mb-2">Call Ended</h2>
-                    <p className="text-[#8696A0]">{formatDuration(duration)}</p>
+    const renderCallContent = () => {
+        // ===== 1. CALL ENDED STATE =====
+        if (status === 'ended') {
+            return (
+                <div className="fixed inset-0 z-[100] bg-[#0b141a]/95 flex flex-col items-center justify-center text-white animate-in fade-in duration-300">
+                    <div className="text-center">
+                        <h2 className="text-2xl font-light mb-2">Call Ended</h2>
+                        <p className="text-[#8696A0]">{formatDuration(duration)}</p>
+                    </div>
                 </div>
-            </div>
-        );
-    }
+            );
+        }
 
-    // ===== 2. MINIMIZED FLOATING STATE =====
-    if (isMinimized) {
-        return (
-            <div
-                onClick={onToggleMinimize}
-                className="fixed bottom-20 right-4 z-[9999] w-20 h-20 rounded-2xl bg-[#00A884] shadow-2xl flex items-center justify-center cursor-pointer hover:scale-105 transition-all overflow-hidden border-2 border-white/20 select-none"
-                title="Tap to restore call"
-            >
-                {AudioElement}
-                {type === 'video' && remoteVideoTrack ? (
-                    <DailyMediaView track={remoteVideoTrack} className="w-full h-full" />
-                ) : (
-                    <img
-                        src={caller.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(caller.name || 'User')}&background=00A884&color=fff&size=100`}
-                        alt={caller.name || 'Call'}
-                        className="w-full h-full object-cover opacity-80"
-                    />
-                )}
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/30 backdrop-blur-[2px]">
-                    {type === 'video' ? <Video className="text-white animate-pulse" size={20} /> : <Phone className="text-white animate-pulse" size={20} />}
-                    <span className="text-[10px] text-white font-bold mt-1">{formatDuration(duration)}</span>
+        // ===== 2. MINIMIZED FLOATING STATE =====
+        if (isMinimized) {
+            return (
+                <div
+                    onClick={onToggleMinimize}
+                    className="fixed bottom-20 right-4 z-[9999] w-20 h-20 rounded-2xl bg-[#00A884] shadow-2xl flex items-center justify-center cursor-pointer hover:scale-105 transition-all overflow-hidden border-2 border-white/20 select-none"
+                    title="Tap to restore call"
+                >
+                    {type === 'video' && remoteVideoTrack ? (
+                        <DailyMediaView track={remoteVideoTrack} className="w-full h-full" />
+                    ) : (
+                        <img
+                            src={caller.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(caller.name || 'User')}&background=00A884&color=fff&size=100`}
+                            alt={caller.name || 'Call'}
+                            className="w-full h-full object-cover opacity-80"
+                        />
+                    )}
+                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/30 backdrop-blur-[2px]">
+                        {type === 'video' ? <Video className="text-white animate-pulse" size={20} /> : <Phone className="text-white animate-pulse" size={20} />}
+                        <span className="text-[10px] text-white font-bold mt-1">{formatDuration(duration)}</span>
+                    </div>
                 </div>
-            </div>
-        );
-    }
+            );
+        }
 
-    // ===== 3. UNIFIED CALLING & RINGING SCREEN (Exact reference: media_1791516132449.png) =====
-    if (status === 'ringing') {
-        const isOnline = direction === 'incoming' ? true : isPeerOnline;
-        const statusLabel = isOnline ? 'Ringing' : 'Calling';
+        // ===== 3. UNIFIED CALLING & RINGING SCREEN (Exact reference: media_1791516132449.png) =====
+        if (status === 'ringing') {
+            const isOnline = direction === 'incoming' ? true : isPeerOnline;
+            const statusLabel = isOnline ? 'Ringing' : 'Calling';
 
-        return (
-            <div className="fixed inset-0 z-[100] bg-[#0b141a] text-white flex flex-col justify-between items-center p-6 md:p-10 select-none overflow-hidden animate-in fade-in duration-300">
-                {AudioElement}
+            return (
+                <div className="fixed inset-0 z-[100] bg-[#0b141a] text-white flex flex-col justify-between items-center p-6 md:p-10 select-none overflow-hidden animate-in fade-in duration-300">
 
                 {/* Top status bar spacer (clean header matching reference) */}
                 <div className="relative z-10 w-full pt-8 flex items-center justify-end text-xs text-[#8696a0]">
@@ -524,11 +519,10 @@ export default function CallOverlay({
         );
     }
 
-    // ===== 5. ACTIVE VIDEO CALL (Reference: media_1791504017249.png) =====
-    if (type === 'video' && status === 'connected') {
-        return (
-            <div className="fixed inset-0 z-[100] bg-black text-white select-none touch-none overflow-hidden animate-in fade-in duration-300">
-                {AudioElement}
+        // ===== 5. ACTIVE VIDEO CALL (Reference: media_1791504017249.png) =====
+        if (type === 'video' && status === 'connected') {
+            return (
+                <div className="fixed inset-0 z-[100] bg-black text-white select-none touch-none overflow-hidden animate-in fade-in duration-300">
 
                 {/* Full-Screen Main Video Surface (Tap to switch participant view) */}
                 <div
@@ -714,94 +708,100 @@ export default function CallOverlay({
         );
     }
 
-    // ===== 6. ACTIVE VOICE CALL =====
-    return (
-        <div className="fixed inset-0 z-[100] bg-[#0b141a] text-white flex flex-col justify-between items-center select-none overflow-hidden h-[100dvh] animate-in fade-in duration-300">
-            {AudioElement}
-
-            {/* Top Band: Safe-area top padding, title, and clear minimize affordance */}
-            <div
-                className="w-full px-6 flex items-center justify-between text-xs text-[#8696a0] shrink-0"
-                style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}
-            >
-                <span className="font-medium tracking-wide">VicCalary voice call</span>
-                {onToggleMinimize && (
-                    <button
-                        type="button"
-                        onClick={onToggleMinimize}
-                        className="size-9 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 flex items-center justify-center text-white transition-all shadow-sm"
-                        title="Minimize call"
-                        aria-label="Minimize call"
-                    >
-                        <ChevronDown size={20} className="text-white" />
-                    </button>
-                )}
-            </div>
-
-            {/* Middle Band: Flex-centered Avatar, Caller Name, and Timer */}
-            <div className="flex-1 flex flex-col items-center justify-center gap-4 px-6 w-full my-0">
-                {/* Deliberate, clean circular avatar with subtle outer ring */}
-                <div className="size-36 sm:size-44 rounded-full overflow-hidden bg-[#202c33] ring-4 ring-white/10 shadow-2xl flex items-center justify-center">
-                    {caller.avatar ? (
-                        <img src={caller.avatar} alt={caller.name} className="w-full h-full object-cover" />
-                    ) : (
-                        <User size={68} className="text-[#8696a0]" />
+        // ===== 6. ACTIVE VOICE CALL =====
+        return (
+            <div className="fixed inset-0 z-[100] bg-[#0b141a] text-white flex flex-col justify-between items-center select-none overflow-hidden h-[100dvh] animate-in fade-in duration-300">
+                {/* Top Band: Safe-area top padding, title, and clear minimize affordance */}
+                <div
+                    className="w-full px-6 flex items-center justify-between text-xs text-[#8696a0] shrink-0"
+                    style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}
+                >
+                    <span className="font-medium tracking-wide">VicCalary voice call</span>
+                    {onToggleMinimize && (
+                        <button
+                            type="button"
+                            onClick={onToggleMinimize}
+                            className="size-9 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 flex items-center justify-center text-white transition-all shadow-sm"
+                            title="Minimize call"
+                            aria-label="Minimize call"
+                        >
+                            <ChevronDown size={20} className="text-white" />
+                        </button>
                     )}
                 </div>
 
-                <div className="text-center mt-2">
-                    <h1 className="text-3xl sm:text-4xl font-normal text-white tracking-wide">{caller.name || 'User'}</h1>
-                    <p className="text-sm font-medium text-[#8696a0] mt-1.5">
-                        {!peerJoined
-                            ? 'Connecting...'
-                            : isRemoteAudioMuted
-                            ? `${caller.name || 'User'} is muted`
-                            : formatDuration(duration)}
-                    </p>
+                {/* Middle Band: Flex-centered Avatar, Caller Name, and Timer */}
+                <div className="flex-1 flex flex-col items-center justify-center gap-4 px-6 w-full my-0">
+                    {/* Deliberate, clean circular avatar with subtle outer ring */}
+                    <div className="size-36 sm:size-44 rounded-full overflow-hidden bg-[#202c33] ring-4 ring-white/10 shadow-2xl flex items-center justify-center">
+                        {caller.avatar ? (
+                            <img src={caller.avatar} alt={caller.name} className="w-full h-full object-cover" />
+                        ) : (
+                            <User size={68} className="text-[#8696a0]" />
+                        )}
+                    </div>
+
+                    <div className="text-center mt-2">
+                        <h1 className="text-3xl sm:text-4xl font-normal text-white tracking-wide">{caller.name || 'User'}</h1>
+                        <p className="text-sm font-medium text-[#8696a0] mt-1.5">
+                            {!peerJoined
+                                ? 'Connecting...'
+                                : isRemoteAudioMuted
+                                ? `${caller.name || 'User'} is muted`
+                                : formatDuration(duration)}
+                        </p>
+                    </div>
+                </div>
+
+                {/* Bottom Band: Fixed control dock with safe-area bottom padding */}
+                <div
+                    className="w-full max-w-sm px-6 shrink-0 flex flex-col items-center"
+                    style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1.5rem)' }}
+                >
+                    <div className="bg-[#202c33]/90 backdrop-blur-xl border border-white/10 rounded-full px-6 py-3.5 flex items-center justify-around gap-6 shadow-2xl w-full">
+                        {/* Speaker */}
+                        <button
+                            type="button"
+                            onClick={handleSpeakerToggle}
+                            className={`size-12 rounded-full flex items-center justify-center transition-all active:scale-95 ${
+                                speakerActive ? 'bg-white text-black shadow-md' : 'bg-white/15 hover:bg-white/25 text-white'
+                            }`}
+                            title={isSpeakerSupported ? (speakerActive ? 'Speaker on' : 'Speaker off') : 'Speaker switching not supported'}
+                        >
+                            {speakerActive ? <Volume2 size={22} className="text-black" /> : <VolumeX size={22} className="text-white" />}
+                        </button>
+
+                        {/* Microphone */}
+                        <button
+                            type="button"
+                            onClick={handleMicToggle}
+                            className={`size-12 rounded-full flex items-center justify-center transition-all active:scale-95 ${
+                                isLocalAudioMuted ? 'bg-red-600 text-white shadow-md' : 'bg-white/15 hover:bg-white/25 text-white'
+                            }`}
+                            title={isLocalAudioMuted ? 'Unmute microphone' : 'Mute microphone'}
+                        >
+                            {isLocalAudioMuted ? <MicOff size={22} className="text-white" /> : <Mic size={22} className="text-white" />}
+                        </button>
+
+                        {/* End Call */}
+                        <button
+                            type="button"
+                            onClick={onEnd}
+                            className="size-12 rounded-full bg-[#EA0038] hover:bg-[#d00032] flex items-center justify-center text-white shadow-xl active:scale-90 transition-transform"
+                            title="End Call"
+                        >
+                            <Phone size={22} className="rotate-[135deg] text-white fill-current" />
+                        </button>
+                    </div>
                 </div>
             </div>
+        );
+    };
 
-            {/* Bottom Band: Fixed control dock with safe-area bottom padding */}
-            <div
-                className="w-full max-w-sm px-6 shrink-0 flex flex-col items-center"
-                style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1.5rem)' }}
-            >
-                <div className="bg-[#202c33]/90 backdrop-blur-xl border border-white/10 rounded-full px-6 py-3.5 flex items-center justify-around gap-6 shadow-2xl w-full">
-                    {/* Speaker */}
-                    <button
-                        type="button"
-                        onClick={handleSpeakerToggle}
-                        className={`size-12 rounded-full flex items-center justify-center transition-all active:scale-95 ${
-                            speakerActive ? 'bg-white text-black shadow-md' : 'bg-white/15 hover:bg-white/25 text-white'
-                        }`}
-                        title={isSpeakerSupported ? (speakerActive ? 'Speaker on' : 'Speaker off') : 'Speaker switching not supported'}
-                    >
-                        {speakerActive ? <Volume2 size={22} className="text-black" /> : <VolumeX size={22} className="text-white" />}
-                    </button>
-
-                    {/* Microphone */}
-                    <button
-                        type="button"
-                        onClick={handleMicToggle}
-                        className={`size-12 rounded-full flex items-center justify-center transition-all active:scale-95 ${
-                            isLocalAudioMuted ? 'bg-red-600 text-white shadow-md' : 'bg-white/15 hover:bg-white/25 text-white'
-                        }`}
-                        title={isLocalAudioMuted ? 'Unmute microphone' : 'Mute microphone'}
-                    >
-                        {isLocalAudioMuted ? <MicOff size={22} className="text-white" /> : <Mic size={22} className="text-white" />}
-                    </button>
-
-                    {/* End Call */}
-                    <button
-                        type="button"
-                        onClick={onEnd}
-                        className="size-12 rounded-full bg-[#EA0038] hover:bg-[#d00032] flex items-center justify-center text-white shadow-xl active:scale-90 transition-transform"
-                        title="End Call"
-                    >
-                        <Phone size={22} className="rotate-[135deg] text-white fill-current" />
-                    </button>
-                </div>
-            </div>
-        </div>
+    return (
+        <>
+            <DailyAudioTrack track={remoteAudioTrack} />
+            {renderCallContent()}
+        </>
     );
 }

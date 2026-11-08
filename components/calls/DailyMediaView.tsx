@@ -130,6 +130,8 @@ export function DailyAudioTrack({ track, sinkId, onPlaybackFailed }: DailyAudioT
         const el = audioRef.current;
         if (!el) return;
         try {
+            el.volume = 1.0;
+            el.muted = false;
             await el.play();
             setAudioBlocked(false);
         } catch (err: any) {
@@ -146,10 +148,18 @@ export function DailyAudioTrack({ track, sinkId, onPlaybackFailed }: DailyAudioT
         if (track && track.readyState !== 'ended') {
             const stream = new MediaStream([track]);
             el.srcObject = stream;
+            el.volume = 1.0;
+            el.muted = false;
             setAudioBlocked(false);
             tryPlayAudio();
 
+            const handleUnmute = () => {
+                tryPlayAudio();
+            };
+            track.addEventListener('unmute', handleUnmute);
+
             return () => {
+                track.removeEventListener('unmute', handleUnmute);
                 if (el.srcObject === stream) {
                     el.srcObject = null;
                 }
@@ -159,6 +169,26 @@ export function DailyAudioTrack({ track, sinkId, onPlaybackFailed }: DailyAudioT
             setAudioBlocked(false);
         }
     }, [track, tryPlayAudio]);
+
+    // Global interaction listener to auto-unlock audio on any user touch/click if autoplay was blocked
+    useEffect(() => {
+        const handleUnlock = () => {
+            const el = audioRef.current;
+            if (el && el.paused && el.srcObject) {
+                tryPlayAudio();
+            }
+        };
+
+        window.addEventListener('pointerdown', handleUnlock);
+        window.addEventListener('touchstart', handleUnlock);
+        window.addEventListener('click', handleUnlock);
+
+        return () => {
+            window.removeEventListener('pointerdown', handleUnlock);
+            window.removeEventListener('touchstart', handleUnlock);
+            window.removeEventListener('click', handleUnlock);
+        };
+    }, [tryPlayAudio]);
 
     // Apply custom sinkId if supported
     useEffect(() => {
@@ -173,7 +203,12 @@ export function DailyAudioTrack({ track, sinkId, onPlaybackFailed }: DailyAudioT
 
     return (
         <>
-            <audio ref={audioRef} autoPlay playsInline style={{ display: 'none' }} />
+            <audio
+                ref={audioRef}
+                autoPlay
+                playsInline
+                className="fixed -left-[9999px] -top-[9999px] w-1 h-1 opacity-0 pointer-events-none"
+            />
             {audioBlocked && (
                 <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[200] bg-black/85 border border-amber-500/30 text-white px-4 py-2 rounded-full shadow-2xl flex items-center gap-3 animate-bounce">
                     <VolumeX size={16} className="text-amber-400" />
