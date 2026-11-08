@@ -272,7 +272,9 @@ export function ProductDetails({
         ? price_metadata.reference_estimate.amount
         : 0;
   const parsedManualPrice = parseFloat(manualPriceInput.replace(/[^0-9.]/g, ''));
-  const userEnteredPrice = initialNumericPrice > 0 ? initialNumericPrice : (!isNaN(parsedManualPrice) && parsedManualPrice > 0 ? parsedManualPrice : 0);
+  const userEnteredPrice = (!isNaN(parsedManualPrice) && parsedManualPrice > 0)
+    ? parsedManualPrice
+    : (initialNumericPrice > 0 ? initialNumericPrice : 0);
 
   // Split ingredients cleanly into distinct items respecting parentheses
   const ingredientList = React.useMemo(() => {
@@ -1191,8 +1193,23 @@ export function ProductDetails({
                     </div>
                   </div>
 
-                  {/* Optional user price input when no verified local retail price listing exists */}
-                  {initialNumericPrice === 0 && (
+                  {/* Shelf price adjustment or manual entry fallback */}
+                  {initialNumericPrice > 0 ? (
+                    <div className="pt-2 border-t border-slate-200 dark:border-white/10 flex items-center justify-between gap-3">
+                      <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                        Adjust shelf price ({price_metadata?.currency || 'IDR'}) if different:
+                      </span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={manualPriceInput}
+                        onChange={(e) => setManualPriceInput(e.target.value)}
+                        placeholder={initialNumericPrice.toString()}
+                        className="w-28 px-2.5 py-1 rounded-xl bg-white dark:bg-black/40 border border-slate-300 dark:border-white/15 text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      />
+                    </div>
+                  ) : (
                     <div className="pt-2 border-t border-slate-200 dark:border-white/10 flex items-center justify-between gap-3">
                       <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
                         Enter shelf price ({price_metadata?.currency || 'IDR'}) to deduct from budget:
