@@ -1,9 +1,9 @@
 "use client"
 import { useState, useMemo, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/AuthContext";
-import { saveOnboardingResponses, getUserProfile } from "@/lib/api/auth";
+import { saveOnboardingResponses, getUserProfile, getOnboardingResponses } from "@/lib/api/auth";
 import { useCurrency } from "@/lib/CurrencyContext";
 import { toast } from "sonner";
 import { useTranslation } from "@/lib/api/translation";
@@ -34,6 +34,12 @@ interface Question {
 
 export default function Onboarding() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const targetQuestionParam = searchParams.get('question');
+  const targetStepParam = searchParams.get('step');
+  const returnToParam = searchParams.get('returnTo');
+  const isTargetedMode = Boolean(targetQuestionParam || (targetStepParam !== null && targetStepParam !== ''));
+
   const { user, loading: authLoading } = useAuth();
   const { t } = useTranslation();
   const { currencySymbol, exchangeRate, formatCurrency, formatNumber } = useCurrency();
@@ -237,6 +243,34 @@ export default function Onboarding() {
     });
   }, [questions]);
 
+  // Pre-load saved user onboarding responses so returning users never lose previous answers
+  useEffect(() => {
+    if (user?.id) {
+      getOnboardingResponses(user.id).then((saved) => {
+        if (saved) {
+          setResponses((prev: any) => ({ ...saved, ...prev }));
+        }
+      }).catch((err) => {
+        console.error("Error loading saved onboarding responses:", err);
+      });
+    }
+  }, [user?.id]);
+
+  // Jump straight to targeted question or step when specified in query parameters
+  useEffect(() => {
+    if (targetQuestionParam) {
+      const idx = questions.findIndex(q => q.key === targetQuestionParam);
+      if (idx !== -1) {
+        setCurrentStep(idx);
+      }
+    } else if (targetStepParam !== null && targetStepParam !== '' && !isNaN(Number(targetStepParam))) {
+      const stepNum = Number(targetStepParam);
+      if (stepNum >= 0 && stepNum < questions.length) {
+        setCurrentStep(stepNum);
+      }
+    }
+  }, [targetQuestionParam, targetStepParam, questions]);
+
   const [syncAttempted, setSyncAttempted] = useState(false);
   const [syncFailed, setSyncFailed] = useState(false);
 
@@ -249,7 +283,8 @@ export default function Onboarding() {
         // Check if profile exists, and sync if not
         getUserProfile(user.id).then(profile => {
           if (profile) {
-            if (profile.onboarding_completed && !isPreview) {
+            // Only redirect to dashboard if onboarding was completed AND we are not in targeted question mode
+            if (profile.onboarding_completed && !isPreview && !isTargetedMode) {
               router.push("/dashboard");
             }
           } else if (!syncAttempted) {
@@ -299,7 +334,15 @@ export default function Onboarding() {
       return saveOnboardingResponses(user!.id, payload);
     },
     onSuccess: () => {
-      router.push("/dashboard");
+      queryClient.invalidateQueries({ queryKey: ['active-budget'] });
+      queryClient.invalidateQueries({ queryKey: ['profile', user?.id] });
+      queryClient.invalidateQueries({ queryKey: ['onboarding-responses', user?.id] });
+      if (returnToParam) {
+        toast.success(t('responses_saved') || "Response saved successfully!");
+        router.push(returnToParam);
+      } else {
+        router.push("/dashboard");
+      }
     },
     onError: (error: any) => {
       console.error("Onboarding Save Error:", error);
@@ -331,6 +374,12 @@ export default function Onboarding() {
   }, [currentQuestion.imageAnimation]);
 
   const handleContinue = () => {
+    if (returnToParam) {
+      console.log("Submitting targeted onboarding response:", responses);
+      saveMutation.mutate(responses);
+      return;
+    }
+
     if (currentStep < questions.length - 1) {
       setCurrentStep(currentStep + 1);
     } else {
@@ -380,13 +429,19 @@ export default function Onboarding() {
             {t('step_of').replace('%s', (currentStep + 1).toString()).replace('%s', questions.length.toString())}
           </span>
           <button
-            onClick={handleBack}
-            className={`text-vic-blue text-sm font-medium underline transition-all duration-300 ${currentStep === 0
+            onClick={() => {
+              if (returnToParam) {
+                router.push(returnToParam);
+              } else {
+                handleBack();
+              }
+            }}
+            className={`text-vic-blue text-sm font-medium underline transition-all duration-300 ${currentStep === 0 && !returnToParam
               ? "opacity-0 pointer-events-none"
               : "opacity-100"
               }`}
           >
-            {t('back')}
+            {returnToParam ? (t('back') || 'Back') : t('back')}
           </button>
         </div>
         <div className="w-full bg-white/50 rounded-full h-2 overflow-hidden">
@@ -427,6 +482,16 @@ export default function Onboarding() {
 
         {/* Form Content */}
         <div className="flex flex-col flex-1 px-8 pt-10 pb-12 md:pb-16 max-w-2xl mx-auto w-full">
+          {isTargetedMode && (
+            <div className="mx-auto -mt-4 mb-6 px-4 py-1.5 bg-white/90 backdrop-blur-md rounded-full border border-vic-blue/20 text-vic-blue text-xs font-bold flex items-center gap-2 shadow-sm animate-in fade-in">
+              <Sparkles size={14} className="text-vic-blue shrink-0" />
+              <span>
+                {returnToParam?.includes('bud')
+                  ? (t('complete_budget_question_prompt') || "Set your weekly budget to personalize your budget dashboard")
+                  : (t('complete_missing_question_prompt') || "Complete this question to personalize your experience")}
+              </span>
+            </div>
+          )}
           <h1 className={`${textAnimationClass} text-vic-blue tracking-tight text-3xl sm:text-4xl font-bold leading-tight text-center pb-10 sm:pb-14`}>
             {currentQuestion.title}
           </h1>
@@ -524,7 +589,7 @@ export default function Onboarding() {
                 className="continue-btn flex cursor-pointer items-center justify-center overflow-hidden rounded-2xl h-16 px-8 w-full max-w-md bg-vic-blue hover:bg-vic-blue/90 text-white text-lg font-black leading-normal tracking-wide shadow-xl shadow-vic-blue/25 hover:shadow-2xl hover:-translate-y-0.5 transition-all active:scale-[0.98] disabled:opacity-50 mx-auto"
               >
                 <span className="truncate">
-                  {saveMutation.isPending ? "..." : currentStep === questions.length - 1 ? t('finish') : t('continue')}
+                  {saveMutation.isPending ? "..." : returnToParam ? (t('save_and_continue') || "Save & Continue") : currentStep === questions.length - 1 ? t('finish') : t('continue')}
                 </span>
               </button>
             )}

@@ -8,16 +8,18 @@ import { useTranslation } from "@/lib/api/translation";
 import { ArrowLeft, Wallet, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp } from "lucide-react";
 import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 
 // Zero-decimal currencies that should not show fractional amounts
 const ZERO_DECIMAL_CURRENCIES = ['IDR', 'JPY', 'KRW', 'VND', 'CLP', 'HUF'];
 
 export default function Budget() {
     const router = useRouter();
-    const { user } = useAuth();
+    const { user, loading: authLoading } = useAuth();
     const { t, formatDigits } = useTranslation();
     const { currencyCode: clientCurrency, countryCode: clientCountry } = useCurrency();
     const [showDiagnostics, setShowDiagnostics] = useState(false);
+    const [redirecting, setRedirecting] = useState(false);
 
     // Fetch active budget using deterministic BudgetEngine
     const { data: activeBudget, isLoading: budgetLoading, isError, refetch } = useQuery({
@@ -30,6 +32,24 @@ export default function Budget() {
         refetchOnMount: 'always',
         refetchOnWindowFocus: true,
     });
+
+    const isNeedsSetup = !authLoading && Boolean(user) && !budgetLoading && (!activeBudget || (activeBudget as any)?.needs_setup || isError);
+
+    // Whenever budget is missing due to skipped or incomplete onboarding, gently redirect to the question
+    useEffect(() => {
+        if (!authLoading && !user) {
+            router.push('/auth');
+            return;
+        }
+        if (isNeedsSetup && !redirecting) {
+            setRedirecting(true);
+            toast.info(t('redirecting_to_budget_question') || "Let's set your weekly budget to personalize your dashboard.");
+            const timer = setTimeout(() => {
+                router.replace('/onboarding?question=weekly_budget&returnTo=/budget');
+            }, 600);
+            return () => clearTimeout(timer);
+        }
+    }, [authLoading, user, isNeedsSetup, redirecting, router, t]);
 
     // Ensure App Router cache does not serve stale pages on client navigation
     useEffect(() => {
@@ -62,7 +82,7 @@ export default function Budget() {
         return `${symbol}${separator}${formatDigits(formattedNumber)}`;
     }, [activeBudget?.currency, activeBudget?.currencySymbol, formatDigits]);
 
-    if (budgetLoading) {
+    if (authLoading || (user && budgetLoading)) {
         return (
             <div className="flex items-center justify-center h-screen bg-white dark:bg-[#0d1418]">
                 <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-vic-green"></div>
@@ -83,11 +103,23 @@ export default function Budget() {
 
             <main className="flex-1 overflow-y-auto p-4 pb-20 custom-scrollbar">
                 
-                {isError || !activeBudget ? (
-                    <div className="bg-red-50 dark:bg-red-900/20 p-6 rounded-2xl mb-8 border border-red-100 dark:border-red-800">
-                        <AlertTriangle className="text-red-500 mb-2" />
-                        <h2 className="text-lg font-bold text-red-700 dark:text-red-400">{t('budget_profile_missing')}</h2>
-                        <p className="text-sm text-red-600 dark:text-red-300 mb-4">{t('budget_profile_missing_desc')}</p>
+                {isNeedsSetup ? (
+                    <div className="bg-white/80 dark:bg-slate-900/40 p-8 rounded-3xl mb-8 border border-slate-200/60 dark:border-slate-800 shadow-sm text-center flex flex-col items-center justify-center min-h-[300px] animate-in fade-in">
+                        <div className="size-16 rounded-2xl bg-vic-green/20 dark:bg-vic-green/10 text-vic-blue dark:text-vic-green flex items-center justify-center mb-4 shadow-sm">
+                            <Wallet className="size-8 animate-pulse" />
+                        </div>
+                        <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-2">
+                            {t('setting_up_budget') || "Personalizing Your Budget"}
+                        </h2>
+                        <p className="text-sm text-slate-600 dark:text-slate-300 max-w-sm mb-6 leading-relaxed">
+                            {t('redirecting_to_budget_question') || "Redirecting you to set your weekly budget so your daily allowance can be personalized..."}
+                        </p>
+                        <Link
+                            href="/onboarding?question=weekly_budget&returnTo=/budget"
+                            className="inline-flex items-center justify-center px-6 py-3 rounded-2xl bg-vic-blue text-white font-bold text-sm shadow-lg shadow-vic-blue/20 hover:bg-vic-blue/90 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                        >
+                            {t('set_weekly_budget') || "Set Weekly Budget"}
+                        </Link>
                     </div>
                 ) : (
                     <>

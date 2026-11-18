@@ -29,7 +29,7 @@ export const getBudgetStatus = async (userId: string, clientCurrency?: string, c
     
     const data = await res.json();
     if (data.needs_setup) {
-        return null;
+        return { needs_setup: true, missingField: 'weekly_budget' };
     }
     return data.summary;
 }
