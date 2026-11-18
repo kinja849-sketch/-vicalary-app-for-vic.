@@ -23,6 +23,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [session, setSession] = useState<Session | null>(null);
     const [profile, setProfile] = useState<any | null>(null);
     const [loading, setLoading] = useState(true);
+    const [initialCheckDone, setInitialCheckDone] = useState(false);
     const locationConfiguredUserRef = useRef<string | null>(null);
 
     // Initialize the Daily Spiritual Scheduler globally
@@ -32,13 +33,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     useDailySummaryTracker(user?.id ?? null);
 
     useEffect(() => {
+        let isMounted = true;
         // Check active sessions and sets the user
         const getInitialSession = async () => {
-            const { data: { session } } = await supabase.auth.getSession();
-            setSession(session);
-            setUser(session?.user ?? null);
-            if (!session) {
-                setLoading(false);
+            try {
+                const { data: { session } } = await supabase.auth.getSession();
+                if (!isMounted) return;
+                setSession(session);
+                setUser(session?.user ?? null);
+                if (!session) {
+                    setLoading(false);
+                }
+            } catch (err) {
+                console.error("Initial session error:", err);
+                if (isMounted) setLoading(false);
+            } finally {
+                if (isMounted) setInitialCheckDone(true);
             }
         };
 
@@ -46,6 +56,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         // Listen for changes on auth state (sign in, sign out, etc.)
         const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+            if (!isMounted) return;
             setSession(session);
             setUser(session?.user ?? null);
             if (!session) {
@@ -54,11 +65,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             }
         });
 
-        return () => subscription.unsubscribe();
+        return () => {
+            isMounted = false;
+            subscription.unsubscribe();
+        };
     }, []);
 
     // Listen for profile changes
     useEffect(() => {
+        if (!initialCheckDone) return;
+
         if (!user) {
             setProfile(null);
             setLoading(false);
@@ -135,7 +151,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return () => {
             profileSubscription.unsubscribe();
         };
-    }, [user]);
+    }, [user, initialCheckDone]);
 
     const signOut = async () => {
         await supabase.auth.signOut();

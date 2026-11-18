@@ -102,7 +102,7 @@ export class BudgetEngine {
     // ── 3. Query the authoritative ledger for the cycle ──
     const { data: transactions, error: txError } = await supabase
       .from('financial_transactions')
-      .select('amount, transaction_date, merchant_name')
+      .select('amount, currency, transaction_date, merchant_name')
       .eq('user_id', userId)
       .gte('transaction_date', startOfCycle.toISOString())
       .neq('reconciliation_status', 'merged');
@@ -112,13 +112,22 @@ export class BudgetEngine {
       throw new Error('Failed to calculate budget from ledger');
     }
 
-    // ── 4. Calculate monthly and daily expenditure ──
+    // ── 4. Calculate monthly and daily expenditure (normalized to active currency) ──
+    const isZeroDecimal = ['IDR', 'JPY', 'KRW', 'VND', 'CLP', 'HUF'].includes(currency);
     let spentThisMonth = 0;
     let spentToday = 0;
     const recentExpenses: Array<{ amount: number; merchant_name: string; transaction_date: string }> = [];
 
     for (const tx of transactions || []) {
-      const amt = Number(tx.amount);
+      const txRawAmt = Number(tx.amount);
+      const txCurr = ((tx as any).currency || currency).toUpperCase();
+      let amt = txRawAmt;
+
+      if (txCurr !== currency) {
+        const { rate: txRate } = await BudgetNormalizationService.getCrossRate(txCurr, currency);
+        amt = isZeroDecimal ? Math.round(txRawAmt * txRate) : Math.round(txRawAmt * txRate * 100) / 100;
+      }
+
       spentThisMonth += amt;
 
       const txDate = new Date(tx.transaction_date);

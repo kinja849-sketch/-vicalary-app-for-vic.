@@ -26,14 +26,14 @@ export default function Budget() {
         queryKey: ['active-budget', user?.id, clientCurrency],
         queryFn: () => getBudgetStatus(user!.id, clientCurrency, clientCountry),
         enabled: !!user?.id,
-        retry: false,
-        staleTime: 0,          // Always re-fetch on mount to get fresh data
-        gcTime: 0,             // Prevent keeping stale cached data between navigations
-        refetchOnMount: 'always',
-        refetchOnWindowFocus: true,
+        retry: 1,
+        staleTime: 30000,                  // Keep fresh for 30s before background refetch
+        gcTime: 1000 * 60 * 5,             // Retain cache in memory to prevent reload flicker/lag
+        refetchOnMount: 'always',          // Always ensure data is fresh on page load
+        refetchOnWindowFocus: true,        // Automatically update if user toggles VPN/network in another tab
     });
 
-    const isNeedsSetup = !authLoading && Boolean(user) && !budgetLoading && (!activeBudget || (activeBudget as any)?.needs_setup || isError);
+    const isNeedsSetup = !authLoading && Boolean(user) && !budgetLoading && Boolean((activeBudget as any)?.needs_setup);
 
     // Whenever budget is missing due to skipped or incomplete onboarding, gently redirect to the question
     useEffect(() => {
@@ -50,12 +50,6 @@ export default function Budget() {
             return () => clearTimeout(timer);
         }
     }, [authLoading, user, isNeedsSetup, redirecting, router, t]);
-
-    // Ensure App Router cache does not serve stale pages on client navigation
-    useEffect(() => {
-        router.refresh();
-        refetch();
-    }, [router, refetch]);
 
     /**
      * Format currency using the API-returned currency code (authoritative).
@@ -82,7 +76,7 @@ export default function Budget() {
         return `${symbol}${separator}${formatDigits(formattedNumber)}`;
     }, [activeBudget?.currency, activeBudget?.currencySymbol, formatDigits]);
 
-    if (authLoading || (user && budgetLoading)) {
+    if (authLoading || !user || budgetLoading) {
         return (
             <div className="flex items-center justify-center h-screen bg-white dark:bg-[#0d1418]">
                 <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-vic-green"></div>
@@ -103,7 +97,7 @@ export default function Budget() {
 
             <main className="flex-1 overflow-y-auto p-4 pb-20 custom-scrollbar">
                 
-                {isNeedsSetup ? (
+                {isNeedsSetup || !activeBudget ? (
                     <div className="bg-white/80 dark:bg-slate-900/40 p-8 rounded-3xl mb-8 border border-slate-200/60 dark:border-slate-800 shadow-sm text-center flex flex-col items-center justify-center min-h-[300px] animate-in fade-in">
                         <div className="size-16 rounded-2xl bg-vic-green/20 dark:bg-vic-green/10 text-vic-blue dark:text-vic-green flex items-center justify-center mb-4 shadow-sm">
                             <Wallet className="size-8 animate-pulse" />
@@ -124,7 +118,7 @@ export default function Budget() {
                 ) : (
                     <>
                         {/* 🚨 CRITICAL BUDGET EXCEEDED ALERT */}
-                        {activeBudget.spentToday > activeBudget.recommendedDailySpend && (
+                        {activeBudget?.spentToday > activeBudget?.recommendedDailySpend && (
                             <div className="bg-rose-500/15 border-2 border-rose-500/40 rounded-2xl p-5 mb-6 shadow-lg animate-in fade-in slide-in-from-top-2 flex items-start gap-4">
                                 <div className="size-11 rounded-2xl bg-rose-500/25 border border-rose-500/50 flex items-center justify-center text-rose-600 dark:text-rose-400 shrink-0 mt-0.5">
                                     <AlertTriangle className="size-6 text-rose-600 dark:text-rose-400 animate-pulse" />
@@ -172,37 +166,37 @@ export default function Budget() {
                             <div className="relative z-10">
                                 <div className="flex justify-between items-center mb-1">
                                     <p className="text-sm font-bold opacity-80 uppercase tracking-wider">{t('daily_budget_label')}</p>
-                                    <p className="text-xs font-semibold opacity-90">{activeBudget.currentDateStr}</p>
+                                    <p className="text-xs font-semibold opacity-90">{activeBudget?.currentDateStr}</p>
                                 </div>
                                 <h2 className="text-4xl font-black mb-6">
-                                    {formatBudgetCurrency(activeBudget.remainingToday)}
+                                    {formatBudgetCurrency(activeBudget?.remainingToday ?? 0)}
                                 </h2>
                                 
                                 <div className="grid grid-cols-2 gap-4">
                                     <div className="bg-white/20 p-3 rounded-xl backdrop-blur-sm">
                                         <p className="text-xs font-bold opacity-80 uppercase mb-1">{t('daily_allowance_label')}</p>
-                                        <p className="font-black text-lg">{formatBudgetCurrency(activeBudget.recommendedDailySpend)}</p>
+                                        <p className="font-black text-lg">{formatBudgetCurrency(activeBudget?.recommendedDailySpend ?? 0)}</p>
                                     </div>
                                     <div className="bg-white/20 p-3 rounded-xl backdrop-blur-sm">
                                         <p className="text-xs font-bold opacity-80 uppercase mb-1">{t('spent_today')}</p>
-                                        <p className="font-black text-lg">{formatBudgetCurrency(activeBudget.spentToday)}</p>
+                                        <p className="font-black text-lg">{formatBudgetCurrency(activeBudget?.spentToday ?? 0)}</p>
                                     </div>
                                 </div>
                                 
                                 <div className="mt-6 pt-4 border-t border-white/20">
                                     <div className="flex justify-between mb-2">
                                         <p className="text-xs font-bold opacity-80 uppercase">{t('monthly_cycle_overview')}</p>
-                                        <p className="text-xs font-bold opacity-80">{formatDigits(activeBudget.daysRemaining)} {t('days_left_cycle')}</p>
+                                        <p className="text-xs font-bold opacity-80">{formatDigits(activeBudget?.daysRemaining ?? 0)} {t('days_left_cycle')}</p>
                                     </div>
                                     <div className="w-full bg-white/30 h-2 rounded-full overflow-hidden mb-2">
                                         <div 
-                                            className={`h-full ${activeBudget.status === 'over_budget' ? 'bg-red-500' : 'bg-white'}`} 
-                                            style={{ width: `${Math.min(100, activeBudget.percentUsed)}%` }}
+                                            className={`h-full ${activeBudget?.status === 'over_budget' ? 'bg-red-500' : 'bg-white'}`} 
+                                            style={{ width: `${Math.min(100, activeBudget?.percentUsed ?? 0)}%` }}
                                         ></div>
                                     </div>
                                     <div className="flex justify-between text-xs font-bold opacity-90">
-                                        <span>{t('budget_spent')}: {formatBudgetCurrency(activeBudget.spentThisMonth)}</span>
-                                        <span>{t('budget_total')}: {formatBudgetCurrency(activeBudget.monthlyBudget)}</span>
+                                        <span>{t('budget_spent')}: {formatBudgetCurrency(activeBudget?.spentThisMonth ?? 0)}</span>
+                                        <span>{t('budget_total')}: {formatBudgetCurrency(activeBudget?.monthlyBudget ?? 0)}</span>
                                     </div>
                                 </div>
                             </div>

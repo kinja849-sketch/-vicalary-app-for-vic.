@@ -22,95 +22,111 @@ export async function GET(request: Request) {
 
         const supabase = createAdminSupabaseClient();
 
-        // ── 1. Authoritative User Preference Resolution ──
-        // Check user_settings first (persisted user choice), then request headers
-        const { data: userSettings } = await supabase
-            .from('user_settings')
-            .select('currency, country_code')
-            .eq('user_id', user.id)
-            .maybeSingle();
-
+        // ── 1. Authoritative Currency & Country Resolution ──
+        // Priority 1: Client request headers (live IP detection or manual user override)
+        // Priority 2: Edge server request IP geolocation
+        // Priority 3: Persisted user_settings fallback
+        // Priority 4: Universal fallback (US / USD)
         const clientHeaderCurrency = request.headers.get('x-user-currency');
         const clientHeaderCountry = request.headers.get('x-user-country');
 
         let geo: GeoContext;
 
-        if (userSettings?.currency) {
-            const curr = userSettings.currency;
-            const country = userSettings.country_code || clientHeaderCountry || 'US';
+        if (clientHeaderCurrency) {
+            const country = clientHeaderCountry || 'US';
             geo = {
                 countryCode: country,
-                currencyCode: curr,
-                currencySymbol: BudgetNormalizationService.getCurrencySymbol(curr),
-            };
-        } else if (clientHeaderCurrency) {
-            geo = {
-                countryCode: clientHeaderCountry || 'US',
                 currencyCode: clientHeaderCurrency,
                 currencySymbol: BudgetNormalizationService.getCurrencySymbol(clientHeaderCurrency),
             };
         } else {
-            // ── 2. Fall back to IP Geolocation if no user setting or header exists ──
+            // ── 2. Fall back to Edge IP Geolocation if client headers are omitted ──
             const clientIp = request.headers.get('x-real-ip') || 
                 request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 
-                request.headers.get('cf-connecting-ip') || 
-                '8.8.8.8';
+                request.headers.get('cf-connecting-ip');
 
-            geo = {
-                countryCode: 'US',
-                currencyCode: 'USD',
-                currencySymbol: '$',
-            };
-            
-            try {
-                const { data: cachedGeo } = await supabase
-                  .from('ip_location_cache')
-                  .select('*')
-                  .eq('ip_address', clientIp)
-                  .single();
+            let detectedFromIp = false;
 
-                if (cachedGeo && new Date(cachedGeo.expires_at) > new Date()) {
+            if (clientIp && clientIp !== '127.0.0.1' && clientIp !== '::1') {
+                try {
+                    const { data: cachedGeo } = await supabase
+                      .from('ip_location_cache')
+                      .select('*')
+                      .eq('ip_address', clientIp)
+                      .single();
+
+                    if (cachedGeo && new Date(cachedGeo.expires_at) > new Date()) {
+                        geo = {
+                            countryCode: cachedGeo.country_code || 'US',
+                            currencyCode: cachedGeo.currency_code || 'USD',
+                            currencySymbol: BudgetNormalizationService.getCurrencySymbol(cachedGeo.currency_code || 'USD'),
+                        };
+                        detectedFromIp = true;
+                    } else {
+                        const geoApiKey = process.env.IPGEOLOCATION_API_KEY || process.env.NEXT_PUBLIC_IPGEO_API_KEY || '673294bd8a6549a3aa58e727e4e1a069';
+                        const geoRes = await fetch(`https://api.ipgeolocation.io/ipgeo?apiKey=${geoApiKey}&ip=${clientIp}`);
+                        if (geoRes.ok) {
+                            const data = await geoRes.json();
+                            const currencyCode = data.currency?.code || 'USD';
+                            geo = {
+                                countryCode: data.country_code2 || 'US',
+                                currencyCode,
+                                currencySymbol: BudgetNormalizationService.getCurrencySymbol(currencyCode),
+                            };
+                            detectedFromIp = true;
+                            
+                            await supabase.from('ip_location_cache').upsert({
+                                ip_address: clientIp,
+                                country_code: geo.countryCode,
+                                country_name: data.country_name || 'United States',
+                                city: data.city || data.state_prov || 'Unknown',
+                                currency_code: geo.currencyCode,
+                                currency_symbol: geo.currencySymbol,
+                                expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+                            }, { onConflict: 'ip_address' });
+                        }
+                    }
+
+                    if (detectedFromIp && geo!) {
+                        const { data: currencyMap } = await supabase
+                          .from('country_currency_map')
+                          .select('currency_code, currency_symbol')
+                          .eq('country_code', geo.countryCode)
+                          .maybeSingle();
+
+                        if (currencyMap?.currency_code) {
+                            geo.currencyCode = currencyMap.currency_code;
+                            geo.currencySymbol = currencyMap.currency_symbol || BudgetNormalizationService.getCurrencySymbol(currencyMap.currency_code);
+                        }
+                    }
+                } catch (geoError) {
+                    console.error("[Budget API] Failed to detect IP geo:", geoError);
+                }
+            }
+
+            // ── 3. Fall back to user_settings if IP detection did not succeed ──
+            if (!detectedFromIp) {
+                const { data: userSettings } = await supabase
+                    .from('user_settings')
+                    .select('currency, country_code')
+                    .eq('user_id', user.id)
+                    .maybeSingle();
+
+                if (userSettings?.currency) {
+                    const curr = userSettings.currency;
+                    const country = userSettings.country_code || 'US';
                     geo = {
-                        countryCode: cachedGeo.country_code || 'US',
-                        currencyCode: cachedGeo.currency_code || 'USD',
-                        currencySymbol: BudgetNormalizationService.getCurrencySymbol(cachedGeo.currency_code || 'USD'),
+                        countryCode: country,
+                        currencyCode: curr,
+                        currencySymbol: BudgetNormalizationService.getCurrencySymbol(curr),
                     };
                 } else {
-                    const geoApiKey = process.env.IPGEOLOCATION_API_KEY || process.env.NEXT_PUBLIC_IPGEO_API_KEY || '673294bd8a6549a3aa58e727e4e1a069';
-                    const geoRes = await fetch(`https://api.ipgeolocation.io/ipgeo?apiKey=${geoApiKey}&ip=${clientIp}`);
-                    if (geoRes.ok) {
-                        const data = await geoRes.json();
-                        const currencyCode = data.currency?.code || 'USD';
-                        geo = {
-                            countryCode: data.country_code2 || 'US',
-                            currencyCode,
-                            currencySymbol: BudgetNormalizationService.getCurrencySymbol(currencyCode),
-                        };
-                        
-                        await supabase.from('ip_location_cache').upsert({
-                            ip_address: clientIp,
-                            country_code: geo.countryCode,
-                            country_name: data.country_name || 'United States',
-                            city: data.city || data.state_prov || 'Unknown',
-                            currency_code: geo.currencyCode,
-                            currency_symbol: geo.currencySymbol,
-                            expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-                        }, { onConflict: 'ip_address' });
-                    }
+                    geo = {
+                        countryCode: 'US',
+                        currencyCode: 'USD',
+                        currencySymbol: '$',
+                    };
                 }
-
-                const { data: currencyMap } = await supabase
-                  .from('country_currency_map')
-                  .select('currency_code, currency_symbol')
-                  .eq('country_code', geo.countryCode)
-                  .maybeSingle();
-
-                if (currencyMap?.currency_code) {
-                    geo.currencyCode = currencyMap.currency_code;
-                    geo.currencySymbol = currencyMap.currency_symbol || BudgetNormalizationService.getCurrencySymbol(currencyMap.currency_code);
-                }
-            } catch (geoError) {
-                console.error("[Budget API] Failed to detect IP geo:", geoError);
             }
         }
 

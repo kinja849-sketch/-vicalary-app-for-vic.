@@ -76,6 +76,19 @@ export const CurrencyProvider = ({ children }: { children: ReactNode }) => {
             // 2. Fall back to automatic IP detection
             fetchGeoLocation();
         }
+
+        // 3. Listen for window focus / visibility to dynamically detect VPN / IP network changes
+        const handleFocus = () => {
+            const override = localStorage.getItem('currency_override');
+            if (!override) {
+                fetchGeoLocation();
+            }
+        };
+
+        window.addEventListener('focus', handleFocus);
+        return () => {
+            window.removeEventListener('focus', handleFocus);
+        };
     }, []);
 
     const setManualOverride = (country: string, currency: string, symbol: string) => {

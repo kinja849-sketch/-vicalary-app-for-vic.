@@ -46,174 +46,135 @@ const CURRENCY_SYMBOLS: Record<string, string> = {
   KRW: '₩', MYR: 'RM', THB: '฿', PHP: '₱', SGD: 'S$',
   KES: 'KSh', SOS: 'Sh', NGN: '₦', EGP: 'E£', HUF: 'Ft',
   CLP: '$', ARS: '$', MXN: '$', COP: '$', PEN: 'S/',
+  CAD: 'CA$', AUD: 'A$', NZD: 'NZ$', CHF: 'CHF',
 };
 
-/**
- * The maximum raw monthly value (after weekly*4.33 conversion) that could
- * plausibly be a legacy USD onboarding amount. The old onboarding slider
- * had a USD max of ~$500/week ≈ $2165/month. Values above this threshold
- * are assumed to already be in local currency.
- */
-const LEGACY_USD_MONTHLY_CEILING = 2500;
+// Currencies that do not use fractional/decimal sub-units
+const ZERO_DECIMAL_CURRENCIES = ['IDR', 'JPY', 'KRW', 'VND', 'CLP', 'HUF'];
 
-/**
- * Minimum plausible localized monthly budget for non-USD high-exchange-rate
- * currencies. If the value is below this AND the target currency has a rate
- * > 10 vs USD, it's almost certainly a legacy USD amount.
- */
-const LOW_VALUE_THRESHOLD = 1000;
+// Static fallback rates (USD base) to guarantee 100% offline and API-resilient calculations
+const FALLBACK_RATES_USD_BASE: Record<string, number> = {
+  USD: 1,
+  IDR: 15650,
+  EUR: 0.92,
+  GBP: 0.79,
+  JPY: 155,
+  INR: 84.4,
+  BDT: 119.5,
+  PKR: 278,
+  CNY: 7.24,
+  RUB: 99.5,
+  BRL: 5.75,
+  VND: 25400,
+  TRY: 34.5,
+  SAR: 3.75,
+  AED: 3.67,
+  KRW: 1395,
+  MYR: 4.47,
+  THB: 34.8,
+  PHP: 58.8,
+  SGD: 1.34,
+  CAD: 1.40,
+  AUD: 1.54,
+  NZD: 1.70,
+  CHF: 0.88,
+  KES: 129.5,
+  SOS: 571,
+  NGN: 1675,
+  EGP: 49.3,
+  HUF: 386,
+  CLP: 975,
+  ARS: 1000,
+  MXN: 20.4,
+  COP: 4400,
+  PEN: 3.78,
+};
+
+let cachedRates: Record<string, number> | null = null;
+let cachedRatesTimestamp = 0;
+const RATES_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 export class BudgetNormalizationService {
-
   /**
-   * Determines whether an onboarding budget value is a legacy USD amount
-   * that needs conversion to the user's local currency.
-   *
-   * Logic:
-   * 1. If the budget profile is already marked `is_normalized`, return false.
-   * 2. If the target currency IS USD, no conversion needed.
-   * 3. If the monthly amount is small (< LEGACY_USD_MONTHLY_CEILING) and
-   *    the target currency typically has high exchange rates (IDR, VND, KRW, etc.),
-   *    it's almost certainly a legacy USD value.
+   * Legacy helper retained for backwards compatibility with diagnostics routes.
    */
   static isLegacyUsdBudget(
     monthlyAmount: number,
     targetCurrencyCode: string,
     isAlreadyNormalized: boolean | null | undefined
   ): boolean {
-    // Already normalized — never re-convert
     if (isAlreadyNormalized === true) return false;
-
-    // If target is USD, no conversion needed
     if (targetCurrencyCode === 'USD') return false;
-
-    // If the monthly amount is suspiciously small for a non-USD currency,
-    // it's likely a legacy USD value. The current localized onboarding slider
-    // for IDR starts at ~Rp320,000/week = ~Rp1,385,600/month minimum.
-    // A legacy USD value of $500/week would be ~$2165/month max.
-    if (monthlyAmount > 0 && monthlyAmount < LEGACY_USD_MONTHLY_CEILING) {
-      return true;
-    }
-
-    return false;
+    return monthlyAmount > 0 && monthlyAmount < 2500;
   }
 
   /**
-   * Fetches a live exchange rate from USD to targetCurrency using
-   * the open.er-api.com free API.
-   *
-   * Returns null if the rate cannot be fetched (caller must handle gracefully).
+   * Fetches latest exchange rate for a single currency relative to USD.
    */
-  static async fetchExchangeRate(
-    targetCurrencyCode: string
-  ): Promise<{ rate: number; source: string; retrievedAt: string } | null> {
+  static async fetchExchangeRate(targetCurrencyCode: string): Promise<{ rate: number; source: string; retrievedAt: string } | null> {
+    const { rate, source } = await this.getCrossRate('USD', targetCurrencyCode);
+    return { rate, source, retrievedAt: new Date().toISOString() };
+  }
+
+  /**
+   * Retrieves latest currency rates relative to USD with memory caching
+   * and fallback to static market rates.
+   */
+  static async getExchangeRates(): Promise<{ rates: Record<string, number>; source: string }> {
+    if (cachedRates && Date.now() - cachedRatesTimestamp < RATES_CACHE_TTL_MS) {
+      return { rates: cachedRates, source: 'open.er-api.com (cache)' };
+    }
     try {
       const res = await fetch('https://open.er-api.com/v6/latest/USD', {
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(4000),
       });
-      if (!res.ok) {
-        console.error('[BudgetNormalization] Exchange rate API returned', res.status);
-        return null;
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.rates && typeof data.rates === 'object') {
+          cachedRates = { ...FALLBACK_RATES_USD_BASE, ...data.rates };
+          cachedRatesTimestamp = Date.now();
+          return { rates: cachedRates, source: 'open.er-api.com' };
+        }
       }
-      const data = await res.json();
-      const rate = data?.rates?.[targetCurrencyCode];
-      if (!rate || typeof rate !== 'number' || rate <= 0) {
-        console.error('[BudgetNormalization] No valid rate found for', targetCurrencyCode);
-        return null;
-      }
-      return {
-        rate,
-        source: 'open.er-api.com',
-        retrievedAt: new Date().toISOString(),
-      };
     } catch (err) {
-      console.error('[BudgetNormalization] Exchange rate fetch failed:', err);
-      return null;
+      console.warn('[BudgetNormalization] Failed to fetch live exchange rates, using fallback table:', err);
     }
+    return { rates: FALLBACK_RATES_USD_BASE, source: 'fallback_table' };
   }
 
   /**
-   * Converts a USD amount to the target currency using a live exchange rate.
+   * Calculates the cross exchange rate from any source currency to any target currency:
+   * Rate(source -> target) = Rate_USD(target) / Rate_USD(source)
    */
-  static async normalizeToLocalCurrency(
-    amountUsd: number,
-    targetCurrencyCode: string,
-    dailyAllowanceUsd?: number
-  ): Promise<NormalizationResult> {
-    const symbol = CURRENCY_SYMBOLS[targetCurrencyCode] || '$';
-    const isZeroDecimal = ['IDR', 'JPY', 'KRW', 'VND', 'CLP', 'HUF'].includes(targetCurrencyCode);
-    const rawDaily = dailyAllowanceUsd !== undefined ? dailyAllowanceUsd : amountUsd / 30;
-
-    if (targetCurrencyCode === 'USD') {
-      return {
-        monthlyBudget: Math.round(amountUsd * 100) / 100,
-        dailyAllowance: Math.round(rawDaily * 100) / 100,
-        currency: 'USD',
-        currencySymbol: '$',
-        wasConverted: false,
-        originalAmount: null,
-        originalCurrency: null,
-        exchangeRate: null,
-        exchangeRateSource: null,
-        error: null,
-      };
+  static async getCrossRate(
+    sourceCurrency: string,
+    targetCurrency: string
+  ): Promise<{ rate: number; source: string }> {
+    const src = (sourceCurrency || 'USD').toUpperCase();
+    const tgt = (targetCurrency || 'USD').toUpperCase();
+    if (src === tgt) {
+      return { rate: 1, source: 'identity' };
     }
-
-    const rateResult = await this.fetchExchangeRate(targetCurrencyCode);
-    if (!rateResult) {
-      return {
-        monthlyBudget: Math.round(amountUsd * 100) / 100,
-        dailyAllowance: Math.round(rawDaily * 100) / 100,
-        currency: 'USD',
-        currencySymbol: '$',
-        wasConverted: false,
-        originalAmount: amountUsd,
-        originalCurrency: 'USD',
-        exchangeRate: null,
-        exchangeRateSource: null,
-        error: `Failed to fetch exchange rate for ${targetCurrencyCode}. Budget kept in USD to prevent incorrect display.`,
-      };
-    }
-
-    const convertedMonthly = isZeroDecimal 
-      ? Math.round(amountUsd * rateResult.rate)
-      : Math.round(amountUsd * rateResult.rate * 100) / 100;
-
-    const convertedDaily = isZeroDecimal
-      ? Math.round(rawDaily * rateResult.rate)
-      : Math.round(rawDaily * rateResult.rate * 100) / 100;
-
-    console.log(
-      `[BudgetNormalization] Converted $${amountUsd} USD → ${symbol}${convertedMonthly.toLocaleString()} ${targetCurrencyCode} (rate: ${rateResult.rate})`
-    );
-
-    return {
-      monthlyBudget: convertedMonthly,
-      dailyAllowance: convertedDaily,
-      currency: targetCurrencyCode,
-      currencySymbol: symbol,
-      wasConverted: true,
-      originalAmount: amountUsd,
-      originalCurrency: 'USD',
-      exchangeRate: rateResult.rate,
-      exchangeRateSource: rateResult.source,
-      error: null,
-    };
+    const { rates, source } = await this.getExchangeRates();
+    const srcRate = rates[src] || FALLBACK_RATES_USD_BASE[src] || 1;
+    const tgtRate = rates[tgt] || FALLBACK_RATES_USD_BASE[tgt] || 1;
+    const crossRate = tgtRate / srcRate;
+    return { rate: crossRate, source };
   }
 
   /**
-   * Full pipeline: reads onboarding, detects legacy format, converts if needed,
-   * persists to user_budget_profiles with full metadata.
-   *
-   * Returns the final monthly budget and currency, or null if no budget data exists.
+   * Full pipeline: reads the user's canonical onboarding budget plan,
+   * determines its source currency, and accurately calculates the monthly budget
+   * and daily allowance in the target country's currency.
    */
   static async createOrNormalizeBudgetProfile(
     userId: string,
     geo: GeoContext
   ): Promise<NormalizationResult | null> {
     const supabase = createAdminSupabaseClient();
-    const isZeroDecimal = ['IDR', 'JPY', 'KRW', 'VND', 'CLP', 'HUF'].includes(geo.currencyCode);
-    const symbol = CURRENCY_SYMBOLS[geo.currencyCode] || '$';
+    const targetCurrency = (geo.currencyCode || 'USD').toUpperCase();
+    const isZeroDecimal = ZERO_DECIMAL_CURRENCIES.includes(targetCurrency);
+    const symbol = CURRENCY_SYMBOLS[targetCurrency] || geo.currencySymbol || '$';
 
     // 1. Fetch onboarding responses (primary source of truth for budget)
     const { data: onboarding } = await supabase
@@ -233,75 +194,106 @@ export class BudgetNormalizationService {
       .limit(1)
       .maybeSingle();
 
+    // 3. Fetch user settings for original currency context if needed
+    const { data: userSettings } = await supabase
+      .from('user_settings')
+      .select('currency, country_code')
+      .eq('user_id', userId)
+      .maybeSingle();
+
     if (!onboarding && !existingProfile) {
       console.warn(`[BudgetNormalization] No budget data found for user ${userId}`);
       return null;
     }
 
-    // The user's direct onboarding budget input
-    const rawBudgetInput = (onboarding?.budget != null && Number(onboarding.budget) > 0)
-      ? Number(onboarding.budget)
-      : ((onboarding?.weekly_budget != null && Number(onboarding.weekly_budget) > 0)
-          ? Number(onboarding.weekly_budget)
-          : Number(existingProfile?.monthly_budget || 0));
+    // High-denomination currencies where typical grocery budgets are strictly > 1,000 units
+    const HIGH_DENOMINATION_CURRENCIES = ['IDR', 'VND', 'KRW', 'JPY', 'KES', 'CLP', 'HUF', 'COP', 'NGN'];
 
-    if (rawBudgetInput <= 0) {
+    // Determine the user's raw budget input and its original source currency
+    let rawWeeklyBudget = 0;
+    let rawMonthlyBudget = 0;
+    let sourceCurrency = 'USD';
+
+    if (onboarding?.weekly_budget != null && Number(onboarding.weekly_budget) > 0) {
+      const weeklyVal = Number(onboarding.weekly_budget);
+      rawWeeklyBudget = weeklyVal;
+      rawMonthlyBudget = weeklyVal * 4.33;
+
+      if (weeklyVal <= 1000) {
+        // Value was selected on the standard onboarding slider scale ($20-$500/week in USD)
+        // Even if existingProfile or userSettings was set to IDR/KES, 49 cannot be 49 IDR (0.3 cents) or 49 KRW.
+        sourceCurrency = 'USD';
+      } else {
+        // High denomination currency input (e.g. 1,248,660 IDR or 5,200 KES)
+        sourceCurrency = (userSettings?.currency || existingProfile?.currency || 'IDR').toUpperCase();
+      }
+    } else if (onboarding?.budget != null && Number(onboarding.budget) > 0) {
+      const monthlyVal = Number(onboarding.budget);
+      rawMonthlyBudget = monthlyVal;
+      rawWeeklyBudget = monthlyVal / 4.33;
+
+      if (monthlyVal <= 1500) {
+        sourceCurrency = 'USD';
+      } else {
+        sourceCurrency = (userSettings?.currency || existingProfile?.currency || 'IDR').toUpperCase();
+      }
+    } else if (existingProfile?.monthly_budget != null && Number(existingProfile.monthly_budget) > 0) {
+      const existingMonthly = Number(existingProfile.monthly_budget);
+      sourceCurrency = (existingProfile.currency || userSettings?.currency || 'USD').toUpperCase();
+      
+      // If marked as high-denomination currency (e.g. IDR) but the number is <= 1000,
+      // that profile was corrupted by an inverted rate calculation; treat base as USD.
+      if (HIGH_DENOMINATION_CURRENCIES.includes(sourceCurrency) && existingMonthly <= 1000) {
+        sourceCurrency = 'USD';
+      }
+      rawMonthlyBudget = existingMonthly;
+      rawWeeklyBudget = rawMonthlyBudget / 4.33;
+    }
+
+    if (rawMonthlyBudget <= 0) {
       console.warn(`[BudgetNormalization] Neither weekly nor monthly budget specified for user ${userId}`);
       return null;
     }
 
-    // The monthly cycle total directly reflects the user's onboarding response
-    const rawMonthly = rawBudgetInput;
-    // The daily allowance is the daily amount the user is permitted to spend to stay within their monthly cycle total
-    const rawDailyAllowance = rawBudgetInput / 30;
+    // Calculate cross exchange rate from sourceCurrency to targetCurrency
+    const { rate: crossRate, source: rateSource } = await this.getCrossRate(sourceCurrency, targetCurrency);
+    const wasConverted = sourceCurrency !== targetCurrency;
 
-    // Detect if this is a legacy USD value (e.g. old USD values like 117 or 200 that need conversion to local currency)
-    const isLegacy = this.isLegacyUsdBudget(rawMonthly, geo.currencyCode, false);
-    let result: NormalizationResult;
+    // Convert weekly budget to target currency
+    const convertedWeekly = rawWeeklyBudget * crossRate;
+    const convertedMonthly = rawMonthlyBudget * crossRate;
+    const convertedDaily = convertedWeekly / 7;
 
-    if (isLegacy) {
-      result = await this.normalizeToLocalCurrency(rawMonthly, geo.currencyCode, rawDailyAllowance);
-    } else {
-      const finalMonthly = isZeroDecimal ? Math.round(rawMonthly) : Math.round(rawMonthly * 100) / 100;
-      const finalDaily = isZeroDecimal ? Math.round(rawDailyAllowance) : Math.round(rawDailyAllowance * 100) / 100;
+    const finalMonthly = isZeroDecimal ? Math.round(convertedMonthly) : Math.round(convertedMonthly * 100) / 100;
+    const finalDaily = isZeroDecimal ? Math.round(convertedDaily) : Math.round(convertedDaily * 100) / 100;
 
-      result = {
-        monthlyBudget: finalMonthly,
-        dailyAllowance: finalDaily,
-        currency: geo.currencyCode,
-        currencySymbol: symbol,
-        wasConverted: false,
-        originalAmount: null,
-        originalCurrency: null,
-        exchangeRate: null,
-        exchangeRateSource: null,
-        error: null,
-      };
-    }
+    console.log(`[BudgetNormalization] User ${userId}: plan ${rawWeeklyBudget} ${sourceCurrency}/wk -> ${finalDaily}/day (${finalMonthly}/mo ${targetCurrency}) via rate ${crossRate} (${rateSource})`);
 
-    // Persist to user_budget_profiles safely without failing on missing columns or constraints
+    const result: NormalizationResult = {
+      monthlyBudget: finalMonthly,
+      dailyAllowance: finalDaily,
+      currency: targetCurrency,
+      currencySymbol: symbol,
+      wasConverted,
+      originalAmount: rawMonthlyBudget,
+      originalCurrency: sourceCurrency,
+      exchangeRate: crossRate,
+      exchangeRateSource: rateSource,
+      error: null,
+    };
+
+    // Ensure user_budget_profiles has an initial record if none exists
     try {
-      if (existingProfile) {
-        await supabase
-          .from('user_budget_profiles')
-          .update({
-            monthly_budget: result.monthlyBudget,
-            currency: result.currency,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', existingProfile.id);
-        console.log(`[BudgetNormalization] Updated existing profile ${existingProfile.id}: ${result.currencySymbol}${result.monthlyBudget} ${result.currency}`);
-      } else {
+      if (!existingProfile) {
         await supabase
           .from('user_budget_profiles')
           .insert({
             user_id: userId,
-            monthly_budget: result.monthlyBudget,
-            currency: result.currency,
+            monthly_budget: finalMonthly,
+            currency: targetCurrency,
             budget_source: 'onboarding',
             updated_at: new Date().toISOString(),
           });
-        console.log(`[BudgetNormalization] Created budget profile: ${result.currencySymbol}${result.monthlyBudget} ${result.currency}`);
       }
     } catch (persistErr) {
       console.error('[BudgetNormalization] Non-fatal persistence error in user_budget_profiles:', persistErr);
@@ -314,6 +306,6 @@ export class BudgetNormalizationService {
    * Returns the currency symbol for a given ISO currency code.
    */
   static getCurrencySymbol(currencyCode: string): string {
-    return CURRENCY_SYMBOLS[currencyCode] || '$';
+    return CURRENCY_SYMBOLS[(currencyCode || 'USD').toUpperCase()] || '$';
   }
 }

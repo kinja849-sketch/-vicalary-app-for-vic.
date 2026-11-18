@@ -107,13 +107,15 @@ export const countryToCurrencyMap: Record<string, { code: string, symbol: string
 
 export const detectLocation = async (forceRefresh = false): Promise<LocationData | null> => {
   const CACHE_KEY = 'vicalary_location_v4';
-  if (!forceRefresh && typeof window !== 'undefined') {
+  let cachedData: LocationData | null = null;
+
+  if (typeof window !== 'undefined') {
     const cached = localStorage.getItem(CACHE_KEY);
     if (cached) {
       try {
         const { data, timestamp } = JSON.parse(cached);
-        if (data && data.method !== 'FALLBACK' && Date.now() - timestamp < 24 * 60 * 60 * 1000) {
-          return { ...data, method: 'CACHE' };
+        if (data && data.method !== 'FALLBACK' && (!timestamp || Date.now() - timestamp < 24 * 60 * 60 * 1000)) {
+          cachedData = { ...data, method: 'CACHE' };
         }
       } catch (_e) {
         localStorage.removeItem(CACHE_KEY);
@@ -121,14 +123,15 @@ export const detectLocation = async (forceRefresh = false): Promise<LocationData
     }
   }
 
+  // If pending request exists, reuse it
   if (pendingRequest) return pendingRequest;
 
   pendingRequest = (async () => {
     try {
-      // Primary: geojs.io (unlimited, fast)
+      // Primary: geojs.io (unlimited, fast, CORS-friendly)
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3500);
+        const timeoutId = setTimeout(() => controller.abort(), 2500);
         const res = await fetch('https://get.geojs.io/v1/ip/geo.json', { signal: controller.signal });
         clearTimeout(timeoutId);
         if (res.ok) {
@@ -160,13 +163,13 @@ export const detectLocation = async (forceRefresh = false): Promise<LocationData
           }
         }
       } catch (e) {
-        console.log("[Location] geojs.io failed.");
+        console.log("[Location] geojs.io fetch timed out or failed, trying fallback.");
       }
 
       // Secondary: ipwho.is
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3500);
+        const timeoutId = setTimeout(() => controller.abort(), 2500);
         const res = await fetch('https://ipwho.is/', { signal: controller.signal });
         clearTimeout(timeoutId);
         if (res.ok) {
@@ -198,46 +201,15 @@ export const detectLocation = async (forceRefresh = false): Promise<LocationData
           }
         }
       } catch (e) {
-        console.log("[Location] ipwho.is failed (likely offline).");
+        console.log("[Location] ipwho.is failed.");
       }
 
-      // Secondary: ipapi.co
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3500);
-        const res = await fetch('https://ipapi.co/json/', { signal: controller.signal });
-        clearTimeout(timeoutId);
-        if (res.ok) {
-          const data = await res.json();
-          const countryCode = (data.country_code || 'US').toUpperCase();
-          const currencyInfo = countryToCurrencyMap[countryCode] || { code: 'USD', symbol: '$' };
-          const langInfo = countryToLangMap[countryCode] || ['en'];
-
-          const result: LocationData = {
-            ip: data.ip || undefined,
-            country_code: countryCode,
-            country_name: data.country_name || 'United States',
-            city: data.city || 'Unknown',
-            timezone: data.timezone || 'UTC',
-            flag: `https://flagcdn.com/w80/${countryCode.toLowerCase()}.png`,
-            currency: data.currency || currencyInfo.code,
-            currency_symbol: currencyInfo.symbol,
-            languages: data.languages ? data.languages.split(',') : langInfo,
-            method: 'EDGE',
-            latitude: typeof data.latitude === 'number' ? data.latitude : undefined,
-            longitude: typeof data.longitude === 'number' ? data.longitude : undefined
-          };
-          
-          if (typeof window !== 'undefined') {
-             localStorage.setItem(CACHE_KEY, JSON.stringify({ data: result, timestamp: Date.now() }));
-          }
-          return result;
-        }
-      } catch (e) {
-        console.log("[Location] ipapi.co failed (likely offline).");
+      // If network requests failed but we have a valid cached location, use it
+      if (cachedData) {
+        return cachedData;
       }
 
-      // Fallback
+      // Final fallback
       return {
         country_code: 'US',
         country_name: 'United States',
