@@ -7,8 +7,9 @@ const COACH_ID = '00000000-0000-0000-0000-000000000001'
 export interface DailySummaryResult {
   success: boolean
   alreadySent?: boolean
+  unavailable?: boolean
   date: string
-  summary?: string
+  summary?: string | null
   conversationId?: string
   hasActivity?: boolean
   error?: string
@@ -216,18 +217,33 @@ INSTRUCTIONS:
 5. LANGUAGE MANDATE: You MUST write your entire response fluently in language code: '${userLang}'. Do NOT write in English unless language code is 'en'.`
   }
 
-  const aiRes = await callChatCompletionWithFallback({
-    model: 'gpt-4o',
-    messages: [
-      {
-        role: 'system',
-        content: 'You are the empathetic, science-grounded Health Coach for the VicCalary application. Speak warmly, clearly, and concisely without hallucinating unprovided facts.',
-      },
-      { role: 'user', content: prompt },
-    ],
-    temperature: 0.7,
-    max_tokens: 350,
-  })
+  let aiRes
+  try {
+    aiRes = await callChatCompletionWithFallback({
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are the empathetic, science-grounded Health Coach for the VicCalary application. Speak warmly, clearly, and concisely without hallucinating unprovided facts.',
+        },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.7,
+      max_tokens: 350,
+    })
+  } catch (aiErr: any) {
+    // AI providers unavailable (quota/outage): do not persist a canned message in the wrong language;
+    // report a typed "unavailable" state so a later request can generate the real summary.
+    console.warn('[daily-summary] AI unavailable, skipping summary generation:', aiErr?.message || aiErr)
+    return {
+      success: false,
+      unavailable: true,
+      summary: null,
+      date: queryDate,
+      hasActivity,
+      conversationId: coachConvId,
+    }
+  }
 
   let summaryText = aiRes.choices[0]?.message?.content || 'Here is your daily health coach reflection. Great job on your journey today!'
   summaryText = summaryText.replace(/[*#]/g, '').trim()

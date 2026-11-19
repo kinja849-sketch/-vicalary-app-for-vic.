@@ -57,6 +57,7 @@ export default function Camera({ initialMode }: CameraProps = {}) {
   const zxingReaderRef = useRef<any>(null);
   const barcodeDetectorRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const isStartingCameraRef = useRef<boolean>(false);
 
   // Initialize BarcodeDetector and ZXing singleton reader once
   useEffect(() => {
@@ -106,6 +107,7 @@ export default function Camera({ initialMode }: CameraProps = {}) {
     const activeUserId = user?.id || userId || 'anon';
 
     setIsAnalyzing(true);
+    stopCamera(); // Cleanly suspend camera hardware while analyzing gallery image
     const imageUrl = URL.createObjectURL(file);
     setCapturedImage(imageUrl);
 
@@ -158,7 +160,26 @@ export default function Camera({ initialMode }: CameraProps = {}) {
         setLatestAnalysis(fullResult);
         addNotification('success', "Product analysis complete!");
       } else {
-        const result = await analyzeFoodImage(activeUserId, file);
+        // Downscale large gallery photos (max 1024px, JPEG 0.82) so the upload never hits the client timeout.
+        let foodFile: File = file;
+        try {
+          const srcImg = new Image();
+          srcImg.src = imageUrl;
+          await new Promise((resolve, reject) => { srcImg.onload = resolve; srcImg.onerror = reject; });
+          const scale = Math.min(1, 1024 / Math.max(srcImg.width, srcImg.height));
+          const c = document.createElement("canvas");
+          c.width = Math.max(1, Math.round(srcImg.width * scale));
+          c.height = Math.max(1, Math.round(srcImg.height * scale));
+          const cctx = c.getContext("2d");
+          if (cctx) {
+            cctx.drawImage(srcImg, 0, 0, c.width, c.height);
+            const blob: Blob | null = await new Promise((resolve) => c.toBlob(resolve, "image/jpeg", 0.82));
+            if (blob) foodFile = new File([blob], "gallery-meal.jpg", { type: "image/jpeg" });
+          }
+        } catch {
+          foodFile = file;
+        }
+        const result = await analyzeFoodImage(activeUserId, foodFile);
         const fullResult = { ...result, type: 'FOOD' as const };
         setAnalysisResult(fullResult);
         setLatestAnalysis(fullResult);
@@ -185,7 +206,6 @@ export default function Camera({ initialMode }: CameraProps = {}) {
       setUserId(data.session?.user?.id || null);
     };
     getSession();
-    startCamera('environment');
     return () => {
       stopCamera();
       if (scanFrameIdRef.current) cancelAnimationFrame(scanFrameIdRef.current);
@@ -195,9 +215,10 @@ export default function Camera({ initialMode }: CameraProps = {}) {
 
   // Camera stream watchdog: ensure video element is always bound to live stream & playing when active
   useEffect(() => {
-    if (analysisResult) return;
+    if (analysisResult || isAnalyzing) return;
 
     const ensureCameraActive = async () => {
+      if (isStartingCameraRef.current) return;
       const video = videoRef.current;
       const currentStream = streamRef.current;
       const hasLiveTracks = currentStream && currentStream.getVideoTracks().some(track => track.readyState === 'live');
@@ -226,7 +247,7 @@ export default function Camera({ initialMode }: CameraProps = {}) {
   // Handle mobile / desktop tab backgrounding & return
   useEffect(() => {
     const handleVisibility = () => {
-      if (document.visibilityState === 'visible' && !analysisResult) {
+      if (document.visibilityState === 'visible' && !analysisResult && !isAnalyzing) {
         const video = videoRef.current;
         const currentStream = streamRef.current;
         const hasLiveTracks = currentStream && currentStream.getVideoTracks().some(track => track.readyState === 'live');
@@ -241,11 +262,23 @@ export default function Camera({ initialMode }: CameraProps = {}) {
 
     document.addEventListener('visibilitychange', handleVisibility);
     return () => document.removeEventListener('visibilitychange', handleVisibility);
-  }, [analysisResult, facingMode]);
+  }, [analysisResult, isAnalyzing, facingMode]);
 
   const startCamera = async (facing: 'environment' | 'user' = 'environment') => {
+    if (isStartingCameraRef.current) return;
+    isStartingCameraRef.current = true;
+
     try {
-      const oldStream = streamRef.current;
+      // 1. Release any existing stream hardware lock BEFORE requesting a new stream
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => {
+          try { track.stop(); } catch (e) {}
+        });
+        streamRef.current = null;
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
 
       const mediaStream = await requestCameraAccess({
         video: {
@@ -258,12 +291,6 @@ export default function Camera({ initialMode }: CameraProps = {}) {
 
       if (!mediaStream) return;
 
-      if (oldStream && oldStream !== mediaStream) {
-        oldStream.getTracks().forEach(track => {
-          try { track.stop(); } catch (e) {}
-        });
-      }
-
       streamRef.current = mediaStream;
       setStream(mediaStream);
       if (videoRef.current) {
@@ -274,8 +301,10 @@ export default function Camera({ initialMode }: CameraProps = {}) {
           console.warn("Video auto-play warning:", e);
         }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Camera access failed in Camera.tsx:", err);
+    } finally {
+      isStartingCameraRef.current = false;
     }
   };
 
@@ -292,6 +321,7 @@ export default function Camera({ initialMode }: CameraProps = {}) {
       videoRef.current.srcObject = null;
     }
     setStream(null);
+    isStartingCameraRef.current = false;
   };
 
   const [isSwitching, setIsSwitching] = useState(false);
@@ -499,14 +529,31 @@ export default function Camera({ initialMode }: CameraProps = {}) {
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    const vw = video.videoWidth || 640;
+    const vh = video.videoHeight || 480;
+
+    // Scale down high-resolution camera frames to max 1024px for fast, timeout-free AI vision processing
+    const maxDim = 1024;
+    let targetW = vw;
+    let targetH = vh;
+    if (targetW > maxDim || targetH > maxDim) {
+      if (targetW >= targetH) {
+        targetH = Math.round((vh * maxDim) / vw);
+        targetW = maxDim;
+      } else {
+        targetW = Math.round((vw * maxDim) / vh);
+        targetH = maxDim;
+      }
+    }
+
+    canvas.width = targetW;
+    canvas.height = targetH;
 
     const context = canvas.getContext("2d");
     if (!context) return;
 
-    context.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const imageData = canvas.toDataURL("image/jpeg");
+    context.drawImage(video, 0, 0, targetW, targetH);
+    const imageData = canvas.toDataURL("image/jpeg", 0.82);
     setCapturedImage(imageData);
     setIsAnalyzing(true);
 
@@ -527,7 +574,7 @@ export default function Camera({ initialMode }: CameraProps = {}) {
               reject(e);
             }
           }
-        }, "image/jpeg", 0.9);
+        }, "image/jpeg", 0.82);
       });
       const file = new File([blob], "capture.jpg", { type: "image/jpeg" });
 

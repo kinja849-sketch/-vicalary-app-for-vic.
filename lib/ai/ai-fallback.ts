@@ -13,46 +13,83 @@
 
 import dns from 'dns';
 import tls from 'tls';
+import https from 'https';
 import axios from 'axios';
+
+let sharedHttpsAgent: https.Agent | undefined;
 
 try {
   if (typeof dns.setDefaultResultOrder === 'function') {
     dns.setDefaultResultOrder('ipv4first');
   }
-  if (typeof (tls as any).getCACertificates === 'function' && typeof (tls as any).setDefaultCACertificates === 'function') {
-    const defaultCAs = (tls as any).getCACertificates('default') || [];
-    const systemCAs = (tls as any).getCACertificates('system') || [];
-    (tls as any).setDefaultCACertificates(Array.from(new Set([...defaultCAs, ...systemCAs])));
+  const defaultCAs = (typeof (tls as any).getCACertificates === 'function' ? (tls as any).getCACertificates('default') : []) || [];
+  const systemCAs = (typeof (tls as any).getCACertificates === 'function' ? (tls as any).getCACertificates('system') : []) || [];
+  const combinedCAs = Array.from(new Set([...defaultCAs, ...systemCAs]));
+
+  if (typeof (tls as any).setDefaultCACertificates === 'function' && combinedCAs.length > 0) {
+    (tls as any).setDefaultCACertificates(combinedCAs);
   }
+
+  sharedHttpsAgent = new https.Agent({
+    ca: combinedCAs.length > 0 ? combinedCAs : undefined,
+    rejectUnauthorized: combinedCAs.length === 0 ? false : true,
+    keepAlive: true,
+    timeout: 12000,
+  });
 } catch (_e) {}
 
 async function resilientPostJson(
   url: string,
   headers: Record<string, string>,
   payload: any,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  timeoutMs: number = 12000
 ): Promise<{ ok: boolean; status: number; json: () => Promise<any>; text: () => Promise<string> }> {
+  const timeoutController = new AbortController();
+  const timer = setTimeout(() => timeoutController.abort(), timeoutMs);
+
+  const effectiveSignal = signal
+    ? (typeof (AbortSignal as any).any === 'function' ? (AbortSignal as any).any([signal, timeoutController.signal]) : timeoutController.signal)
+    : timeoutController.signal;
+
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
-      signal,
+      signal: effectiveSignal,
     });
+    clearTimeout(timer);
     return res;
   } catch (fetchErr: any) {
-    const axiosRes = await axios.post(url, payload, {
-      headers,
-      timeout: 35000,
-      validateStatus: () => true,
-      signal: signal as any,
-    });
-    return {
-      ok: axiosRes.status >= 200 && axiosRes.status < 300,
-      status: axiosRes.status,
-      json: async () => axiosRes.data,
-      text: async () => (typeof axiosRes.data === 'string' ? axiosRes.data : JSON.stringify(axiosRes.data)),
-    };
+    clearTimeout(timer);
+    // A timeout/abort is a real answer ("this model is too slow"): do NOT burn a second full timeout via axios.
+    if (timeoutController.signal.aborted || signal?.aborted || fetchErr?.name === 'AbortError') {
+      const reason = signal?.aborted ? 'Request aborted by caller' : `Attempt timed out after ${timeoutMs}ms`;
+      return { ok: false, status: 504, json: async () => ({ error: reason }), text: async () => reason };
+    }
+    try {
+      const axiosRes = await axios.post(url, payload, {
+        headers,
+        timeout: timeoutMs,
+        httpsAgent: sharedHttpsAgent,
+        validateStatus: () => true,
+        signal: signal as any,
+      });
+      return {
+        ok: axiosRes.status >= 200 && axiosRes.status < 300,
+        status: axiosRes.status,
+        json: async () => axiosRes.data,
+        text: async () => (typeof axiosRes.data === 'string' ? axiosRes.data : JSON.stringify(axiosRes.data)),
+      };
+    } catch (axiosErr: any) {
+      return {
+        ok: false,
+        status: axiosErr.response?.status || 500,
+        json: async () => ({ error: axiosErr.message }),
+        text: async () => axiosErr.message || 'Network request failed',
+      };
+    }
   }
 }
 
@@ -80,6 +117,10 @@ export interface AIChatRequest {
   frequency_penalty?: number;
   presence_penalty?: number;
   signal?: AbortSignal;
+  /** Per-model attempt timeout (ms). Default 12000. A slow model is skipped, not fatal. */
+  attemptTimeoutMs?: number;
+  /** Overall time budget across all fallback models (ms). Default 40000. */
+  budgetMs?: number;
 }
 
 export interface AIChatChoice {
@@ -122,6 +163,57 @@ export function tripOpenAICircuit(durationMs = 60 * 60 * 1000): void {
 
 export function resetOpenAICircuit(): void {
   globalThis.__openAICircuitOpenUntil = 0;
+}
+
+// ── Per-model circuit breaker (Gemini backup models) ───────────────────────────
+// Remembers failures so later requests skip dead/overloaded models instantly instead of re-paying the timeout.
+interface ModelHealth { openUntil: number; reason: string; lastStatus: number; lastSuccessAt?: number }
+declare global {
+  var __aiModelHealth: Map<string, ModelHealth> | undefined;
+}
+function modelHealthMap(): Map<string, ModelHealth> {
+  if (!globalThis.__aiModelHealth) globalThis.__aiModelHealth = new Map();
+  return globalThis.__aiModelHealth;
+}
+export function isModelHealthy(model: string): boolean {
+  const h = modelHealthMap().get(model);
+  return !h || Date.now() >= h.openUntil;
+}
+export function markModelSuccess(model: string): void {
+  modelHealthMap().set(model, { openUntil: 0, reason: 'ok', lastStatus: 200, lastSuccessAt: Date.now() });
+}
+export function markModelFailure(model: string, status: number, body: string): void {
+  let cooldownMs = 60_000; // 5xx / timeout / overload
+  let reason = 'unavailable';
+  if (status === 429) {
+    reason = 'quota';
+    cooldownMs = /PerDay|per day/i.test(body) ? 60 * 60_000 : 5 * 60_000;
+  } else if (status === 404) {
+    reason = 'model_not_found';
+    cooldownMs = 24 * 60 * 60_000;
+  } else if (status === 401 || status === 403) {
+    reason = 'auth';
+    cooldownMs = 10 * 60_000;
+  } else if (status === 504) {
+    reason = 'timeout';
+    cooldownMs = 45_000;
+  }
+  const prev = modelHealthMap().get(model);
+  modelHealthMap().set(model, { openUntil: Date.now() + cooldownMs, reason, lastStatus: status, lastSuccessAt: prev?.lastSuccessAt });
+  console.warn(`[AI Model Circuit] ${model} marked '${reason}' for ${Math.round(cooldownMs / 1000)}s (HTTP ${status})`);
+}
+export function getModelHealthSnapshot(): Record<string, { healthy: boolean; reason: string; lastStatus: number; retryInSeconds: number; lastSuccessAt?: string }> {
+  const out: Record<string, any> = {};
+  for (const [model, h] of modelHealthMap().entries()) {
+    out[model] = {
+      healthy: Date.now() >= h.openUntil,
+      reason: h.reason,
+      lastStatus: h.lastStatus,
+      retryInSeconds: Math.max(0, Math.round((h.openUntil - Date.now()) / 1000)),
+      lastSuccessAt: h.lastSuccessAt ? new Date(h.lastSuccessAt).toISOString() : undefined,
+    };
+  }
+  return out;
 }
 
 // In-memory circuit breaker for Gemini Preview TTS:
@@ -258,11 +350,19 @@ export async function callChatCompletionWithFallback(
       // If primary returned an error, capture details for fallback
       const errorText = await res.text();
       console.warn(`[AI Engine] Primary OpenAI failed (HTTP ${res.status}): ${errorText.substring(0, 300)}. Triggering failover to backup provider...`);
-      if (res.status === 429 || res.status === 402 || errorText.includes('insufficient_quota') || errorText.includes('billing')) {
+      if (
+        res.status === 429 ||
+        res.status === 402 ||
+        res.status === 401 ||
+        errorText.includes('insufficient_quota') ||
+        errorText.includes('billing') ||
+        errorText.includes('credit_balance_exhausted')
+      ) {
         tripOpenAICircuit();
       }
     } catch (err: any) {
       console.warn(`[AI Engine] Primary OpenAI exception: ${err?.message || err}. Triggering failover to backup provider...`);
+      tripOpenAICircuit();
     }
   } else if (!isOpenAIAvailable()) {
     console.info('[AI Engine] Primary OpenAI circuit open (bypassing dead round-trip). Directing straight to backup provider.');
@@ -275,23 +375,45 @@ export async function callChatCompletionWithFallback(
     throw new Error('[AI Engine] Primary AI call failed and no BACKUP_AI_API_KEY is configured.');
   }
 
-  const fallbackModels = Array.from(new Set([
-    'gemini-2.5-flash',
-    'gemini-3-flash-preview',
-    'gemini-3.1-flash-lite-preview',
-    'gemini-3.1-pro-preview',
-    mapModelForBackup(request.model),
-  ]));
+  // Ordered by measured reliability (live-tested). Override with AI_FALLBACK_MODELS="a,b,c" without a code change.
+  const configuredList = (process.env.AI_FALLBACK_MODELS || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  const defaultList = ['gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'gemini-flash-latest'];
+  const requestedGemini = request.model && request.model.startsWith('gemini-') ? [request.model] : [];
+  const allModels = Array.from(new Set([
+    ...requestedGemini,
+    ...(configuredList.length > 0 ? configuredList : defaultList),
+  ].filter(Boolean)));
+
+  // Skip models whose circuit is open; if every model is open, probe them all anyway (half-open).
+  const healthyModels = allModels.filter(isModelHealthy);
+  const fallbackModels = healthyModels.length > 0 ? healthyModels : allModels;
+
+  const budgetMs = request.budgetMs ?? 40000;
+  const attemptTimeoutMs = request.attemptTimeoutMs ?? 12000;
+  const deadline = Date.now() + budgetMs;
 
   let lastBackupErr = '';
 
   for (const m of fallbackModels) {
+    if (request.signal?.aborted) {
+      lastBackupErr = 'Request aborted by caller';
+      break;
+    }
+    const remaining = deadline - Date.now();
+    if (remaining < 1500) {
+      lastBackupErr = lastBackupErr || 'AI time budget exhausted';
+      break;
+    }
     try {
       const backupPayload = {
         ...preparePayload(request, true),
         model: m,
       };
       console.info(`[AI Fallback] Executing request on backup provider with model: ${m}`);
+      const startedAt = Date.now();
 
       const backupRes = await resilientPostJson(
         BACKUP_GEMINI_URL,
@@ -300,11 +422,14 @@ export async function callChatCompletionWithFallback(
           Authorization: `Bearer ${backupKey}`,
         },
         backupPayload,
-        request.signal
+        request.signal,
+        Math.min(attemptTimeoutMs, remaining)
       );
 
       if (backupRes.ok) {
         const backupData = await backupRes.json();
+        markModelSuccess(m);
+        console.info(`[AI Fallback] ${m} succeeded in ${Date.now() - startedAt}ms`);
         return {
           ...backupData,
           providerUsed: 'backup',
@@ -312,13 +437,20 @@ export async function callChatCompletionWithFallback(
       }
 
       lastBackupErr = await backupRes.text();
-      console.warn(`[AI Fallback] Backup model ${m} returned HTTP ${backupRes.status}: ${lastBackupErr.substring(0, 150)}`);
-      if (backupRes.status === 429) {
-        await new Promise(r => setTimeout(r, 2000));
+      console.warn(`[AI Fallback] Backup model ${m} returned HTTP ${backupRes.status} after ${Date.now() - startedAt}ms: ${lastBackupErr.substring(0, 150)}`);
+      // Caller-initiated aborts say nothing about model health; only real failures open the circuit.
+      if (!request.signal?.aborted) {
+        markModelFailure(m, backupRes.status, lastBackupErr);
       }
     } catch (e: any) {
       lastBackupErr = e?.message || String(e);
       console.warn(`[AI Fallback] Backup model ${m} exception:`, lastBackupErr);
+      if (!request.signal?.aborted) {
+        markModelFailure(m, 504, lastBackupErr);
+      }
+      if (request.signal?.aborted) {
+        break;
+      }
     }
   }
 
@@ -379,12 +511,13 @@ export async function streamChatCompletionWithFallback(
     throw new Error('[AI Engine] Primary stream failed and no BACKUP_AI_API_KEY is configured.');
   }
 
+  // gemini-3-flash-preview verified live (text + vision) while gemini-2.5-flash free-tier quota is exhausted.
   const fallbackModels = Array.from(new Set([
+    'gemini-3-flash-preview',
     'gemini-2.5-flash',
-    'gemini-2.0-flash',
     mapModelForBackup(request.model),
-    'gemini-1.5-flash',
-  ]));
+    'gemini-flash-latest',
+  ].filter(Boolean)));
 
   let lastBackupErr = '';
 

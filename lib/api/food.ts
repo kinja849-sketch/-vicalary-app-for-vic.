@@ -95,27 +95,53 @@ export const analyzeFoodImage = async (userId: string, file: File, options?: any
 
         const locationPromise = getUserLocation().catch(() => null);
 
-        const [publicUrl, base64Data, loc] = await Promise.all([
-            uploadPromise,
+        // Only await base64 conversion and location context so the AI analysis starts immediately
+        const [base64Data, loc] = await Promise.all([
             base64Promise,
             locationPromise
         ]);
 
         const clientLang = options?.language || (typeof window !== 'undefined' ? (localStorage.getItem('app_lang') || 'en') : 'en');
 
-        // 2. Call Next.js API route
-        const res = await fetch('/api/analyze-food-image', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                imageUrl: publicUrl,
-                imageBase64: base64Data,
-                userId: userId,
-                locationContext: loc,
-                language: clientLang,
-                ...options
-            })
+        // 2. Call Next.js API route with 75-second AbortController timeout (prevents premature abort on dev compilation + multi-pass)
+        const requestBody = JSON.stringify({
+            imageUrl: null,
+            imageBase64: base64Data,
+            userId: userId,
+            locationContext: loc,
+            language: clientLang,
+            ...options
         });
+
+        const postOnce = async (): Promise<Response> => {
+            const abortController = new AbortController();
+            const timeoutId = setTimeout(() => abortController.abort(), 75000);
+            try {
+                return await fetch('/api/analyze-food-image', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: requestBody,
+                    signal: abortController.signal
+                });
+            } catch (fetchErr: any) {
+                if (fetchErr.name === 'AbortError') {
+                    throw new Error('Meal analysis timed out. Please try again with a clear photo.');
+                }
+                throw fetchErr;
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        };
+
+        let res = await postOnce();
+        // AI provider briefly unavailable (typed 503): wait 3s and retry once; failed models are skipped server-side.
+        if (res.status === 503) {
+            const peek = await res.clone().json().catch(() => null);
+            if (peek?.code === 'ai_unavailable') {
+                await new Promise((r) => setTimeout(r, 3000));
+                res = await postOnce();
+            }
+        }
 
         const rawResponseText = await res.text().catch(() => '');
         let data: any = null;
@@ -143,8 +169,14 @@ export const analyzeFoodImage = async (userId: string, file: File, options?: any
         }
 
         if (data && data.name) {
-            logInfo(userId, 'food_analysis_success', { productName: data.name, imageUrl: publicUrl });
-            return { ...data, image_url: publicUrl };
+            // Await storage URL if still in flight, but with max 500ms grace period so we don't stall the UI
+            const publicUrl = await Promise.race([
+                uploadPromise,
+                new Promise<null>((r) => setTimeout(() => r(null), 500))
+            ]);
+            const finalImageUrl = publicUrl || data.image_url || undefined;
+            logInfo(userId, 'food_analysis_success', { productName: data.name, imageUrl: finalImageUrl });
+            return { ...data, image_url: finalImageUrl };
         }
 
         throw new Error("Invalid response from AI analysis");

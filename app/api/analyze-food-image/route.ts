@@ -487,7 +487,11 @@ Return ONLY a valid JSON object matching this schema:
   "meal_title": "Descriptive, accurate culinary name for this meal",
   "meal_composition_type": "cooked_dish | separable_items",
   "visual_uncertainties": "Specific notes on what cannot be verified visually",
-  "meal_description": "An informative paragraph describing the observed dish on the plate, its preparation, and the items present.",
+  "meal_description": "An informative, culinary-grounded paragraph (3 to 5 sentences) describing the observed dish on the plate, its preparation, and the visible items.",
+  "vitamins_and_nutrition": "A focused nutritional paragraph highlighting key macronutrients, vitamins, and minerals observed.",
+  "recommendation": "A clear clinical paragraph assessing whether this meal fits the user's objective and constraints.",
+  "verdict": "GOOD | MODERATE | POOR",
+  "is_recommended": true,
   "foods": [
     {
       "name": "Food or culinary item name (e.g. Eggs, Lettuce, Tomatoes, Potatoes, Onions, White Rice, Wheat Flour, Sugar, Cocoa Powder, Vegetable Oil, Whole Milk)",
@@ -503,7 +507,10 @@ Return ONLY a valid JSON object matching this schema:
 
     const resolvedImageUri = imageBase64 ? `data:image/jpeg;base64,${imageBase64}` : imageUrl;
 
-    const visionResult = await callChatCompletionWithFallback({
+    // Per-model attempt timeouts + overall budget live inside the AI engine, so one slow model can no
+    // longer cancel the healthy fallbacks (previously a single shared abort killed the whole chain).
+    let visionResult: any;
+    visionResult = await callChatCompletionWithFallback({
       model: 'gpt-4o',
       messages: [{
         role: 'user',
@@ -513,14 +520,16 @@ Return ONLY a valid JSON object matching this schema:
             type: 'image_url',
             image_url: {
               url: resolvedImageUri,
-              detail: 'auto'
+              detail: 'low'
             }
           }
         ]
       }],
       temperature: 0.1,
-      max_tokens: 450,
-      response_format: { type: 'json_object' }
+      max_tokens: 750,
+      response_format: { type: 'json_object' },
+      attemptTimeoutMs: 12000,
+      budgetMs: 22000
     });
 
     let visionParsed = parseJSONSafely(visionResult.choices[0]?.message?.content);
@@ -547,7 +556,9 @@ Return ONLY a valid JSON object matching this schema:
         }],
         temperature: 0.1,
         max_tokens: 450,
-        response_format: { type: 'json_object' }
+        response_format: { type: 'json_object' },
+        attemptTimeoutMs: 10000,
+        budgetMs: 10000
       });
       const retryParsed = parseJSONSafely(retryVisionResult.choices[0]?.message?.content);
       if (retryParsed && (Array.isArray(retryParsed.foods) || retryParsed.meal_title)) {
@@ -700,15 +711,39 @@ Return ONLY a JSON object:
   "alternative_meal_name": "Exact canonical meal name from today's plan if not recommended, or null if recommended"
 }`;
 
-    const synthesisResult = await callChatCompletionWithFallback({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: synthesisPrompt }],
-      temperature: 0.2,
-      max_tokens: 650,
-      response_format: { type: 'json_object' }
-    });
+    let synthesisData: any = {};
+    if (visionParsed.meal_description && (visionParsed.recommendation || visionParsed.vitamins_and_nutrition)) {
+      // Vision model successfully returned clinical narratives in a single pass — skip second LLM round-trip!
+      synthesisData = {
+        meal_title: visionParsed.meal_title,
+        meal_description: visionParsed.meal_description,
+        vitamins_and_nutrition: visionParsed.vitamins_and_nutrition,
+        recommendation: visionParsed.recommendation,
+        verdict: visionParsed.verdict,
+        is_recommended: visionParsed.is_recommended,
+        alternative_meal_name: visionParsed.alternative_meal_name || null
+      };
+    } else {
+      try {
+        const synthesisController = new AbortController();
+        const synthesisTimer = setTimeout(() => synthesisController.abort(), 8000);
 
-    const synthesisData = parseJSONSafely(synthesisResult.choices[0]?.message?.content);
+        const synthesisResult = await callChatCompletionWithFallback({
+          model: 'gpt-4o-mini',
+          messages: [{ role: 'user', content: synthesisPrompt }],
+          temperature: 0.2,
+          max_tokens: 500,
+          response_format: { type: 'json_object' },
+          signal: synthesisController.signal,
+          attemptTimeoutMs: 8000,
+          budgetMs: 8000
+        });
+        clearTimeout(synthesisTimer);
+        synthesisData = parseJSONSafely(synthesisResult.choices[0]?.message?.content);
+      } catch (synthesisErr: any) {
+        console.warn('[analyze-food-image] Synthesis call bypassed or timed out, using deterministic fallback narratives:', synthesisErr?.message || synthesisErr);
+      }
+    }
 
     const fallbackClinicalDescription =
       rawMealDescription && rawMealDescription.length > 40
@@ -805,6 +840,14 @@ Return ONLY a JSON object:
 
   } catch (error: any) {
     console.error('[analyze-food-image] Error:', error.message || error);
-    return NextResponse.json({ error: error.message || 'Analysis failed' }, { status: 500 });
+    const msg = String(error?.message || '');
+    // Provider outage / quota / abort: typed "unavailable" state instead of a generic 500 (never fabricate food data).
+    if (/AI Request failed|aborted|quota|429|503|timed out|budget exhausted/i.test(msg)) {
+      return NextResponse.json(
+        { error: 'The AI vision service is temporarily unavailable. Please try again in a moment.', code: 'ai_unavailable', retry_after_seconds: 5 },
+        { status: 503 }
+      );
+    }
+    return NextResponse.json({ error: msg || 'Analysis failed' }, { status: 500 });
   }
 }
