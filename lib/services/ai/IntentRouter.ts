@@ -119,6 +119,11 @@ const INTENT_RULES: Array<{
   {
     intent: 'location_inquiry',
     patterns: [
+      /\b(where am i|what is my (?:current )?location|my location|current location|where am i located|what city am i in|what country am i in)\b/i,
+      /\b(niko wapi|nipo wapi|eneo langu|wapi nilipo)\b/i, // Swahili
+      /\b(d[oó]nde estoy|d[oó]nde me encuentro|mi ubicaci[oó]n)\b/i, // Spanish
+      /\b(o[uù] suis-je|o[uù] je suis|ma position|ma localisation)\b/i, // French
+      /\b(di\s*mana saya|saya di\s*mana|lokasi saya)\b/i, // Indonesian
       /\b(nearest|nearby|supermarket|grocery store|restaurant|where to buy|halal store|market near me)\b/i
     ],
     flags: {

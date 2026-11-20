@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { supabase } from '../supabase';
 import { useAuth } from '../AuthContext';
-import { detectLocation, getPrimaryLanguage } from './location';
+import { detectLocation, getPrimaryLanguage, LOCATION_CACHE_KEY } from './location';
 import { updateSettings } from './settings';
 import { toast } from 'sonner';
 import { getUserLocalHour } from '../utils/mealSession';
@@ -97,7 +97,7 @@ export const useTranslation = () => {
         refetchOnMount: true,
         initialData: () => {
             if (typeof window !== 'undefined') {
-                const cached = localStorage.getItem('vicalary_location_v3');
+                const cached = localStorage.getItem(LOCATION_CACHE_KEY) || localStorage.getItem('vicalary_location_v4') || localStorage.getItem('vicalary_location_v3');
                 if (cached) {
                     try {
                         const { data, timestamp } = JSON.parse(cached);

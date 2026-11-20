@@ -10,7 +10,9 @@ export interface ToolRoutingContext {
   locationContext?: {
     city?: string;
     country?: string;
+    country_name?: string;
     region?: string;
+    formatted_location?: string;
     lat?: number;
     lng?: number;
   } | null;
@@ -160,8 +162,8 @@ export async function executeLocationPlaces(
   locationContext: ToolRoutingContext['locationContext'],
   query: string
 ): Promise<ToolExecutionResult> {
-  const city = locationContext?.city;
-  const country = locationContext?.country;
+  const city = locationContext?.city || locationContext?.region;
+  const country = locationContext?.country || locationContext?.country_name;
 
   if (!city && !country) {
     return {
@@ -171,12 +173,12 @@ export async function executeLocationPlaces(
     };
   }
 
-  const locStr = city ? `${city}${country ? `, ${country}` : ''}` : country;
+  const locStr = locationContext?.formatted_location || (city ? `${city}${country ? `, ${country}` : ''}` : (country || ''));
 
   return {
     toolName: 'location_places',
     success: true,
-    data: `User location context: ${locStr}. Query: "${query}". Provide practical, geographically accurate recommendations for ${locStr}.`
+    data: `User verified location context: ${locStr}. Query: "${query}". Provide practical, geographically accurate recommendations for ${locStr}.`
   };
 }
 
@@ -191,8 +193,8 @@ export async function routeAndExecuteTools(context: ToolRoutingContext): Promise
   // Detect genuine current events, breaking news, weather, or external queries
   const isCurrentEventOrNews = /\b(weather|forecast|temperature|climate|breaking news|world news|current events|stock price|election results|who won the|conflict in|situation in|latest study|scientific study|search online|search for|look up)\b/i.test(lowerMsg);
   
-  // Detect location / nearby places intent
-  const isLocationPlacesQuery = /(nearest|near me|nearby|where can i find|supermarket|grocery store|gym|pharmacy|halal food|restaurant near|where am i|my current location|my location|what city|what country|where do i live|where am i located)/i.test(lowerMsg);
+  // Detect location / nearby places intent (including multi-lingual "Where am I?")
+  const isLocationPlacesQuery = /(nearest|near me|nearby|where can i find|supermarket|grocery store|gym|pharmacy|halal food|restaurant near|where am i|my current location|my location|what city|what country|where do i live|where am i located|niko wapi|nipo wapi|d[oó]nde estoy|o[uù] suis-je|di mana saya|saya di mana)/i.test(lowerMsg);
 
   const promises: Promise<ToolExecutionResult>[] = [];
 

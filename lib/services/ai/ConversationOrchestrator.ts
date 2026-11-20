@@ -33,10 +33,17 @@ export interface ProcessConversationInput {
   mediaUrl?: string | null;
   locationContext?: {
     city?: string;
+    region?: string;
     country?: string;
+    country_name?: string;
+    country_code?: string;
+    formatted_location?: string;
     timezone?: string;
     lat?: number;
     lng?: number;
+    latitude?: number;
+    longitude?: number;
+    method?: string;
   } | null;
   locale?: string;
   voiceMode?: boolean;
@@ -757,13 +764,25 @@ Instruction: State honestly that we do not have verified brand ownership or boyc
 `;
   }
 
-  const resolvedCountry = locationContext?.country || 'Indonesia';
-  const resolvedCity = locationContext?.city || '';
-  const resolvedLocName = resolvedCity ? `${resolvedCity}, ${resolvedCountry}` : resolvedCountry;
+  const resolvedCountry = locationContext?.country || locationContext?.country_name || '';
+  const resolvedCity = locationContext?.city || locationContext?.region || '';
+  const resolvedLocName = locationContext?.formatted_location || (
+    resolvedCity && resolvedCountry
+      ? `${resolvedCity}, ${resolvedCountry}`
+      : (resolvedCity || resolvedCountry || '')
+  );
 
-  prompt += `\n[User Verified Location Context]:
-Location: ${resolvedLocName} (Timezone: ${timeZone})
-Instruction: When the user asks "what is my location" or "where am I located", ALWAYS answer directly that their verified location is ${resolvedLocName}. NEVER say you cannot access location data.\n`;
+  const locCoordsStr = (locationContext?.latitude && locationContext?.longitude)
+    ? `Coordinates: ${locationContext.latitude}, ${locationContext.longitude} (Method: ${locationContext.method || 'Device Location Services'})\n`
+    : '';
+
+  prompt += `\n[User Verified Real-Time Location Context]:
+Verified Geographical Location: ${resolvedLocName || 'Location Not Available (Permission Required)'} (Timezone: ${timeZone})
+${locCoordsStr}Instruction: When the user asks "Where am I?", "What is my location?", "What is my current location?", or inquires about their current whereabouts (in ANY language, e.g. English: "Where am I?", Swahili: "Niko wapi?", Spanish: "¿Dónde estoy?", French: "Où suis-je ?", Indonesian: "Di mana saya?"):
+1. Accurately identify and report their specific verified city, town, or province, followed by the correct country (e.g. "You are currently in Osaka, Japan.", "You are currently in Purwakarta, Indonesia.", "You are currently in Nairobi, Kenya.").
+2. NEVER guess, assume, or append "Indonesia" or any other country unless it is genuinely part of the user's verified current location (${resolvedLocName}).
+3. Match the user's active conversation language naturally (e.g., in Swahili for "Niko wapi?": "Uko [City], [Country]" / "Kulingana na eneo lako lililothibitishwa, uko [City], [Country]").
+4. If location is genuinely unavailable (empty or missing permission), honestly state that device location permission is required rather than guessing.\n`;
 
   const validTools = (toolResults || []).filter(t => t.success && t.data);
   if (validTools.length > 0) {

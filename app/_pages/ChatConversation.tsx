@@ -16,6 +16,7 @@ import { getUserProfile } from '@/lib/api/auth';
 import { toast } from 'sonner';
 import EmojiPicker, { Theme, EmojiStyle } from 'emoji-picker-react';
 import { useTranslation } from '@/lib/api/translation';
+import { LOCATION_CACHE_KEY, reverseGeocodeCoordinates } from '@/lib/api/location';
 import CameraCapture from '@/components/CameraCapture';
 import { useAnalysisStore } from '@/store/analysisStore';
 import { useCoachInjectionStore } from '@/store/coachInjectionStore';
@@ -1869,7 +1870,7 @@ export default function ChatConversation() {
             const { latestAnalysis, clearLatestAnalysis } = useCoachInjectionStore.getState();
             let userLocation = null;
             try {
-                const locCache = localStorage.getItem('vicalary_location_v2');
+                const locCache = localStorage.getItem(LOCATION_CACHE_KEY) || localStorage.getItem('vicalary_location_v4') || localStorage.getItem('vicalary_location_v2');
                 if (locCache) userLocation = JSON.parse(locCache).data;
             } catch(e) {}
 
@@ -2149,14 +2150,12 @@ export default function ChatConversation() {
             async (position) => {
                 const { latitude: lat, longitude: lng } = position.coords;
 
-                // Reverse geocode for a nice address using Nominatim (free)
+                // Reverse geocode using Google Maps / reliable reverse geocoding pipeline
                 let locationName = 'Current Location';
                 try {
-                    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
-                    const data = await res.json();
-                    if (data?.display_name) {
-                        // Trim to just neighborhood + city
-                        locationName = data.address?.suburb || data.address?.quarter || data.address?.city || data.display_name.split(',')[0];
+                    const geo = await reverseGeocodeCoordinates(lat, lng);
+                    if (geo?.formatted_location) {
+                        locationName = geo.formatted_location;
                     }
                 } catch {
                     // Silently fall back to generic name
